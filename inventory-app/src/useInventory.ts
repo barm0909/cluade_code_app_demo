@@ -19,6 +19,20 @@ export interface Product {
   updatedAt: string;
 }
 
+export type TransactionType = '入庫' | '出庫';
+
+export interface StockTransaction {
+  id: string;
+  date: string;
+  type: TransactionType;
+  productId: string;
+  productName: string;
+  productSku: string;
+  lotNo: string;
+  quantity: number;
+  note: string;
+}
+
 export type SortField = 'name' | 'sku' | 'category' | 'price' | 'costPrice';
 export type SortOrder = 'asc' | 'desc';
 
@@ -39,6 +53,7 @@ export function generateLotNo(expiryDate?: string): string {
 }
 
 const STORAGE_KEY = 'inventory_products_v2';
+const LEDGER_KEY = 'inventory_ledger_v1';
 
 const d = (offset: number) => {
   const dt = new Date();
@@ -92,8 +107,29 @@ function save(products: Product[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
 }
 
+function loadLedger(): StockTransaction[] {
+  try {
+    const raw = localStorage.getItem(LEDGER_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [];
+}
+
+function saveLedger(txns: StockTransaction[]) {
+  localStorage.setItem(LEDGER_KEY, JSON.stringify(txns));
+}
+
 export function useInventory() {
   const [products, setProducts] = useState<Product[]>(load);
+  const [ledger, setLedger] = useState<StockTransaction[]>(loadLedger);
+
+  const addTransaction = useCallback((txn: Omit<StockTransaction, 'id' | 'date'>) => {
+    setLedger(prev => {
+      const next = [{ ...txn, id: crypto.randomUUID(), date: new Date().toISOString() }, ...prev];
+      saveLedger(next);
+      return next;
+    });
+  }, []);
 
   const update = (next: Product[]) => { save(next); setProducts(next); };
 
@@ -120,9 +156,14 @@ export function useInventory() {
       const next = prev.map(p => p.id === productId
         ? { ...p, lots: [...p.lots, { ...lot, id: crypto.randomUUID() }], updatedAt: new Date().toISOString() }
         : p);
-      save(next); return next;
+      save(next);
+      return next;
     });
-  }, []);
+    const product = products.find(p => p.id === productId);
+    if (product && lot.quantity > 0) {
+      addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: lot.quantity, note: 'ロット追加' });
+    }
+  }, [addTransaction, products]);
 
   const updateLot = useCallback((productId: string, lotId: string, lot: Omit<Lot, 'id'>) => {
     setProducts(prev => {
@@ -143,13 +184,28 @@ export function useInventory() {
   }, []);
 
   const adjustLotQuantity = useCallback((productId: string, lotId: string, delta: number) => {
+    const product = products.find(p => p.id === productId);
+    const lot = product?.lots.find(l => l.id === lotId);
+    const actualDelta = lot ? (delta > 0 ? delta : -Math.min(-delta, lot.quantity)) : 0;
     setProducts(prev => {
       const next = prev.map(p => p.id === productId
         ? { ...p, lots: p.lots.map(l => l.id === lotId ? { ...l, quantity: Math.max(0, l.quantity + delta) } : l), updatedAt: new Date().toISOString() }
         : p);
-      save(next); return next;
+      save(next);
+      return next;
     });
-  }, []);
+    if (product && lot && actualDelta !== 0) {
+      addTransaction({
+        type: actualDelta > 0 ? '入庫' : '出庫',
+        productId,
+        productName: product.name,
+        productSku: product.sku,
+        lotNo: lot.lotNo,
+        quantity: Math.abs(actualDelta),
+        note: '',
+      });
+    }
+  }, [addTransaction, products]);
 
   const exportCsv = useCallback(() => {
     const header = '商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
@@ -169,9 +225,12 @@ export function useInventory() {
 
   const resetToSample = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEDGER_KEY);
     const fresh = JSON.parse(JSON.stringify(SAMPLE_DATA));
     update(fresh);
+    setLedger([]);
+    saveLedger([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, resetToSample };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, resetToSample, ledger };
 }

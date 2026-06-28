@@ -177,6 +177,21 @@ tr:hover td { background: #fafbff; }
 .lot-expired td { background: #fff5f5; }
 .lot-expiring td { background: #fffbf0; }
 
+/* Tabs */
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid #eee; }
+.tab {
+  padding: 10px 20px; border: none; background: none; cursor: pointer;
+  font-size: 0.9rem; color: #888; border-bottom: 2px solid transparent; margin-bottom: -2px;
+}
+.tab:hover { color: #4f6ef7; }
+.tab.active { color: #4f6ef7; font-weight: 700; border-bottom-color: #4f6ef7; }
+
+/* Ledger badges */
+.badge-in { background: #e8f5e9; color: #2e7d32; }
+.badge-out { background: #fce8e8; color: #c62828; }
+.qty-in { color: #2e7d32; }
+.qty-out { color: #c62828; }
+
 @media (max-width: 640px) {
   .stats-row { flex-direction: column; }
   .controls { flex-direction: column; }
