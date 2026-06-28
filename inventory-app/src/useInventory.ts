@@ -15,10 +15,11 @@ export interface Product {
   lots: Lot[];
   minQuantity: number;
   price: number;
+  costPrice: number;
   updatedAt: string;
 }
 
-export type SortField = 'name' | 'sku' | 'category' | 'price';
+export type SortField = 'name' | 'sku' | 'category' | 'price' | 'costPrice';
 export type SortOrder = 'asc' | 'desc';
 
 export function daysUntilExpiry(expiryDate: string): number {
@@ -47,7 +48,7 @@ const d = (offset: number) => {
 
 const SAMPLE_DATA: Product[] = [
   {
-    id: '1', name: '牛乳', sku: 'ML-001', category: '乳製品', minQuantity: 5, price: 198,
+    id: '1', name: '牛乳', sku: 'ML-001', category: '乳製品', minQuantity: 5, price: 198, costPrice: 130,
     lots: [
       { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10 },
       { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10 },
@@ -55,21 +56,21 @@ const SAMPLE_DATA: Product[] = [
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '2', name: '食パン', sku: 'BR-001', category: 'パン', minQuantity: 5, price: 150,
+    id: '2', name: '食パン', sku: 'BR-001', category: 'パン', minQuantity: 5, price: 150, costPrice: 90,
     lots: [
       { id: 'l3', lotNo: d(1).replace(/-/g, ''), expiryDate: d(1), quantity: 3 },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', category: 'ラベル', minQuantity: 100, price: 5,
+    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', category: 'ラベル', minQuantity: 100, price: 5, costPrice: 2,
     lots: [
       { id: 'l4', lotNo: '20260101', quantity: 500 },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '4', name: 'チーズ', sku: 'CS-001', category: '乳製品', minQuantity: 4, price: 350,
+    id: '4', name: 'チーズ', sku: 'CS-001', category: '乳製品', minQuantity: 4, price: 350, costPrice: 220,
     lots: [
       { id: 'l5', lotNo: d(-2).replace(/-/g, ''), expiryDate: d(-2), quantity: 2 },
       { id: 'l6', lotNo: d(14).replace(/-/g, ''), expiryDate: d(14), quantity: 4 },
@@ -151,11 +152,11 @@ export function useInventory() {
   }, []);
 
   const exportCsv = useCallback(() => {
-    const header = '商品名,SKU,カテゴリ,単価,ロットNo,賞味期限,在庫数';
+    const header = '商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
     const rows = products.flatMap(p =>
       p.lots.length > 0
-        ? p.lots.map(l => [p.name, p.sku, p.category, p.price, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
-        : [[p.name, p.sku, p.category, p.price, '', '', 0].join(',')]
+        ? p.lots.map(l => [p.name, p.sku, p.category, p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
+        : [[p.name, p.sku, p.category, p.price, p.costPrice, '', '', 0].join(',')]
     );
     const blob = new Blob([header + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
