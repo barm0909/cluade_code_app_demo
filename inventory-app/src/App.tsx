@@ -24,7 +24,7 @@ function lotRowClass(lot: Lot) {
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, importExcel, resetToSample, ledger } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -86,7 +86,7 @@ export default function App() {
         <div className="header-actions">
           <button className="btn-ghost" onClick={() => { if (confirm('サンプルデータにリセットしますか？')) resetToSample(); }}>リセット</button>
           <button className="btn-secondary" onClick={exportCsv}>CSVエクスポート</button>
-          <a className="btn-secondary" href="/在庫インポートテンプレート.xlsx" download style={{ textDecoration: 'none' }}>テンプレートDL</a>
+          <button className="btn-secondary" onClick={exportExcel}>Excelエクスポート</button>
           <label className="btn-secondary" style={{ cursor: 'pointer' }}>
             Excelインポート
             <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={async e => {

@@ -208,6 +208,20 @@ export function useInventory() {
     }
   }, [addTransaction, products]);
 
+  const exportExcel = useCallback(() => {
+    const wsData: (string | number)[][] = [['SKU', 'ロットNo', '在庫数']];
+    for (const p of products) {
+      for (const l of p.lots) {
+        wsData.push([p.sku, l.lotNo, l.quantity]);
+      }
+    }
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '在庫インポート');
+    XLSX.writeFile(wb, `inventory_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }, [products]);
+
   const exportCsv = useCallback(() => {
     const header = '商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
     const rows = products.flatMap(p =>
@@ -295,5 +309,5 @@ export function useInventory() {
     saveLedger([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, importExcel, resetToSample, ledger };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger };
 }
