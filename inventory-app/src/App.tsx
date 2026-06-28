@@ -122,7 +122,8 @@ export default function App() {
               <th onClick={() => toggleSort('sku')} className="sortable">SKU{sortIcon('sku')}</th>
               <th onClick={() => toggleSort('category')} className="sortable">カテゴリ{sortIcon('category')}</th>
               <th>合計在庫</th>
-              <th onClick={() => toggleSort('price')} className="sortable">単価{sortIcon('price')}</th>
+              <th onClick={() => toggleSort('price')} className="sortable">販売定価{sortIcon('price')}</th>
+              <th onClick={() => toggleSort('costPrice')} className="sortable">原価{sortIcon('costPrice')}</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -142,6 +143,7 @@ export default function App() {
                       <span className="lot-count">（{p.lots.length}ロット）</span>
                     </td>
                     <td>¥{p.price.toLocaleString()}</td>
+                    <td>¥{p.costPrice.toLocaleString()}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <div className="row-actions">
                         <button className="btn-edit" onClick={() => setEditingProduct(p)}>編集</button>
@@ -151,7 +153,7 @@ export default function App() {
                   </tr>
                   {expanded && (
                     <tr key={`${p.id}-lots`} className="lot-row-wrapper">
-                      <td colSpan={7} className="lot-cell">
+                      <td colSpan={8} className="lot-cell">
                         <div className="lot-section">
                           <div className="lot-header">
                             <span>ロット一覧</span>
@@ -200,7 +202,7 @@ export default function App() {
                 </>
               );
             })}
-            {filtered.length === 0 && <tr><td colSpan={7} className="empty">商品が見つかりません</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={8} className="empty">商品が見つかりません</td></tr>}
           </tbody>
         </table>
       </div>
