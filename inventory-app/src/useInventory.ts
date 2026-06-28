@@ -249,56 +249,73 @@ export function useInventory() {
           const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
 
           const errors: string[] = [];
-          let updated = 0;
+          type Change = { productId: string; lotId: string; newQty: number; delta: number };
+          const changes: Change[] = [];
 
-          setProducts(prev => {
-            let next = prev.map(p => ({ ...p, lots: p.lots.map(l => ({ ...l })) }));
+          for (const row of rows) {
+            const sku = String(row['SKU'] ?? row['sku'] ?? '').trim();
+            const lotNo = String(row['ロットNo'] ?? row['lotNo'] ?? row['lot_no'] ?? '').trim();
+            const rawQty = row['在庫数'] ?? row['quantity'] ?? row['数量'];
+            const qty = Number(rawQty);
 
-            for (const row of rows) {
-              const sku = String(row['SKU'] ?? row['sku'] ?? '').trim();
-              const lotNo = String(row['ロットNo'] ?? row['lotNo'] ?? row['lot_no'] ?? '').trim();
-              const rawQty = row['在庫数'] ?? row['quantity'] ?? row['数量'];
-              const qty = Number(rawQty);
+            if (!sku) { errors.push(`SKUが空の行をスキップ`); continue; }
+            if (!lotNo) { errors.push(`ロットNoが空の行をスキップ (SKU: ${sku})`); continue; }
+            if (isNaN(qty) || qty < 0) { errors.push(`在庫数が不正: SKU=${sku} ロット=${lotNo}`); continue; }
 
-              if (!sku) { errors.push(`SKUが空の行をスキップ`); continue; }
-              if (!lotNo) { errors.push(`ロットNoが空の行をスキップ (SKU: ${sku})`); continue; }
-              if (isNaN(qty) || qty < 0) { errors.push(`在庫数が不正: SKU=${sku} ロット=${lotNo}`); continue; }
+            const product = products.find(p => p.sku === sku);
+            if (!product) { errors.push(`SKUが見つかりません: ${sku}`); continue; }
 
-              const product = next.find(p => p.sku === sku);
-              if (!product) { errors.push(`SKUが見つかりません: ${sku}`); continue; }
+            const lot = product.lots.find(l => l.lotNo === lotNo);
+            if (!lot) { errors.push(`ロットが見つかりません: SKU=${sku} ロット=${lotNo}`); continue; }
 
-              const lot = product.lots.find(l => l.lotNo === lotNo);
-              if (!lot) { errors.push(`ロットが見つかりません: SKU=${sku} ロット=${lotNo}`); continue; }
+            const delta = qty - lot.quantity;
+            if (delta !== 0) changes.push({ productId: product.id, lotId: lot.id, newQty: qty, delta });
+          }
 
-              const delta = qty - lot.quantity;
-              if (delta !== 0) {
-                lot.quantity = qty;
-                product.updatedAt = new Date().toISOString();
-                updated++;
+          if (changes.length > 0) {
+            setProducts(prev => {
+              const now = new Date().toISOString();
+              const next = prev.map(p => {
+                const affected = changes.filter(c => c.productId === p.id);
+                if (affected.length === 0) return p;
+                return {
+                  ...p,
+                  updatedAt: now,
+                  lots: p.lots.map(l => {
+                    const c = affected.find(c => c.lotId === l.id);
+                    return c ? { ...l, quantity: c.newQty } : l;
+                  }),
+                };
+              });
+              save(next);
+              return next;
+            });
+
+            for (const c of changes) {
+              const product = products.find(p => p.id === c.productId);
+              const lot = product?.lots.find(l => l.id === c.lotId);
+              if (product && lot) {
                 addTransaction({
-                  type: delta > 0 ? '入庫' : '出庫',
+                  type: c.delta > 0 ? '入庫' : '出庫',
                   productId: product.id,
                   productName: product.name,
                   productSku: product.sku,
                   lotNo: lot.lotNo,
-                  quantity: Math.abs(delta),
+                  quantity: Math.abs(c.delta),
                   note: 'Excelインポート',
                 });
               }
             }
+          }
 
-            save(next);
-            return next;
-          });
-
-          resolve({ updated, errors });
+          resolve({ updated: changes.length, errors });
         } catch (err) {
           reject(err);
         }
       };
       reader.readAsArrayBuffer(file);
     });
-  }, [addTransaction]);
+  }, [addTransaction, products]);
 
   const resetToSample = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
