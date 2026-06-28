@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 
 export interface Lot {
   id: string;
@@ -207,6 +208,20 @@ export function useInventory() {
     }
   }, [addTransaction, products]);
 
+  const exportExcel = useCallback(() => {
+    const wsData: (string | number)[][] = [['SKU', 'ロットNo', '在庫数']];
+    for (const p of products) {
+      for (const l of p.lots) {
+        wsData.push([p.sku, l.lotNo, l.quantity]);
+      }
+    }
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '在庫インポート');
+    XLSX.writeFile(wb, `inventory_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }, [products]);
+
   const exportCsv = useCallback(() => {
     const header = '商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
     const rows = products.flatMap(p =>
@@ -223,6 +238,85 @@ export function useInventory() {
     URL.revokeObjectURL(url);
   }, [products]);
 
+  const importExcel = useCallback((file: File): Promise<{ updated: number; errors: string[] }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target!.result as ArrayBuffer);
+          const wb = XLSX.read(data, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
+
+          const errors: string[] = [];
+          type Change = { productId: string; lotId: string; newQty: number; delta: number };
+          const changes: Change[] = [];
+
+          for (const row of rows) {
+            const sku = String(row['SKU'] ?? row['sku'] ?? '').trim();
+            const lotNo = String(row['ロットNo'] ?? row['lotNo'] ?? row['lot_no'] ?? '').trim();
+            const rawQty = row['在庫数'] ?? row['quantity'] ?? row['数量'];
+            const qty = Number(rawQty);
+
+            if (!sku) { errors.push(`SKUが空の行をスキップ`); continue; }
+            if (!lotNo) { errors.push(`ロットNoが空の行をスキップ (SKU: ${sku})`); continue; }
+            if (isNaN(qty) || qty < 0) { errors.push(`在庫数が不正: SKU=${sku} ロット=${lotNo}`); continue; }
+
+            const product = products.find(p => p.sku === sku);
+            if (!product) { errors.push(`SKUが見つかりません: ${sku}`); continue; }
+
+            const lot = product.lots.find(l => l.lotNo === lotNo);
+            if (!lot) { errors.push(`ロットが見つかりません: SKU=${sku} ロット=${lotNo}`); continue; }
+
+            const delta = qty - lot.quantity;
+            if (delta !== 0) changes.push({ productId: product.id, lotId: lot.id, newQty: qty, delta });
+          }
+
+          if (changes.length > 0) {
+            setProducts(prev => {
+              const now = new Date().toISOString();
+              const next = prev.map(p => {
+                const affected = changes.filter(c => c.productId === p.id);
+                if (affected.length === 0) return p;
+                return {
+                  ...p,
+                  updatedAt: now,
+                  lots: p.lots.map(l => {
+                    const c = affected.find(c => c.lotId === l.id);
+                    return c ? { ...l, quantity: c.newQty } : l;
+                  }),
+                };
+              });
+              save(next);
+              return next;
+            });
+
+            for (const c of changes) {
+              const product = products.find(p => p.id === c.productId);
+              const lot = product?.lots.find(l => l.id === c.lotId);
+              if (product && lot) {
+                addTransaction({
+                  type: c.delta > 0 ? '入庫' : '出庫',
+                  productId: product.id,
+                  productName: product.name,
+                  productSku: product.sku,
+                  lotNo: lot.lotNo,
+                  quantity: Math.abs(c.delta),
+                  note: 'Excelインポート',
+                });
+              }
+            }
+          }
+
+          resolve({ updated: changes.length, errors });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }, [addTransaction, products]);
+
   const resetToSample = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(LEDGER_KEY);
@@ -232,5 +326,5 @@ export function useInventory() {
     saveLedger([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, resetToSample, ledger };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger };
 }
