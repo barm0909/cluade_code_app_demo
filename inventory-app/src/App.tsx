@@ -3,6 +3,7 @@ import { useInventory, daysUntilExpiry, totalQuantity } from './useInventory';
 import type { Product, Lot, SortField, SortOrder } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
+import { LedgerView } from './LedgerView';
 import './App.css';
 
 function ExpiryBadge({ expiryDate }: { expiryDate?: string }) {
@@ -23,7 +24,7 @@ function lotRowClass(lot: Lot) {
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, resetToSample } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, resetToSample, ledger } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -31,6 +32,7 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'ledger'>('inventory');
 
   const categories = useMemo(() => [...new Set(products.map(p => p.category))].sort(), [products]);
 
@@ -104,6 +106,15 @@ export default function App() {
         <div className="stat-card"><div className="stat-label">期限間近ロット</div><div className="stat-value warning-text">{expiringSoon.length}</div></div>
         <div className="stat-card"><div className="stat-label">在庫総額</div><div className="stat-value">¥{totalValue.toLocaleString()}</div></div>
       </div>
+
+      <div className="tabs">
+        <button className={activeTab === 'inventory' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inventory')}>在庫一覧</button>
+        <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
+      </div>
+
+      {activeTab === 'ledger' ? (
+        <LedgerView ledger={ledger} />
+      ) : (<>
 
       <div className="controls">
         <input className="search-input" placeholder="商品名・SKUで検索..." value={search} onChange={e => setSearch(e.target.value)} />
@@ -206,6 +217,7 @@ export default function App() {
           </tbody>
         </table>
       </div>
+      </>)}
 
       {editingProduct !== null && (
         <ProductModal
