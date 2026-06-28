@@ -153,17 +153,17 @@ export function useInventory() {
 
   const addLot = useCallback((productId: string, lot: Omit<Lot, 'id'>) => {
     setProducts(prev => {
-      const product = prev.find(p => p.id === productId);
       const next = prev.map(p => p.id === productId
         ? { ...p, lots: [...p.lots, { ...lot, id: crypto.randomUUID() }], updatedAt: new Date().toISOString() }
         : p);
       save(next);
-      if (product && lot.quantity > 0) {
-        addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: lot.quantity, note: 'ロット追加' });
-      }
       return next;
     });
-  }, [addTransaction]);
+    const product = products.find(p => p.id === productId);
+    if (product && lot.quantity > 0) {
+      addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: lot.quantity, note: 'ロット追加' });
+    }
+  }, [addTransaction, products]);
 
   const updateLot = useCallback((productId: string, lotId: string, lot: Omit<Lot, 'id'>) => {
     setProducts(prev => {
@@ -184,28 +184,28 @@ export function useInventory() {
   }, []);
 
   const adjustLotQuantity = useCallback((productId: string, lotId: string, delta: number) => {
+    const product = products.find(p => p.id === productId);
+    const lot = product?.lots.find(l => l.id === lotId);
+    const actualDelta = lot ? (delta > 0 ? delta : -Math.min(-delta, lot.quantity)) : 0;
     setProducts(prev => {
-      const product = prev.find(p => p.id === productId);
-      const lot = product?.lots.find(l => l.id === lotId);
-      const actualDelta = lot ? (delta > 0 ? delta : -Math.min(-delta, lot.quantity)) : 0;
       const next = prev.map(p => p.id === productId
         ? { ...p, lots: p.lots.map(l => l.id === lotId ? { ...l, quantity: Math.max(0, l.quantity + delta) } : l), updatedAt: new Date().toISOString() }
         : p);
       save(next);
-      if (product && lot && actualDelta !== 0) {
-        addTransaction({
-          type: actualDelta > 0 ? '入庫' : '出庫',
-          productId,
-          productName: product.name,
-          productSku: product.sku,
-          lotNo: lot.lotNo,
-          quantity: Math.abs(actualDelta),
-          note: '',
-        });
-      }
       return next;
     });
-  }, [addTransaction]);
+    if (product && lot && actualDelta !== 0) {
+      addTransaction({
+        type: actualDelta > 0 ? '入庫' : '出庫',
+        productId,
+        productName: product.name,
+        productSku: product.sku,
+        lotNo: lot.lotNo,
+        quantity: Math.abs(actualDelta),
+        note: '',
+      });
+    }
+  }, [addTransaction, products]);
 
   const exportCsv = useCallback(() => {
     const header = '商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
