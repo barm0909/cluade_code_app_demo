@@ -24,7 +24,7 @@ function lotRowClass(lot: Lot) {
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, resetToSample, ledger } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, importExcel, resetToSample, ledger } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -86,6 +86,22 @@ export default function App() {
         <div className="header-actions">
           <button className="btn-ghost" onClick={() => { if (confirm('サンプルデータにリセットしますか？')) resetToSample(); }}>リセット</button>
           <button className="btn-secondary" onClick={exportCsv}>CSVエクスポート</button>
+          <a className="btn-secondary" href="/在庫インポートテンプレート.xlsx" download style={{ textDecoration: 'none' }}>テンプレートDL</a>
+          <label className="btn-secondary" style={{ cursor: 'pointer' }}>
+            Excelインポート
+            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={async e => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              e.target.value = '';
+              try {
+                const { updated, errors } = await importExcel(file);
+                const msg = `${updated}件の在庫数を更新しました。` + (errors.length ? `\n\n警告:\n${errors.join('\n')}` : '');
+                alert(msg);
+              } catch {
+                alert('Excelファイルの読み込みに失敗しました。');
+              }
+            }} />
+          </label>
           <button className="btn-primary" onClick={() => setEditingProduct('new')}>+ 商品追加</button>
         </div>
       </header>

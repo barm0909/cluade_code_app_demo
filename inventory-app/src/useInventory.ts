@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 
 export interface Lot {
   id: string;
@@ -223,6 +224,68 @@ export function useInventory() {
     URL.revokeObjectURL(url);
   }, [products]);
 
+  const importExcel = useCallback((file: File): Promise<{ updated: number; errors: string[] }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target!.result as ArrayBuffer);
+          const wb = XLSX.read(data, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: '' });
+
+          const errors: string[] = [];
+          let updated = 0;
+
+          setProducts(prev => {
+            let next = prev.map(p => ({ ...p, lots: p.lots.map(l => ({ ...l })) }));
+
+            for (const row of rows) {
+              const sku = String(row['SKU'] ?? row['sku'] ?? '').trim();
+              const lotNo = String(row['ロットNo'] ?? row['lotNo'] ?? row['lot_no'] ?? '').trim();
+              const rawQty = row['在庫数'] ?? row['quantity'] ?? row['数量'];
+              const qty = Number(rawQty);
+
+              if (!sku) { errors.push(`SKUが空の行をスキップ`); continue; }
+              if (!lotNo) { errors.push(`ロットNoが空の行をスキップ (SKU: ${sku})`); continue; }
+              if (isNaN(qty) || qty < 0) { errors.push(`在庫数が不正: SKU=${sku} ロット=${lotNo}`); continue; }
+
+              const product = next.find(p => p.sku === sku);
+              if (!product) { errors.push(`SKUが見つかりません: ${sku}`); continue; }
+
+              const lot = product.lots.find(l => l.lotNo === lotNo);
+              if (!lot) { errors.push(`ロットが見つかりません: SKU=${sku} ロット=${lotNo}`); continue; }
+
+              const delta = qty - lot.quantity;
+              if (delta !== 0) {
+                lot.quantity = qty;
+                product.updatedAt = new Date().toISOString();
+                updated++;
+                addTransaction({
+                  type: delta > 0 ? '入庫' : '出庫',
+                  productId: product.id,
+                  productName: product.name,
+                  productSku: product.sku,
+                  lotNo: lot.lotNo,
+                  quantity: Math.abs(delta),
+                  note: 'Excelインポート',
+                });
+              }
+            }
+
+            save(next);
+            return next;
+          });
+
+          resolve({ updated, errors });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }, [addTransaction]);
+
   const resetToSample = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(LEDGER_KEY);
@@ -232,5 +295,5 @@ export function useInventory() {
     saveLedger([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, resetToSample, ledger };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, importExcel, resetToSample, ledger };
 }
