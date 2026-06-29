@@ -3,8 +3,15 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LotModal } from '../LotModal';
 
+const MOCK_WAREHOUSES = [
+  { id: 'wh-sales', name: '販売倉庫', color: '#4caf50' },
+  { id: 'wh-hold', name: '保留倉庫', color: '#ff9800' },
+  { id: 'wh-defect', name: '不良倉庫', color: '#f44336' },
+];
+
 const defaultProps = {
   lot: null,
+  warehouses: MOCK_WAREHOUSES,
   onSave: vi.fn(),
   onClose: vi.fn(),
 };
@@ -18,13 +25,13 @@ describe('LotModal — 表示', () => {
   });
 
   it('編集モードで「ロットを編集」タイトルが表示される', () => {
-    const lot = { id: '1', lotNo: '20261231', quantity: 5 };
+    const lot = { id: '1', lotNo: '20261231', quantity: 5, warehouseId: 'wh-sales' };
     render(<LotModal {...defaultProps} lot={lot} />);
     expect(screen.getByText('ロットを編集')).toBeInTheDocument();
   });
 
   it('既存ロットの値がフォームに反映される', () => {
-    const lot = { id: '1', lotNo: '20261231', expiryDate: '2026-12-31', quantity: 10 };
+    const lot = { id: '1', lotNo: '20261231', expiryDate: '2026-12-31', quantity: 10, warehouseId: 'wh-sales' };
     render(<LotModal {...defaultProps} lot={lot} />);
     expect(screen.getByDisplayValue('20261231')).toBeInTheDocument();
     expect(screen.getByDisplayValue('10')).toBeInTheDocument();

@@ -1,11 +1,20 @@
 import { useState, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 
+export interface Warehouse {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export const DEFAULT_WAREHOUSE_ID = 'wh-sales';
+
 export interface Lot {
   id: string;
   lotNo: string;
   expiryDate?: string;
   quantity: number;
+  warehouseId: string;
 }
 
 export interface Product {
@@ -20,7 +29,7 @@ export interface Product {
   updatedAt: string;
 }
 
-export type TransactionType = '入庫' | '出庫';
+export type TransactionType = '入庫' | '出庫' | '移動';
 
 export interface StockTransaction {
   id: string;
@@ -32,6 +41,8 @@ export interface StockTransaction {
   lotNo: string;
   quantity: number;
   note: string;
+  fromWarehouseId?: string;
+  toWarehouseId?: string;
 }
 
 export type SortField = 'name' | 'sku' | 'category' | 'price' | 'costPrice';
@@ -48,6 +59,10 @@ export function totalQuantity(product: Product): number {
   return product.lots.reduce((s, l) => s + l.quantity, 0);
 }
 
+export function totalQuantityByWarehouse(product: Product, warehouseId: string): number {
+  return product.lots.filter(l => l.warehouseId === warehouseId).reduce((s, l) => s + l.quantity, 0);
+}
+
 export function generateLotNo(expiryDate?: string): string {
   if (expiryDate) return expiryDate.replace(/-/g, '');
   return new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -55,6 +70,13 @@ export function generateLotNo(expiryDate?: string): string {
 
 const STORAGE_KEY = 'inventory_products_v2';
 const LEDGER_KEY = 'inventory_ledger_v1';
+const WAREHOUSE_KEY = 'inventory_warehouses_v1';
+
+const DEFAULT_WAREHOUSES: Warehouse[] = [
+  { id: DEFAULT_WAREHOUSE_ID, name: '販売倉庫', color: '#4caf50' },
+  { id: 'wh-hold', name: '保留倉庫', color: '#ff9800' },
+  { id: 'wh-defect', name: '不良倉庫', color: '#f44336' },
+];
 
 const d = (offset: number) => {
   const dt = new Date();
@@ -66,30 +88,30 @@ const SAMPLE_DATA: Product[] = [
   {
     id: '1', name: '牛乳', sku: 'ML-001', category: '乳製品', minQuantity: 5, price: 198, costPrice: 130,
     lots: [
-      { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10 },
-      { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10 },
+      { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
+      { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
     id: '2', name: '食パン', sku: 'BR-001', category: 'パン', minQuantity: 5, price: 150, costPrice: 90,
     lots: [
-      { id: 'l3', lotNo: d(1).replace(/-/g, ''), expiryDate: d(1), quantity: 3 },
+      { id: 'l3', lotNo: d(1).replace(/-/g, ''), expiryDate: d(1), quantity: 3, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
     id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', category: 'ラベル', minQuantity: 100, price: 5, costPrice: 2,
     lots: [
-      { id: 'l4', lotNo: '20260101', quantity: 500 },
+      { id: 'l4', lotNo: '20260101', quantity: 500, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
     id: '4', name: 'チーズ', sku: 'CS-001', category: '乳製品', minQuantity: 4, price: 350, costPrice: 220,
     lots: [
-      { id: 'l5', lotNo: d(-2).replace(/-/g, ''), expiryDate: d(-2), quantity: 2 },
-      { id: 'l6', lotNo: d(14).replace(/-/g, ''), expiryDate: d(14), quantity: 4 },
+      { id: 'l5', lotNo: d(-2).replace(/-/g, ''), expiryDate: d(-2), quantity: 2, warehouseId: 'wh-hold' },
+      { id: 'l6', lotNo: d(14).replace(/-/g, ''), expiryDate: d(14), quantity: 4, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
@@ -98,10 +120,30 @@ const SAMPLE_DATA: Product[] = [
 function load(): Product[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const products: Product[] = JSON.parse(raw);
+      // 旧データの後方互換: warehouseId がないロットにデフォルトを付与
+      return products.map(p => ({
+        ...p,
+        lots: p.lots.map(l => ({ warehouseId: DEFAULT_WAREHOUSE_ID, ...l })),
+      }));
+    }
   } catch {}
   localStorage.setItem(STORAGE_KEY, JSON.stringify(SAMPLE_DATA));
   return SAMPLE_DATA;
+}
+
+function loadWarehouses(): Warehouse[] {
+  try {
+    const raw = localStorage.getItem(WAREHOUSE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  localStorage.setItem(WAREHOUSE_KEY, JSON.stringify(DEFAULT_WAREHOUSES));
+  return DEFAULT_WAREHOUSES;
+}
+
+function saveWarehouses(warehouses: Warehouse[]) {
+  localStorage.setItem(WAREHOUSE_KEY, JSON.stringify(warehouses));
 }
 
 function save(products: Product[]) {
@@ -123,6 +165,7 @@ function saveLedger(txns: StockTransaction[]) {
 export function useInventory() {
   const [products, setProducts] = useState<Product[]>(load);
   const [ledger, setLedger] = useState<StockTransaction[]>(loadLedger);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>(loadWarehouses);
 
   const addTransaction = useCallback((txn: Omit<StockTransaction, 'id' | 'date'>) => {
     setLedger(prev => {
@@ -152,17 +195,18 @@ export function useInventory() {
     setProducts(prev => { const next = prev.filter(p => p.id !== id); save(next); return next; });
   }, []);
 
-  const addLot = useCallback((productId: string, lot: Omit<Lot, 'id'>) => {
+  const addLot = useCallback((productId: string, lot: Omit<Lot, 'id'> & { warehouseId?: string }) => {
+    const lotWithWarehouse = { warehouseId: DEFAULT_WAREHOUSE_ID, ...lot };
     setProducts(prev => {
       const next = prev.map(p => p.id === productId
-        ? { ...p, lots: [...p.lots, { ...lot, id: crypto.randomUUID() }], updatedAt: new Date().toISOString() }
+        ? { ...p, lots: [...p.lots, { ...lotWithWarehouse, id: crypto.randomUUID() }], updatedAt: new Date().toISOString() }
         : p);
       save(next);
       return next;
     });
     const product = products.find(p => p.id === productId);
     if (product && lot.quantity > 0) {
-      addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: lot.quantity, note: 'ロット追加' });
+      addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: lot.quantity, note: 'ロット追加', toWarehouseId: lotWithWarehouse.warehouseId });
     }
   }, [addTransaction, products]);
 
@@ -317,14 +361,74 @@ export function useInventory() {
     });
   }, [addTransaction, products]);
 
+  const addWarehouse = useCallback((name: string, color: string) => {
+    setWarehouses(prev => {
+      const next = [...prev, { id: crypto.randomUUID(), name, color }];
+      saveWarehouses(next); return next;
+    });
+  }, []);
+
+  const updateWarehouse = useCallback((id: string, name: string, color: string) => {
+    setWarehouses(prev => {
+      const next = prev.map(w => w.id === id ? { ...w, name, color } : w);
+      saveWarehouses(next); return next;
+    });
+  }, []);
+
+  const deleteWarehouse = useCallback((id: string) => {
+    const inUse = products.some(p => p.lots.some(l => l.warehouseId === id));
+    if (inUse) return;
+    setWarehouses(prev => {
+      const next = prev.filter(w => w.id !== id);
+      saveWarehouses(next); return next;
+    });
+  }, [products]);
+
+  const moveLot = useCallback((productId: string, lotId: string, targetWarehouseId: string, quantity: number) => {
+    const product = products.find(p => p.id === productId);
+    const lot = product?.lots.find(l => l.id === lotId);
+    if (!product || !lot) return;
+
+    const moveQty = Math.min(quantity, lot.quantity);
+    const fromWarehouseId = lot.warehouseId;
+
+    if (moveQty === lot.quantity) {
+      // 全量移動: warehouseId を更新するだけ
+      setProducts(prev => {
+        const next = prev.map(p => p.id === productId
+          ? { ...p, lots: p.lots.map(l => l.id === lotId ? { ...l, warehouseId: targetWarehouseId } : l), updatedAt: new Date().toISOString() }
+          : p);
+        save(next); return next;
+      });
+    } else {
+      // 部分移動: 元ロットを減らし、新ロットを追加
+      setProducts(prev => {
+        const next = prev.map(p => {
+          if (p.id !== productId) return p;
+          const updatedLots = p.lots.map(l => l.id === lotId ? { ...l, quantity: l.quantity - moveQty } : l);
+          const newLot: Lot = { id: crypto.randomUUID(), lotNo: lot.lotNo, expiryDate: lot.expiryDate, quantity: moveQty, warehouseId: targetWarehouseId };
+          return { ...p, lots: [...updatedLots, newLot], updatedAt: new Date().toISOString() };
+        });
+        save(next); return next;
+      });
+    }
+
+    // 移動トランザクション: 出庫（元）+ 入庫（先）
+    addTransaction({ type: '出庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: moveQty, note: '倉庫移動', fromWarehouseId, toWarehouseId: targetWarehouseId });
+    addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: moveQty, note: '倉庫移動', fromWarehouseId, toWarehouseId: targetWarehouseId });
+  }, [addTransaction, products]);
+
   const resetToSample = useCallback(() => {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(LEDGER_KEY);
+    localStorage.removeItem(WAREHOUSE_KEY);
     const fresh = JSON.parse(JSON.stringify(SAMPLE_DATA));
     update(fresh);
     setLedger([]);
     saveLedger([]);
+    setWarehouses(DEFAULT_WAREHOUSES);
+    saveWarehouses(DEFAULT_WAREHOUSES);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot };
 }
