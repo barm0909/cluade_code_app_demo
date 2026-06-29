@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useInventory, daysUntilExpiry, totalQuantity } from './useInventory';
-import type { Product, Lot, SortField, SortOrder } from './useInventory';
+import type { Product, Lot, Warehouse, SortField, SortOrder } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { LedgerView } from './LedgerView';
@@ -15,6 +15,16 @@ function ExpiryBadge({ expiryDate }: { expiryDate?: string }) {
   return <span className="expiry-badge ok">{expiryDate}</span>;
 }
 
+function WarehouseDot({ warehouse }: { warehouse?: Warehouse }) {
+  if (!warehouse) return <span className="wh-unknown">—</span>;
+  return (
+    <span className="wh-badge" style={{ borderColor: warehouse.color, color: warehouse.color }}>
+      <span className="wh-dot" style={{ background: warehouse.color }} />
+      {warehouse.name}
+    </span>
+  );
+}
+
 function lotRowClass(lot: Lot) {
   if (!lot.expiryDate) return '';
   const d = daysUntilExpiry(lot.expiryDate);
@@ -23,13 +33,78 @@ function lotRowClass(lot: Lot) {
   return '';
 }
 
+interface MoveLotModalProps {
+  lot: Lot;
+  product: Product;
+  warehouses: Warehouse[];
+  onMove: (targetWarehouseId: string, quantity: number) => void;
+  onClose: () => void;
+}
+
+function MoveLotModal({ lot, product, warehouses, onMove, onClose }: MoveLotModalProps) {
+  const [targetId, setTargetId] = useState(() => {
+    const others = warehouses.filter(w => w.id !== lot.warehouseId);
+    return others[0]?.id ?? '';
+  });
+  const [qty, setQty] = useState(lot.quantity);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetId || qty <= 0) return;
+    onMove(targetId, qty);
+    onClose();
+  };
+
+  const currentWh = warehouses.find(w => w.id === lot.warehouseId);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>ロット移動</h2>
+        <p className="move-lot-info">
+          <strong>{product.name}</strong> — ロット {lot.lotNo}<br />
+          移動元: <WarehouseDot warehouse={currentWh} /> （在庫: {lot.quantity}）
+        </p>
+        <form onSubmit={handleSubmit}>
+          <label htmlFor="move-target">
+            移動先倉庫
+            <select id="move-target" value={targetId} onChange={e => setTargetId(e.target.value)}>
+              {warehouses.filter(w => w.id !== lot.warehouseId).map(w => (
+                <option key={w.id} value={w.id}>{w.name}</option>
+              ))}
+            </select>
+          </label>
+          <label htmlFor="move-qty">
+            移動数量
+            <input
+              id="move-qty"
+              type="number"
+              min={1}
+              max={lot.quantity}
+              required
+              value={qty}
+              onChange={e => setQty(+e.target.value)}
+            />
+          </label>
+          <div className="modal-actions">
+            <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
+            <button type="submit" className="btn-primary" disabled={!targetId}>移動</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, moveLot } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
+  const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [activeTab, setActiveTab] = useState<'inventory' | 'ledger'>('inventory');
@@ -39,15 +114,17 @@ export default function App() {
   const filtered = useMemo(() => {
     let list = products.filter(p => {
       const q = search.toLowerCase();
-      return (!q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))
-        && (!categoryFilter || p.category === categoryFilter);
+      const matchSearch = !q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q);
+      const matchCategory = !categoryFilter || p.category === categoryFilter;
+      const matchWarehouse = !warehouseFilter || p.lots.some(l => l.warehouseId === warehouseFilter);
+      return matchSearch && matchCategory && matchWarehouse;
     });
     return [...list].sort((a, b) => {
       const av = a[sortField], bv = b[sortField];
       const cmp = typeof av === 'number' ? av - (bv as number) : String(av).localeCompare(String(bv));
       return sortOrder === 'asc' ? cmp : -cmp;
     });
-  }, [products, search, categoryFilter, sortField, sortOrder]);
+  }, [products, search, categoryFilter, warehouseFilter, sortField, sortOrder]);
 
   const allLots = products.flatMap(p => p.lots);
   const expired = allLots.filter(l => l.expiryDate && daysUntilExpiry(l.expiryDate) < 0);
@@ -78,6 +155,10 @@ export default function App() {
     if (totalQuantity(p) <= p.minQuantity) return 'row-alert';
     return '';
   };
+
+  const visibleLots = (p: Product) => warehouseFilter
+    ? p.lots.filter(l => l.warehouseId === warehouseFilter)
+    : p.lots;
 
   return (
     <div className="app">
@@ -129,7 +210,7 @@ export default function App() {
       </div>
 
       {activeTab === 'ledger' ? (
-        <LedgerView ledger={ledger} />
+        <LedgerView ledger={ledger} warehouses={warehouses} />
       ) : (<>
 
       <div className="controls">
@@ -137,6 +218,10 @@ export default function App() {
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
           <option value="">全カテゴリ</option>
           {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={warehouseFilter} onChange={e => setWarehouseFilter(e.target.value)}>
+          <option value="">全倉庫</option>
+          {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
         </select>
       </div>
 
@@ -158,6 +243,7 @@ export default function App() {
             {filtered.map(p => {
               const expanded = expandedIds.has(p.id);
               const qty = totalQuantity(p);
+              const lots = visibleLots(p);
               return (
                 <>
                   <tr key={p.id} className={`product-row ${productRowClass(p)}`} onClick={() => toggleExpand(p.id)}>
@@ -186,7 +272,7 @@ export default function App() {
                             <span>ロット一覧</span>
                             <button className="btn-add-lot" onClick={() => setEditingLot({ productId: p.id, lot: null })}>+ ロット追加</button>
                           </div>
-                          {p.lots.length === 0
+                          {lots.length === 0
                             ? <p className="lot-empty">ロットがありません。「+ ロット追加」から追加してください。</p>
                             : (
                               <table className="lot-table">
@@ -194,15 +280,17 @@ export default function App() {
                                   <tr>
                                     <th>ロットNo</th>
                                     <th>賞味期限</th>
+                                    <th>倉庫</th>
                                     <th>在庫数</th>
                                     <th>操作</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {p.lots.map(l => (
+                                  {lots.map(l => (
                                     <tr key={l.id} className={lotRowClass(l)}>
                                       <td className="mono">{l.lotNo}</td>
                                       <td><ExpiryBadge expiryDate={l.expiryDate} /></td>
+                                      <td><WarehouseDot warehouse={warehouses.find(w => w.id === l.warehouseId)} /></td>
                                       <td>
                                         <div className="qty-control">
                                           <button onClick={() => adjustLotQuantity(p.id, l.id, -1)} disabled={l.quantity === 0}>-</button>
@@ -212,6 +300,7 @@ export default function App() {
                                       </td>
                                       <td>
                                         <div className="row-actions">
+                                          <button className="btn-move" onClick={() => setMovingLot({ product: p, lot: l })}>移動</button>
                                           <button className="btn-edit" onClick={() => setEditingLot({ productId: p.id, lot: l })}>編集</button>
                                           <button className="btn-delete" onClick={() => { if (confirm(`ロット「${l.lotNo}」を削除しますか？`)) deleteLot(p.id, l.id); }}>削除</button>
                                         </div>
@@ -245,11 +334,21 @@ export default function App() {
       {editingLot !== null && (
         <LotModal
           lot={editingLot.lot}
+          warehouses={warehouses}
           onSave={data => editingLot.lot
             ? updateLot(editingLot.productId, editingLot.lot.id, data)
             : addLot(editingLot.productId, data)
           }
           onClose={() => setEditingLot(null)}
+        />
+      )}
+      {movingLot !== null && (
+        <MoveLotModal
+          lot={movingLot.lot}
+          product={movingLot.product}
+          warehouses={warehouses}
+          onMove={(targetId, qty) => moveLot(movingLot.product.id, movingLot.lot.id, targetId, qty)}
+          onClose={() => setMovingLot(null)}
         />
       )}
     </div>

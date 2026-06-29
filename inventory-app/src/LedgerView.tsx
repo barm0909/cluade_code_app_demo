@@ -1,7 +1,8 @@
-import type { StockTransaction } from './useInventory';
+import type { StockTransaction, Warehouse } from './useInventory';
 
 interface Props {
   ledger: StockTransaction[];
+  warehouses: Warehouse[];
 }
 
 function formatDate(iso: string) {
@@ -10,7 +11,8 @@ function formatDate(iso: string) {
   return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function LedgerView({ ledger }: Props) {
+export function LedgerView({ ledger, warehouses }: Props) {
+  const whName = (id?: string) => id ? (warehouses.find(w => w.id === id)?.name ?? id) : '';
   if (ledger.length === 0) {
     return (
       <div className="table-wrapper">
@@ -30,6 +32,7 @@ export function LedgerView({ ledger }: Props) {
             <th>SKU</th>
             <th>ロットNo</th>
             <th style={{ textAlign: 'right' }}>数量</th>
+            <th>倉庫</th>
             <th>備考</th>
           </tr>
         </thead>
@@ -49,6 +52,11 @@ export function LedgerView({ ledger }: Props) {
                 <span className={txn.type === '入庫' ? 'qty-in' : 'qty-out'}>
                   {txn.type === '入庫' ? '+' : '-'}{txn.quantity}
                 </span>
+              </td>
+              <td style={{ fontSize: '0.85rem', color: '#555' }}>
+                {txn.type === '移動' && txn.fromWarehouseId && txn.toWarehouseId
+                  ? `${whName(txn.fromWarehouseId)} → ${whName(txn.toWarehouseId)}`
+                  : (txn.toWarehouseId ? whName(txn.toWarehouseId) : '')}
               </td>
               <td style={{ color: '#888', fontSize: '0.85rem' }}>{txn.note}</td>
             </tr>

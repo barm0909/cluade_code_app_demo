@@ -1,22 +1,26 @@
 import { useState, useEffect } from 'react';
-import type { Lot } from './useInventory';
-import { generateLotNo } from './useInventory';
+import type { Lot, Warehouse } from './useInventory';
+import { generateLotNo, DEFAULT_WAREHOUSE_ID } from './useInventory';
 
 interface Props {
   lot: Lot | null;
+  warehouses: Warehouse[];
   onSave: (data: Omit<Lot, 'id'>) => void;
   onClose: () => void;
 }
 
-const EMPTY = { lotNo: '', expiryDate: '', quantity: 0 };
+const makeEmpty = () => ({ lotNo: '', expiryDate: '', quantity: 0, warehouseId: DEFAULT_WAREHOUSE_ID });
 const LOT_PATTERN = /^\d{8}$/;
 
-export function LotModal({ lot, onSave, onClose }: Props) {
-  const [form, setForm] = useState(EMPTY);
+export function LotModal({ lot, warehouses, onSave, onClose }: Props) {
+  const [form, setForm] = useState(makeEmpty());
   const [lotError, setLotError] = useState('');
 
   useEffect(() => {
-    setForm(lot ? { lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? '', quantity: lot.quantity } : EMPTY);
+    setForm(lot
+      ? { lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? '', quantity: lot.quantity, warehouseId: lot.warehouseId ?? DEFAULT_WAREHOUSE_ID }
+      : makeEmpty()
+    );
     setLotError('');
   }, [lot]);
 
@@ -32,7 +36,6 @@ export function LotModal({ lot, onSave, onClose }: Props) {
   };
 
   const handleLotNoChange = (val: string) => {
-    // 半角数字のみ入力可、8桁まで
     const digits = val.replace(/[^\d]/g, '').slice(0, 8);
     setForm(f => ({ ...f, lotNo: digits }));
     setLotError('');
@@ -72,6 +75,14 @@ export function LotModal({ lot, onSave, onClose }: Props) {
             {lotError && <span className="field-error">{lotError}</span>}
           </label>
           <label htmlFor="lot-qty">在庫数 <input id="lot-qty" type="number" min={0} required value={form.quantity} onChange={e => setForm(f => ({ ...f, quantity: +e.target.value }))} /></label>
+          <label htmlFor="lot-warehouse">
+            倉庫
+            <select id="lot-warehouse" value={form.warehouseId} onChange={e => setForm(f => ({ ...f, warehouseId: e.target.value }))}>
+              {warehouses.map(w => (
+                <option key={w.id} value={w.id}>{w.name}</option>
+              ))}
+            </select>
+          </label>
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
             <button type="submit" className="btn-primary">保存</button>
