@@ -18,14 +18,32 @@ EC2インスタンスやセキュリティグループ等の詳細な設定内�
 
 GitHub Actions等のCI/CDは組み込んでおらず、手動デプロイを前提としています。
 
+## 実行環境について
+
+本手順のコマンド(手順1のTerraform、手順2のdeploy.sh)は、**すべて自分のローカルPC
+(macOS / Linux / WSL)のターミナルで、このリポジトリをcloneしたディレクトリから実行します**。
+EC2インスタンス上やAWSマネジメントコンソール上での作業はありません。
+
+手順1で実行するのは **Terraform CLI であり、AWS CLIのコマンドではありません**。
+AWS CLIは認証情報の設定(`aws configure`)に使うだけで、TerraformはAWS CLIと同じ
+認証情報(`~/.aws/credentials`、環境変数、SSO)を読み取って直接AWS APIを呼び出します。
+そのため認証情報を環境変数等で設定するならAWS CLI自体のインストールは必須ではありません。
+
 ## 前提条件
 
-- AWS CLIの認証情報が設定済みであること(`aws configure` 済み、またはSSO/環境変数)
+以下をすべて**ローカルPCに**用意する。
+
+- AWSの認証情報が設定済みであること(`aws configure` 済み、またはSSO/環境変数。
+  対象AWSアカウントにEC2/VPC等を作成できるIAM権限が必要)
 - [Terraform](https://developer.hashicorp.com/terraform/install) (>= 1.5)
+- Node.js / npm(手順2のビルドで使用)
 - SSH鍵ペア(なければ `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` で作成)
-- ローカルに `rsync` があること
+- `rsync` と `ssh`(手順2の転送で使用)
 
 ## 1. インフラを構築する
+
+ローカルPCのターミナルで、リポジトリルートから以下を実行する
+(使うのはTerraform CLI。AWS CLIのコマンドは実行しない)。
 
 ```bash
 cd deploy/terraform
@@ -48,7 +66,8 @@ terraform apply
 
 ## 2. アプリをビルドしてデプロイする
 
-リポジトリルートから実行する。
+これもローカルPCのターミナルで、リポジトリルートから実行する
+(ビルドはローカルで行われ、成果物だけがEC2へ転送される)。
 
 ```bash
 ./deploy/deploy.sh <terraform applyで出力されたpublic_ip> ~/.ssh/id_ed25519
