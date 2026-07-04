@@ -13,6 +13,9 @@ EC2上のNginxで配信する構成でAWSにデプロイします。インフラ
 - セキュリティグループ: 80番(HTTP)は全開放、22番(SSH)は指定したCIDRのみ許可
 - サイト全体にNginxのBasic認証をかけ、ID/パスワードを知らないと閲覧できないよう制限
 
+EC2インスタンスやセキュリティグループ等の詳細な設定内容は
+[aws-infrastructure.md](./aws-infrastructure.md) を参照してください。
+
 GitHub Actions等のCI/CDは組み込んでおらず、手動デプロイを前提としています。
 
 ## 前提条件
