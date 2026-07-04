@@ -1,0 +1,4 @@
+# cp terraform.tfvars.example terraform.tfvars してから値を書き換えてください
+aws_region          = "ap-northeast-1"
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+admin_ssh_cidr      = "203.0.113.10/32" # curl ifconfig.me で自分のIPを確認して置き換える
