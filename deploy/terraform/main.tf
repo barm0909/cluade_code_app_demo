@@ -75,7 +75,8 @@ resource "aws_instance" "web" {
   }
 
   user_data = templatefile("${path.module}/user_data.sh.tpl", {
-    nginx_conf = file("${path.module}/../nginx/inventory-app.conf")
+    nginx_conf    = file("${path.module}/../nginx/inventory-app.conf")
+    htpasswd_line = "${var.basic_auth_username}:${bcrypt(var.basic_auth_password)}"
   })
 
   tags = {

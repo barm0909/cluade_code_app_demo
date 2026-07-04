@@ -10,6 +10,12 @@ cat > /etc/nginx/conf.d/inventory-app.conf <<'NGINX_CONF'
 ${nginx_conf}
 NGINX_CONF
 
+cat > /etc/nginx/.htpasswd <<'HTPASSWD'
+${htpasswd_line}
+HTPASSWD
+chown root:nginx /etc/nginx/.htpasswd
+chmod 640 /etc/nginx/.htpasswd
+
 rm -f /etc/nginx/conf.d/default.conf
 
 cat > /var/www/inventory-app/index.html <<'HTML'

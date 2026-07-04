@@ -31,3 +31,15 @@ variable "root_volume_size" {
   type        = number
   default     = 8
 }
+
+variable "basic_auth_username" {
+  description = "サイト全体にかけるBasic認証のユーザー名"
+  type        = string
+  default     = "admin"
+}
+
+variable "basic_auth_password" {
+  description = "サイト全体にかけるBasic認証のパスワード。terraform.tfvarsにのみ記載しコミットしないこと。"
+  type        = string
+  sensitive   = true
+}

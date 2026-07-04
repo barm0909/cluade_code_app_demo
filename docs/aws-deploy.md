@@ -11,6 +11,7 @@ EC2上のNginxで配信する構成でAWSにデプロイします。インフラ
 - Nginxで `dist/` の静的ファイルを配信(SPA用に `try_files` でindex.htmlにフォールバック)
 - Elastic IPで固定グローバルIPを付与
 - セキュリティグループ: 80番(HTTP)は全開放、22番(SSH)は指定したCIDRのみ許可
+- サイト全体にNginxのBasic認証をかけ、ID/パスワードを知らないと閲覧できないよう制限
 
 GitHub Actions等のCI/CDは組み込んでおらず、手動デプロイを前提としています。
 
@@ -32,6 +33,7 @@ cp terraform.tfvars.example terraform.tfvars
 
 - `ssh_public_key_path`: 上記で作成/用意したSSH公開鍵のパス
 - `admin_ssh_cidr`: `curl ifconfig.me` で確認した自分のグローバルIPを `x.x.x.x/32` の形式で指定(SSHを許可する範囲。`0.0.0.0/0` は非推奨)
+- `basic_auth_username` / `basic_auth_password`: サイト全体にかけるBasic認証の認証情報。`basic_auth_password` は強いパスワードに変更すること(`terraform.tfvars` はgitignore済みでコミットされない)
 
 ```bash
 terraform init
@@ -57,6 +59,8 @@ terraform apply
 4. リモートで `/var/www/inventory-app` に配置し、`nginx` をリロード
 
 完了後、`http://<public_ip>` にブラウザでアクセスして動作確認する。
+アクセス時にBasic認証のダイアログが表示されるので、`terraform.tfvars` に設定した
+`basic_auth_username` / `basic_auth_password` を入力する。
 
 コードを更新した際は、再度 `./deploy/deploy.sh <public_ip> <ssh鍵>` を実行するだけでよい
 (インフラの再構築は不要)。
