@@ -32,6 +32,7 @@ const defaultProps = {
   products: [makeProduct()],
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
+  onAddClick: vi.fn(),
 };
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -192,6 +193,18 @@ describe('ProductMasterView — バリデーション', () => {
   });
 });
 
+describe('ProductMasterView — 商品追加', () => {
+  it('「+ 商品追加」ボタンが表示され、クリックするとonAddClickが呼ばれる', async () => {
+    const user = userEvent.setup();
+    const onAddClick = vi.fn();
+    render(<ProductMasterView {...defaultProps} onAddClick={onAddClick} />);
+
+    await user.click(screen.getByText('+ 商品追加'));
+
+    expect(onAddClick).toHaveBeenCalled();
+  });
+});
+
 describe('ProductMasterView — 削除', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
@@ -236,5 +249,20 @@ describe('App — 商品マスタタブ', () => {
     expect(screen.getByText('最低在庫数')).toBeInTheDocument();
     // サンプルデータの商品が表示される
     expect(screen.getByText('牛乳')).toBeInTheDocument();
+  });
+
+  it('在庫一覧タブでは商品追加ボタンが表示されない', () => {
+    render(<App />);
+    expect(screen.queryByText('+ 商品追加')).not.toBeInTheDocument();
+  });
+
+  it('商品マスタタブの商品追加ボタンから商品追加モーダルが開く', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: '商品マスタ' }));
+    await user.click(screen.getByText('+ 商品追加'));
+
+    expect(screen.getByText('商品を追加')).toBeInTheDocument();
   });
 });
