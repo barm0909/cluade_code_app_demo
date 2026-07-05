@@ -134,7 +134,7 @@ function load(): Product[] {
       // 旧データの後方互換: warehouseId がないロットにデフォルトを付与
       return products.map(p => ({
         ...p,
-        lots: p.lots.map(l => ({ warehouseId: DEFAULT_WAREHOUSE_ID, ...l })),
+        lots: p.lots.map(l => ({ ...l, warehouseId: l.warehouseId ?? DEFAULT_WAREHOUSE_ID })),
       }));
     }
   } catch {}
@@ -232,8 +232,8 @@ export function useInventory() {
     setProducts(prev => { const next = prev.filter(p => p.id !== id); save(next); return next; });
   }, []);
 
-  const addLot = useCallback((productId: string, lot: Omit<Lot, 'id'> & { warehouseId?: string }) => {
-    const lotWithWarehouse = { warehouseId: DEFAULT_WAREHOUSE_ID, ...lot };
+  const addLot = useCallback((productId: string, lot: Omit<Lot, 'id' | 'warehouseId'> & { warehouseId?: string }) => {
+    const lotWithWarehouse = { ...lot, warehouseId: lot.warehouseId ?? DEFAULT_WAREHOUSE_ID };
     setProducts(prev => {
       const next = prev.map(p => p.id === productId
         ? { ...p, lots: [...p.lots, { ...lotWithWarehouse, id: crypto.randomUUID() }], updatedAt: new Date().toISOString() }

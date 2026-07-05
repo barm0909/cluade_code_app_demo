@@ -28,7 +28,7 @@ Run a single test by name: `npx vitest run -t "test name substring"`
 
 There is no separate typecheck script — `npm run build` runs `tsc -b` as its first step, so a failing build often means a type error rather than a bundling error.
 
-**Known pre-existing issue:** `npm run build` currently fails `tsc -b` with type errors in `useInventory.ts` (duplicate `warehouseId` in object spreads, e.g. `{ ...lotWithWarehouse, id: ... }` after `{ warehouseId: DEFAULT_WAREHOUSE_ID, ...lot }`) and in several test files that construct `Lot`/`Product` literals without `warehouseId`. `npm run test` and `npm run lint` both pass since Vitest transforms TS without full type-checking and oxlint's `typeAware` option is off. Don't assume the build is green just because tests/lint pass — check `npm run build` (or `tsc -b` directly) separately if you touch warehouse-related types.
+Note that `npm run test` and `npm run lint` do not type-check (Vitest transforms TS without full type-checking and oxlint's `typeAware` option is off), so don't assume the build is green just because tests/lint pass — run `npm run build` (or `tsc -b` directly) to verify types.
 
 ## Architecture
 
