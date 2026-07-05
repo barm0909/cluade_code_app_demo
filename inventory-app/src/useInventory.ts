@@ -29,7 +29,16 @@ export interface Product {
   updatedAt: string;
 }
 
-export type TransactionType = '入庫' | '出庫' | '移動';
+export type TransactionType = '入荷' | '調整入庫' | '売上出庫' | '調整出庫' | '廃棄' | '移動';
+
+export const INBOUND_TYPES: TransactionType[] = ['入荷', '調整入庫'];
+export const OUTBOUND_TYPES: TransactionType[] = ['売上出庫', '調整出庫', '廃棄'];
+
+export function transactionDirection(type: TransactionType): 'in' | 'out' | 'move' {
+  if (INBOUND_TYPES.includes(type)) return 'in';
+  if (OUTBOUND_TYPES.includes(type)) return 'out';
+  return 'move';
+}
 
 export interface StockTransaction {
   id: string;
@@ -150,10 +159,38 @@ function save(products: Product[]) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
 }
 
+// 旧区分（入庫/出庫）の帳票データを新区分へ移行する
+// - 倉庫移動の旧2件記録（出庫+入庫）は「移動」1件に統合（出庫側を除去）
+// - ロット追加による入庫 → 入荷、それ以外の入庫/出庫 → 調整入庫/調整出庫
+function migrateLedger(txns: StockTransaction[]): { txns: StockTransaction[]; changed: boolean } {
+  let changed = false;
+  const migrated: StockTransaction[] = [];
+  for (const t of txns) {
+    const legacyType = t.type as string;
+    if (legacyType === '入庫') {
+      changed = true;
+      if (t.note === '倉庫移動') migrated.push({ ...t, type: '移動' });
+      else if (t.note === 'ロット追加') migrated.push({ ...t, type: '入荷' });
+      else migrated.push({ ...t, type: '調整入庫' });
+    } else if (legacyType === '出庫') {
+      changed = true;
+      if (t.note === '倉庫移動') continue;
+      migrated.push({ ...t, type: '調整出庫' });
+    } else {
+      migrated.push(t);
+    }
+  }
+  return { txns: migrated, changed };
+}
+
 function loadLedger(): StockTransaction[] {
   try {
     const raw = localStorage.getItem(LEDGER_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const { txns, changed } = migrateLedger(JSON.parse(raw));
+      if (changed) saveLedger(txns);
+      return txns;
+    }
   } catch {}
   return [];
 }
@@ -206,7 +243,7 @@ export function useInventory() {
     });
     const product = products.find(p => p.id === productId);
     if (product && lot.quantity > 0) {
-      addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: lot.quantity, note: 'ロット追加', toWarehouseId: lotWithWarehouse.warehouseId });
+      addTransaction({ type: '入荷', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: lot.quantity, note: 'ロット追加', toWarehouseId: lotWithWarehouse.warehouseId });
     }
   }, [addTransaction, products]);
 
@@ -228,7 +265,7 @@ export function useInventory() {
     });
   }, []);
 
-  const adjustLotQuantity = useCallback((productId: string, lotId: string, delta: number) => {
+  const adjustLotQuantity = useCallback((productId: string, lotId: string, delta: number, type?: TransactionType) => {
     const product = products.find(p => p.id === productId);
     const lot = product?.lots.find(l => l.id === lotId);
     const actualDelta = lot ? (delta > 0 ? delta : -Math.min(-delta, lot.quantity)) : 0;
@@ -241,7 +278,7 @@ export function useInventory() {
     });
     if (product && lot && actualDelta !== 0) {
       addTransaction({
-        type: actualDelta > 0 ? '入庫' : '出庫',
+        type: type ?? (actualDelta > 0 ? '調整入庫' : '調整出庫'),
         productId,
         productName: product.name,
         productSku: product.sku,
@@ -340,7 +377,7 @@ export function useInventory() {
               const lot = product?.lots.find(l => l.id === c.lotId);
               if (product && lot) {
                 addTransaction({
-                  type: c.delta > 0 ? '入庫' : '出庫',
+                  type: c.delta > 0 ? '調整入庫' : '調整出庫',
                   productId: product.id,
                   productName: product.name,
                   productSku: product.sku,
@@ -413,9 +450,8 @@ export function useInventory() {
       });
     }
 
-    // 移動トランザクション: 出庫（元）+ 入庫（先）
-    addTransaction({ type: '出庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: moveQty, note: '倉庫移動', fromWarehouseId, toWarehouseId: targetWarehouseId });
-    addTransaction({ type: '入庫', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: moveQty, note: '倉庫移動', fromWarehouseId, toWarehouseId: targetWarehouseId });
+    // 移動トランザクション: 移動元→移動先を1件で記録
+    addTransaction({ type: '移動', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: moveQty, note: '倉庫移動', fromWarehouseId, toWarehouseId: targetWarehouseId });
   }, [addTransaction, products]);
 
   const resetToSample = useCallback(() => {

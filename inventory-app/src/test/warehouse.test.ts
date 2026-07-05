@@ -174,20 +174,20 @@ describe('useInventory — moveLot', () => {
     expect(newLot.lotNo).toBe(lot.lotNo);
   });
 
-  it('moveLot で移動トランザクションが2件（出庫・入庫）記録される', () => {
-    const { result, holdWh } = setupProduct();
+  it('moveLot で移動トランザクションが1件記録される', () => {
+    const { result, salesWh, holdWh } = setupProduct();
     const product = result.current.products.find(p => p.sku === 'MV-001')!;
     const lot = product.lots[0];
     const beforeCount = result.current.ledger.length;
 
     act(() => { result.current.moveLot(product.id, lot.id, holdWh.id, 3); });
 
-    // 出庫（元倉庫）+ 入庫（先倉庫）= 2件
-    expect(result.current.ledger.length).toBe(beforeCount + 2);
-    const txns = result.current.ledger.slice(0, 2);
-    const types = txns.map(t => t.type);
-    expect(types).toContain('出庫');
-    expect(types).toContain('入庫');
+    expect(result.current.ledger.length).toBe(beforeCount + 1);
+    const txn = result.current.ledger[0];
+    expect(txn.type).toBe('移動');
+    expect(txn.quantity).toBe(3);
+    expect(txn.fromWarehouseId).toBe(salesWh.id);
+    expect(txn.toWarehouseId).toBe(holdWh.id);
   });
 
   it('元ロット在庫より多い数量を移動しようとすると全量が移動される', () => {
