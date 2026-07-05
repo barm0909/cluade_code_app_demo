@@ -97,13 +97,6 @@ tr:hover td { background: #fafbff; }
   border-radius: 20px; font-size: 0.78rem; font-weight: 600;
 }
 
-.qty-control { display: flex; align-items: center; gap: 8px; }
-.qty-control button {
-  width: 26px; height: 26px; border: 1px solid #ddd; background: white;
-  border-radius: 6px; cursor: pointer; font-size: 1rem; line-height: 1;
-}
-.qty-control button:hover:not(:disabled) { background: #f0f0f0; }
-.qty-control button:disabled { opacity: 0.4; cursor: not-allowed; }
 .qty-low { color: #e53935; font-weight: 700; }
 
 .row-actions { display: flex; gap: 6px; }
@@ -196,8 +189,10 @@ tr:hover td { background: #fafbff; }
 /* Ledger badges */
 .badge-in { background: #e8f5e9; color: #2e7d32; }
 .badge-out { background: #fce8e8; color: #c62828; }
+.badge-move { background: #ede7f6; color: #7c4dff; }
 .qty-in { color: #2e7d32; }
 .qty-out { color: #c62828; }
+.qty-move { color: #7c4dff; }
 
 @media (max-width: 640px) {
   .stats-row { flex-direction: column; }
@@ -222,6 +217,19 @@ tr:hover td { background: #fafbff; }
   border: 1.5px solid #7c4dff; background: #ede7f6; color: #7c4dff; font-weight: 600;
 }
 .btn-move:hover { background: #7c4dff; color: white; }
+
+.btn-ship {
+  padding: 3px 10px; font-size: 0.78rem; border-radius: 6px; cursor: pointer;
+  border: 1.5px solid #e53935; background: #fce8e8; color: #e53935; font-weight: 600;
+}
+.btn-ship:hover:not(:disabled) { background: #e53935; color: white; }
+.btn-ship:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-receive {
+  padding: 3px 10px; font-size: 0.78rem; border-radius: 6px; cursor: pointer;
+  border: 1.5px solid #2e7d32; background: #e8f5e9; color: #2e7d32; font-weight: 600;
+}
+.btn-receive:hover { background: #2e7d32; color: white; }
 
 /* Move lot modal info */
 .move-lot-info {

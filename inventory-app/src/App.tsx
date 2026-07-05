@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
-import { useInventory, daysUntilExpiry, totalQuantity } from './useInventory';
-import type { Product, Lot, Warehouse, SortField, SortOrder } from './useInventory';
+import { useInventory, daysUntilExpiry, totalQuantity, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
+import type { Product, Lot, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { LedgerView } from './LedgerView';
@@ -97,11 +97,78 @@ function MoveLotModal({ lot, product, warehouses, onMove, onClose }: MoveLotModa
   );
 }
 
+interface StockIoModalProps {
+  lot: Lot;
+  product: Product;
+  warehouses: Warehouse[];
+  direction: 'in' | 'out';
+  onSubmit: (quantity: number, type: TransactionType) => void;
+  onClose: () => void;
+}
+
+function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }: StockIoModalProps) {
+  const label = direction === 'in' ? '入庫' : '出庫';
+  const types = direction === 'in' ? INBOUND_TYPES : OUTBOUND_TYPES;
+  const maxQty = direction === 'in' ? undefined : lot.quantity;
+  const [type, setType] = useState<TransactionType>(types[0]);
+  const [qty, setQty] = useState(1);
+
+  const valid = qty > 0 && (maxQty === undefined || qty <= maxQty);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!valid) return;
+    onSubmit(qty, type);
+    onClose();
+  };
+
+  const currentWh = warehouses.find(w => w.id === lot.warehouseId);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>{label}</h2>
+        <p className="move-lot-info">
+          <strong>{product.name}</strong> — ロット {lot.lotNo}<br />
+          倉庫: <WarehouseDot warehouse={currentWh} /> （在庫: {lot.quantity}）
+        </p>
+        <form onSubmit={handleSubmit}>
+          <label htmlFor="io-type">
+            {label}区分
+            <select id="io-type" value={type} onChange={e => setType(e.target.value as TransactionType)}>
+              {types.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+          <label htmlFor="io-qty">
+            {label}数量
+            <input
+              id="io-qty"
+              type="number"
+              min={1}
+              max={maxQty}
+              required
+              value={qty}
+              onChange={e => setQty(+e.target.value)}
+            />
+          </label>
+          <div className="modal-actions">
+            <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
+            <button type="submit" className="btn-primary" disabled={!valid}>{label}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, moveLot } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
+  const [ioLot, setIoLot] = useState<{ product: Product; lot: Lot; direction: 'in' | 'out' } | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -295,14 +362,12 @@ export default function App() {
                                       <td><ExpiryBadge expiryDate={l.expiryDate} /></td>
                                       <td><WarehouseDot warehouse={warehouses.find(w => w.id === l.warehouseId)} /></td>
                                       <td>
-                                        <div className="qty-control">
-                                          <button onClick={() => adjustLotQuantity(p.id, l.id, -1)} disabled={l.quantity === 0}>-</button>
-                                          <span>{l.quantity}</span>
-                                          <button onClick={() => adjustLotQuantity(p.id, l.id, 1)}>+</button>
-                                        </div>
+                                        <span className={l.quantity === 0 ? 'qty-low' : ''}>{l.quantity}</span>
                                       </td>
                                       <td>
                                         <div className="row-actions">
+                                          <button className="btn-receive" onClick={() => setIoLot({ product: p, lot: l, direction: 'in' })}>入庫</button>
+                                          <button className="btn-ship" onClick={() => setIoLot({ product: p, lot: l, direction: 'out' })} disabled={l.quantity === 0}>出庫</button>
                                           <button className="btn-move" onClick={() => setMovingLot({ product: p, lot: l })}>移動</button>
                                           <button className="btn-edit" onClick={() => setEditingLot({ productId: p.id, lot: l })}>編集</button>
                                           <button className="btn-delete" onClick={() => { if (confirm(`ロット「${l.lotNo}」を削除しますか？`)) deleteLot(p.id, l.id); }}>削除</button>
@@ -352,6 +417,16 @@ export default function App() {
           warehouses={warehouses}
           onMove={(targetId, qty) => moveLot(movingLot.product.id, movingLot.lot.id, targetId, qty)}
           onClose={() => setMovingLot(null)}
+        />
+      )}
+      {ioLot !== null && (
+        <StockIoModal
+          lot={ioLot.lot}
+          product={ioLot.product}
+          warehouses={warehouses}
+          direction={ioLot.direction}
+          onSubmit={(qty, type) => adjustLotQuantity(ioLot.product.id, ioLot.lot.id, ioLot.direction === 'in' ? qty : -qty, type)}
+          onClose={() => setIoLot(null)}
         />
       )}
     </div>

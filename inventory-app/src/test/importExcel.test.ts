@@ -95,7 +95,7 @@ describe('importExcel — 正常系', () => {
     expect(res.errors).toHaveLength(0);
   });
 
-  it('インポート後にledgerへ入庫トランザクションが追加される', async () => {
+  it('インポート後にledgerへ調整入庫トランザクションが追加される', async () => {
     const { result } = renderHook(() => useInventory());
 
     const product = result.current.products.find(p => p.sku === 'ML-001')!;
@@ -109,11 +109,11 @@ describe('importExcel — 正常系', () => {
     });
 
     expect(result.current.ledger.length).toBe(beforeCount + 1);
-    expect(result.current.ledger[0].type).toBe('入庫');
+    expect(result.current.ledger[0].type).toBe('調整入庫');
     expect(result.current.ledger[0].note).toBe('Excelインポート');
   });
 
-  it('在庫数を減らすと出庫トランザクションが記録される', async () => {
+  it('在庫数を減らすと調整出庫トランザクションが記録される', async () => {
     const { result } = renderHook(() => useInventory());
 
     const product = result.current.products.find(p => p.sku === 'ML-001')!;
@@ -125,7 +125,7 @@ describe('importExcel — 正常系', () => {
       await result.current.importExcel(fakeFile);
     });
 
-    expect(result.current.ledger[0].type).toBe('出庫');
+    expect(result.current.ledger[0].type).toBe('調整出庫');
   });
 });
 

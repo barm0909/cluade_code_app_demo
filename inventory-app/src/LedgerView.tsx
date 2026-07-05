@@ -1,3 +1,4 @@
+import { transactionDirection } from './useInventory';
 import type { StockTransaction, Warehouse } from './useInventory';
 
 interface Props {
@@ -37,11 +38,13 @@ export function LedgerView({ ledger, warehouses }: Props) {
           </tr>
         </thead>
         <tbody>
-          {ledger.map(txn => (
+          {ledger.map(txn => {
+            const dir = transactionDirection(txn.type);
+            return (
             <tr key={txn.id}>
               <td className="mono">{formatDate(txn.date)}</td>
               <td>
-                <span className={txn.type === '入庫' ? 'badge badge-in' : 'badge badge-out'}>
+                <span className={`badge badge-${dir}`}>
                   {txn.type}
                 </span>
               </td>
@@ -49,8 +52,8 @@ export function LedgerView({ ledger, warehouses }: Props) {
               <td className="mono">{txn.productSku}</td>
               <td className="mono">{txn.lotNo}</td>
               <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                <span className={txn.type === '入庫' ? 'qty-in' : 'qty-out'}>
-                  {txn.type === '入庫' ? '+' : '-'}{txn.quantity}
+                <span className={`qty-${dir}`}>
+                  {dir === 'in' ? '+' : dir === 'out' ? '-' : ''}{txn.quantity}
                 </span>
               </td>
               <td style={{ fontSize: '0.85rem', color: '#555' }}>
@@ -60,7 +63,8 @@ export function LedgerView({ ledger, warehouses }: Props) {
               </td>
               <td style={{ color: '#888', fontSize: '0.85rem' }}>{txn.note}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
