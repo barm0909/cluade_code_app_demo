@@ -184,7 +184,6 @@ export default function App() {
               }
             }} />
           </label>
-          <button className="btn-primary" onClick={() => setEditingProduct('new')}>+ 商品追加</button>
         </div>
       </header>
 
@@ -214,7 +213,7 @@ export default function App() {
       {activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
       ) : activeTab === 'master' ? (
-        <ProductMasterView products={products} onUpdate={updateProduct} onDelete={deleteProduct} />
+        <ProductMasterView products={products} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
       ) : (<>
 
       <div className="controls">

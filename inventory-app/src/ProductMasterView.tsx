@@ -5,6 +5,7 @@ interface Props {
   products: Product[];
   onUpdate: (id: string, data: Omit<Product, 'id' | 'updatedAt' | 'lots'>) => void;
   onDelete: (id: string) => void;
+  onAddClick: () => void;
 }
 
 type MasterForm = Omit<Product, 'id' | 'updatedAt' | 'lots'>;
@@ -13,7 +14,7 @@ const toForm = (p: Product): MasterForm => ({
   name: p.name, sku: p.sku, category: p.category, minQuantity: p.minQuantity, price: p.price, costPrice: p.costPrice,
 });
 
-export function ProductMasterView({ products, onUpdate, onDelete }: Props) {
+export function ProductMasterView({ products, onUpdate, onDelete, onAddClick }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<MasterForm | null>(null);
 
@@ -29,7 +30,10 @@ export function ProductMasterView({ products, onUpdate, onDelete }: Props) {
     cancelEdit();
   };
 
-  return (
+  return (<>
+    <div className="master-toolbar">
+      <button className="btn-primary" onClick={onAddClick}>+ 商品追加</button>
+    </div>
     <div className="table-wrapper">
       <table>
         <thead>
@@ -79,5 +83,5 @@ export function ProductMasterView({ products, onUpdate, onDelete }: Props) {
         </tbody>
       </table>
     </div>
-  );
+  </>);
 }

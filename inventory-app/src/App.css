@@ -69,6 +69,7 @@ select {
 }
 select:focus { outline: none; border-color: #4f6ef7; }
 
+.master-toolbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 .master-input {
   width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.85rem;
 }
