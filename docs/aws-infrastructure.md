@@ -51,7 +51,28 @@ EC2インスタンス (inventory-app-web)
   Terraformの `bcrypt()` でハッシュ化した上で、初回起動時に `/etc/nginx/.htpasswd`
   (所有者 `root:nginx`、権限 640)へ書き込まれる。平文パスワードはサーバーに保存されない。
 - パスワードは `terraform.tfvars`(gitignore済み)とTerraformのstateにのみ存在する。
-  stateファイルの管理にも注意すること。
+  stateはS3バックエンド(下記)に保存され、ローカルには残らない。
+
+## Terraform stateの管理(S3バックエンド)
+
+stateには `basic_auth_password` が**平文で**記録されるため、ローカルではなく
+専用のS3バケットに保存する構成にしている。
+
+| 項目 | 設定 |
+|------|------|
+| バケット | `deploy/terraform-backend/` のブートストラップ構成で作成(名前は `state_bucket_name` 変数で指定) |
+| stateのキー | `inventory-app/terraform.tfstate` |
+| 暗号化 | SSE-KMS(バケットデフォルト暗号化、Bucket Key有効) |
+| バージョニング | 有効(誤上書き・削除からの復旧用) |
+| パブリックアクセス | 全ブロック |
+| stateロック | S3ネイティブロック(`use_lockfile = true`、Terraform 1.10+。DynamoDB不要) |
+
+- 本体構成の `terraform init` には `-backend-config=backend.hcl` が必要
+  (`backend.hcl` はバケット名を含むため gitignore 済み。`backend.hcl.example` を参照)。
+- ブートストラップ構成(`deploy/terraform-backend`)自体のstateはローカル管理
+  (バケット名しか含まず機密情報がないため)。
+- stateバケットには `prevent_destroy` を付けており、誤って `terraform destroy`
+  してもバケットは削除されない。
 
 ## 初回起動時のプロビジョニング(user_data)
 

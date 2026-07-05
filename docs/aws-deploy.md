@@ -20,11 +20,11 @@ GitHub Actions等のCI/CDは組み込んでおらず、手動デプロイを前�
 
 ## 実行環境について
 
-本手順のコマンド(手順1のTerraform、手順2のdeploy.sh)は、**すべて自分のローカルPC
+本手順のコマンド(手順1〜2のTerraform、手順3のdeploy.sh)は、**すべて自分のローカルPC
 (macOS / Linux / WSL)のターミナルで、このリポジトリをcloneしたディレクトリから実行します**。
 EC2インスタンス上やAWSマネジメントコンソール上での作業はありません。
 
-手順1で実行するのは **Terraform CLI であり、AWS CLIのコマンドではありません**。
+手順1〜2で実行するのは **Terraform CLI であり、AWS CLIのコマンドではありません**。
 AWS CLIは認証情報の設定(`aws configure`)に使うだけで、TerraformはAWS CLIと同じ
 認証情報(`~/.aws/credentials`、環境変数、SSO)を読み取って直接AWS APIを呼び出します。
 そのため認証情報を環境変数等で設定するならAWS CLI自体のインストールは必須ではありません。
@@ -34,21 +34,40 @@ AWS CLIは認証情報の設定(`aws configure`)に使うだけで、Terraform�
 以下をすべて**ローカルPCに**用意する。
 
 - AWSの認証情報が設定済みであること(`aws configure` 済み、またはSSO/環境変数。
-  対象AWSアカウントにEC2/VPC等を作成できるIAM権限が必要)
-- [Terraform](https://developer.hashicorp.com/terraform/install) (>= 1.5)
-- Node.js / npm(手順2のビルドで使用)
+  対象AWSアカウントにEC2/VPC/S3等を作成できるIAM権限が必要)
+- [Terraform](https://developer.hashicorp.com/terraform/install) (>= 1.10)
+- Node.js / npm(手順3のビルドで使用)
 - SSH鍵ペア(なければ `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` で作成)
-- `rsync` と `ssh`(手順2の転送で使用)
+- `rsync` と `ssh`(手順3の転送で使用)
 
-## 1. インフラを構築する
+## 1. Terraform state用のS3バケットを作成する(初回のみ)
+
+Terraformのstateファイルには `basic_auth_password` が平文で記録されるため、
+ローカルではなく専用のS3バケット(暗号化・バージョニング・公開ブロック有効)に保存する。
+このバケット自体は `deploy/terraform-backend/` のブートストラップ構成で作成する。
 
 ローカルPCのターミナルで、リポジトリルートから以下を実行する
 (使うのはTerraform CLI。AWS CLIのコマンドは実行しない)。
 
 ```bash
+cd deploy/terraform-backend
+terraform init
+terraform apply -var 'state_bucket_name=inventory-app-tfstate-<AWSアカウントID>'
+```
+
+バケット名は全世界で一意である必要があるため、AWSアカウントID等を含めること。
+出力された `state_bucket_name` を次の手順で使う。
+このブートストラップ構成のstateはローカル管理でよい(バケット名しか含まないため)。
+
+## 2. インフラを構築する
+
+```bash
 cd deploy/terraform
 cp terraform.tfvars.example terraform.tfvars
+cp backend.hcl.example backend.hcl
 ```
+
+`backend.hcl` の `bucket` を手順1で作成したバケット名に書き換える。
 
 `terraform.tfvars` を編集し、以下を自分の環境に合わせる。
 
@@ -57,14 +76,26 @@ cp terraform.tfvars.example terraform.tfvars
 - `basic_auth_username` / `basic_auth_password`: サイト全体にかけるBasic認証の認証情報。`basic_auth_password` は強いパスワードに変更すること(`terraform.tfvars` はgitignore済みでコミットされない)
 
 ```bash
-terraform init
+terraform init -backend-config=backend.hcl
 terraform apply
 ```
 
 適用後、出力される `public_ip` (Elastic IP) と `ssh_command` を控えておく。
 この時点ではNginxは起動しているが、コンテンツは未配置のプレースホルダーページのみ。
 
-## 2. アプリをビルドしてデプロイする
+### ローカルstateからの移行(既に構築済みの場合)
+
+以前のローカルstate運用で既にインフラを構築済みの場合は、`deploy/terraform` で
+以下を実行するとstateがS3へ移行される(インフラの再作成は起きない)。
+
+```bash
+terraform init -backend-config=backend.hcl -migrate-state
+```
+
+確認プロンプトに `yes` と答えたあと、`terraform state list` でリソースが見えることを
+確認してから、ローカルに残った `terraform.tfstate` / `terraform.tfstate.backup` を削除する。
+
+## 3. アプリをビルドしてデプロイする
 
 これもローカルPCのターミナルで、リポジトリルートから実行する
 (ビルドはローカルで行われ、成果物だけがEC2へ転送される)。
@@ -103,8 +134,15 @@ cd deploy/terraform
 terraform destroy
 ```
 
+stateバケットも完全に片付けたい場合は、上記のdestroy後に
+`deploy/terraform-backend/main.tf` の `prevent_destroy = true` を一時的に外し、
+S3コンソール等でバケット内の全オブジェクト(バージョン含む)を空にしてから
+`deploy/terraform-backend` で `terraform destroy` する。
+誤削除防止のため、通常運用では残しておいてよい(コストは微小)。
+
 ## コストの目安
 
 - `t3.micro` インスタンス1台 + Elastic IP(インスタンスに紐付けている間は無料)+ 8GiB gp3 EBS
+- state用S3バケット(数KBのstateファイルのみで、コストはほぼゼロ)
 - 東京リージョンで概算 月数ドル程度(無料利用枠対象アカウントであれば実質無料〜わずか)。詳細は
   [AWS料金計算ツール](https://calculator.aws)で確認すること。

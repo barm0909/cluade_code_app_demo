@@ -1,0 +1,4 @@
+# cp backend.hcl.example backend.hcl してから値を書き換えてください
+# bucket には deploy/terraform-backend の apply で出力された state_bucket_name を設定する
+bucket = "inventory-app-tfstate-123456789012"
+region = "ap-northeast-1"
