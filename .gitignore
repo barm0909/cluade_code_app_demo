@@ -1,1 +1,10 @@
 .claude/settings.local.json
+
+# Terraform (deploy/terraform, deploy/terraform-backend)
+deploy/**/.terraform/
+deploy/**/.terraform.lock.hcl
+deploy/**/*.tfstate*
+deploy/**/*.tfplan
+deploy/**/crash.log
+deploy/terraform/terraform.tfvars
+deploy/terraform/backend.hcl
