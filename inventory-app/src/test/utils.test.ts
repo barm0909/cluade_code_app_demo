@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { daysUntilExpiry, totalQuantity, generateLotNo } from '../useInventory';
+import { daysUntilExpiry, totalQuantity, generateLotNo, DEFAULT_WAREHOUSE_ID } from '../useInventory';
 import type { Product } from '../useInventory';
 
 const FIXED_NOW = new Date('2026-06-27T00:00:00.000Z');
@@ -28,8 +28,8 @@ describe('daysUntilExpiry', () => {
 describe('totalQuantity', () => {
   const makeProduct = (quantities: number[]): Product => ({
     id: '1', name: 'test', sku: 'T-001', category: 'test',
-    minQuantity: 5, price: 100, updatedAt: '',
-    lots: quantities.map((q, i) => ({ id: String(i), lotNo: `2026000${i}`, quantity: q })),
+    minQuantity: 5, price: 100, costPrice: 50, updatedAt: '',
+    lots: quantities.map((q, i) => ({ id: String(i), lotNo: `2026000${i}`, quantity: q, warehouseId: DEFAULT_WAREHOUSE_ID })),
   });
 
   it('ロットが0件のとき0を返す', () => {

@@ -13,7 +13,7 @@ const localStorageMock = {
 vi.stubGlobal('localStorage', localStorageMock);
 
 // URL.createObjectURL / revokeObjectURL モック
-const mockCreateObjectURL = vi.fn(() => 'blob:mock-url');
+const mockCreateObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:mock-url');
 const mockRevokeObjectURL = vi.fn();
 vi.stubGlobal('URL', { createObjectURL: mockCreateObjectURL, revokeObjectURL: mockRevokeObjectURL });
 

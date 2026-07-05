@@ -25,7 +25,7 @@ describe('useInventory — 商品操作', () => {
     const before = result.current.products.length;
 
     act(() => {
-      result.current.addProduct({ name: 'テスト商品', sku: 'T-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'テスト商品', sku: 'T-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
 
     expect(result.current.products.length).toBe(before + 1);
@@ -36,7 +36,7 @@ describe('useInventory — 商品操作', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: '旧名前', sku: 'T-002', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: '旧名前', sku: 'T-002', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const target = result.current.products.find(p => p.sku === 'T-002')!;
 
@@ -51,7 +51,7 @@ describe('useInventory — 商品操作', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: '削除対象', sku: 'T-DEL', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: '削除対象', sku: 'T-DEL', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const target = result.current.products.find(p => p.sku === 'T-DEL')!;
 
@@ -63,7 +63,7 @@ describe('useInventory — 商品操作', () => {
   it('LocalStorage に保存され、再ロードしても残る', () => {
     const { result: r1 } = renderHook(() => useInventory());
     act(() => {
-      r1.current.addProduct({ name: '永続テスト', sku: 'T-PER', category: '食品', minQuantity: 1, price: 50, lots: [] });
+      r1.current.addProduct({ name: '永続テスト', sku: 'T-PER', category: '食品', minQuantity: 1, price: 50, costPrice: 50 });
     });
 
     const { result: r2 } = renderHook(() => useInventory());
@@ -76,7 +76,7 @@ describe('useInventory — ロット操作', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'ロットテスト', sku: 'L-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'ロットテスト', sku: 'L-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'L-001')!;
 
@@ -94,7 +94,7 @@ describe('useInventory — ロット操作', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'qty test', sku: 'Q-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'qty test', sku: 'Q-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'Q-001')!;
     act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5 }); });
@@ -111,7 +111,7 @@ describe('useInventory — ロット操作', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'del lot', sku: 'D-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'del lot', sku: 'D-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'D-001')!;
     act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5 }); });
@@ -126,13 +126,13 @@ describe('useInventory — ロット操作', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'update lot', sku: 'U-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'update lot', sku: 'U-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'U-001')!;
     act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5 }); });
 
     const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
-    act(() => { result.current.updateLot(product.id, lot.id, { lotNo: '20270101', quantity: 20 }); });
+    act(() => { result.current.updateLot(product.id, lot.id, { lotNo: '20270101', quantity: 20, warehouseId: lot.warehouseId }); });
 
     const updated = result.current.products.find(p => p.id === product.id)!.lots[0];
     expect(updated.lotNo).toBe('20270101');
@@ -145,7 +145,7 @@ describe('useInventory — ledger（入出庫記録）', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'ledger test', sku: 'LED-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'ledger test', sku: 'LED-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'LED-001')!;
     const beforeCount = result.current.ledger.length;
@@ -162,7 +162,7 @@ describe('useInventory — ledger（入出庫記録）', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'adj ledger', sku: 'ADJ-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'adj ledger', sku: 'ADJ-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'ADJ-001')!;
     act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 10 }); });
@@ -181,7 +181,7 @@ describe('useInventory — ledger（入出庫記録）', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'type ledger', sku: 'TYP-001', category: '食品', minQuantity: 5, price: 100, lots: [] });
+      result.current.addProduct({ name: 'type ledger', sku: 'TYP-001', category: '食品', minQuantity: 5, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'TYP-001')!;
     act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 10 }); });
@@ -228,7 +228,7 @@ describe('useInventory — resetToSample', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: '追加商品', sku: 'EXTRA-001', category: '食品', minQuantity: 1, price: 50, lots: [] });
+      result.current.addProduct({ name: '追加商品', sku: 'EXTRA-001', category: '食品', minQuantity: 1, price: 50, costPrice: 50 });
     });
     expect(result.current.products.some(p => p.sku === 'EXTRA-001')).toBe(true);
 
@@ -242,7 +242,7 @@ describe('useInventory — resetToSample', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'l test', sku: 'LT-001', category: '食品', minQuantity: 1, price: 50, lots: [] });
+      result.current.addProduct({ name: 'l test', sku: 'LT-001', category: '食品', minQuantity: 1, price: 50, costPrice: 50 });
     });
     const p = result.current.products.find(pr => pr.sku === 'LT-001')!;
     act(() => { result.current.addLot(p.id, { lotNo: '20261231', quantity: 1 }); });

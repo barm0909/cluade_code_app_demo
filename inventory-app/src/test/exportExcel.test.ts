@@ -14,7 +14,7 @@ vi.stubGlobal('localStorage', localStorageMock);
 
 // XLSX モック
 const { mockAoaToSheet, mockBookNew, mockBookAppendSheet, mockWriteFile } = vi.hoisted(() => ({
-  mockAoaToSheet: vi.fn(() => ({ '!cols': undefined } as Record<string, unknown>)),
+  mockAoaToSheet: vi.fn<(data: (string | number)[][]) => Record<string, unknown>>(() => ({ '!cols': undefined })),
   mockBookNew: vi.fn(() => ({})),
   mockBookAppendSheet: vi.fn(),
   mockWriteFile: vi.fn(),
