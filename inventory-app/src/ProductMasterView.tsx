@@ -1,0 +1,87 @@
+import { useState } from 'react';
+import type { Product } from './useInventory';
+
+interface Props {
+  products: Product[];
+  onUpdate: (id: string, data: Omit<Product, 'id' | 'updatedAt' | 'lots'>) => void;
+  onDelete: (id: string) => void;
+  onAddClick: () => void;
+}
+
+type MasterForm = Omit<Product, 'id' | 'updatedAt' | 'lots'>;
+
+const toForm = (p: Product): MasterForm => ({
+  name: p.name, sku: p.sku, category: p.category, minQuantity: p.minQuantity, price: p.price, costPrice: p.costPrice,
+});
+
+export function ProductMasterView({ products, onUpdate, onDelete, onAddClick }: Props) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<MasterForm | null>(null);
+
+  const startEdit = (p: Product) => { setEditingId(p.id); setForm(toForm(p)); };
+  const cancelEdit = () => { setEditingId(null); setForm(null); };
+
+  const set = (k: keyof MasterForm, v: string | number) => setForm(f => f ? { ...f, [k]: v } : f);
+
+  const saveEdit = () => {
+    if (!editingId || !form) return;
+    if (!form.name.trim() || !form.sku.trim()) return;
+    onUpdate(editingId, form);
+    cancelEdit();
+  };
+
+  return (<>
+    <div className="master-toolbar">
+      <button className="btn-primary" onClick={onAddClick}>+ 商品追加</button>
+    </div>
+    <div className="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>商品名</th>
+            <th>SKU</th>
+            <th>カテゴリ</th>
+            <th>最低在庫数</th>
+            <th>販売定価</th>
+            <th>原価</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map(p => editingId === p.id && form ? (
+            <tr key={p.id} className="master-editing-row">
+              <td><input className="master-input" aria-label="商品名" required value={form.name} onChange={e => set('name', e.target.value)} /></td>
+              <td><input className="master-input" aria-label="SKU" required value={form.sku} onChange={e => set('sku', e.target.value)} /></td>
+              <td><input className="master-input" aria-label="カテゴリ" required value={form.category} onChange={e => set('category', e.target.value)} /></td>
+              <td><input className="master-input" aria-label="最低在庫数" type="number" min={0} value={form.minQuantity} onChange={e => set('minQuantity', +e.target.value)} /></td>
+              <td><input className="master-input" aria-label="販売定価" type="number" min={0} value={form.price} onChange={e => set('price', +e.target.value)} /></td>
+              <td><input className="master-input" aria-label="原価" type="number" min={0} value={form.costPrice} onChange={e => set('costPrice', +e.target.value)} /></td>
+              <td>
+                <div className="row-actions">
+                  <button className="btn-primary" onClick={saveEdit}>保存</button>
+                  <button className="btn-secondary" onClick={cancelEdit}>キャンセル</button>
+                </div>
+              </td>
+            </tr>
+          ) : (
+            <tr key={p.id}>
+              <td><strong>{p.name}</strong></td>
+              <td className="mono">{p.sku}</td>
+              <td><span className="badge">{p.category}</span></td>
+              <td>{p.minQuantity}</td>
+              <td>¥{p.price.toLocaleString()}</td>
+              <td>¥{p.costPrice.toLocaleString()}</td>
+              <td>
+                <div className="row-actions">
+                  <button className="btn-edit" onClick={() => startEdit(p)}>編集</button>
+                  <button className="btn-delete" onClick={() => { if (confirm(`「${p.name}」を削除しますか？`)) onDelete(p.id); }}>削除</button>
+                </div>
+              </td>
+            </tr>
+          ))}
+          {products.length === 0 && <tr><td colSpan={7} className="empty">商品がありません</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  </>);
+}

@@ -4,6 +4,7 @@ import type { Product, Lot, Warehouse, SortField, SortOrder } from './useInvento
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { LedgerView } from './LedgerView';
+import { ProductMasterView } from './ProductMasterView';
 import './App.css';
 
 function ExpiryBadge({ expiryDate }: { expiryDate?: string }) {
@@ -107,7 +108,7 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'inventory' | 'ledger'>('inventory');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'master' | 'ledger'>('inventory');
 
   const categories = useMemo(() => [...new Set(products.map(p => p.category))].sort(), [products]);
 
@@ -183,7 +184,6 @@ export default function App() {
               }
             }} />
           </label>
-          <button className="btn-primary" onClick={() => setEditingProduct('new')}>+ 商品追加</button>
         </div>
       </header>
 
@@ -206,11 +206,14 @@ export default function App() {
 
       <div className="tabs">
         <button className={activeTab === 'inventory' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inventory')}>在庫一覧</button>
+        <button className={activeTab === 'master' ? 'tab active' : 'tab'} onClick={() => setActiveTab('master')}>商品マスタ</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
       </div>
 
       {activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
+      ) : activeTab === 'master' ? (
+        <ProductMasterView products={products} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
       ) : (<>
 
       <div className="controls">
