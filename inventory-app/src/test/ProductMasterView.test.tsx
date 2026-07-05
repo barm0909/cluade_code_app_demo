@@ -5,6 +5,16 @@ import { ProductMasterView } from '../ProductMasterView';
 import App from '../App';
 import type { Product } from '../useInventory';
 
+// localStorage モック（既存テストと同じパターン）
+const store: Record<string, string> = {};
+const localStorageMock = {
+  getItem: (key: string) => store[key] ?? null,
+  setItem: (key: string, value: string) => { store[key] = value; },
+  removeItem: (key: string) => { delete store[key]; },
+  clear: () => { Object.keys(store).forEach(k => delete store[k]); },
+};
+vi.stubGlobal('localStorage', localStorageMock);
+
 const makeProduct = (overrides: Partial<Product> = {}): Product => ({
   id: '1',
   name: '牛乳',
@@ -209,7 +219,7 @@ describe('ProductMasterView — 削除', () => {
 });
 
 describe('App — 商品マスタタブ', () => {
-  beforeEach(() => { localStorage.clear(); });
+  beforeEach(() => { localStorageMock.clear(); });
 
   it('「商品マスタ」タブが表示される', () => {
     render(<App />);

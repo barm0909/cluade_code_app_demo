@@ -69,6 +69,12 @@ select {
 }
 select:focus { outline: none; border-color: #4f6ef7; }
 
+.master-input {
+  width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.85rem;
+}
+.master-input:focus { outline: none; border-color: #4f6ef7; }
+.master-editing-row td { background: #f4f7ff; }
+
 .table-wrapper { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
 table { width: 100%; border-collapse: collapse; }
 thead { background: #f8f9fa; }
