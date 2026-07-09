@@ -1,17 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { useInventory, totalQuantityByWarehouse, DEFAULT_WAREHOUSE_ID } from '../useInventory';
+import { stubApi } from './mockApi';
 
-const store: Record<string, string> = {};
-const localStorageMock = {
-  getItem: (key: string) => store[key] ?? null,
-  setItem: (key: string, value: string) => { store[key] = value; },
-  removeItem: (key: string) => { delete store[key]; },
-  clear: () => { Object.keys(store).forEach(k => delete store[k]); },
-};
-vi.stubGlobal('localStorage', localStorageMock);
-
-beforeEach(() => { localStorageMock.clear(); });
+// fetch モックなし = API に到達できない環境として、メモリ内のデフォルト倉庫で動作する。
+// 永続化を検証するテストだけ stubApi() で /api/* を模倣する。
+afterEach(() => { vi.unstubAllGlobals(); });
 
 // ────────────────────────────────────────────────────────────
 // 倉庫 CRUD
@@ -80,12 +74,18 @@ describe('useInventory — 倉庫管理', () => {
     expect(result.current.warehouses.find(w => w.id === wh.id)).toBeDefined();
   });
 
-  it('倉庫はlocalStorageに永続化され再ロード後も残る', () => {
-    const { result: r1 } = renderHook(() => useInventory());
+  it('倉庫はAPI (D1) に永続化され再ロード後も残る', async () => {
+    const server = stubApi();
+    const { result: r1, unmount } = renderHook(() => useInventory());
+    // サーバー状態 (空 → デフォルト倉庫) でのハイドレーション完了を待ってから操作する
+    await waitFor(() => expect(r1.current.products).toHaveLength(0));
+
     act(() => { r1.current.addWarehouse('永続倉庫', '#123456'); });
+    await waitFor(() => expect(server.warehouses.some(w => w.name === '永続倉庫')).toBe(true));
+    unmount();
 
     const { result: r2 } = renderHook(() => useInventory());
-    expect(r2.current.warehouses.some(w => w.name === '永続倉庫')).toBe(true);
+    await waitFor(() => expect(r2.current.warehouses.some(w => w.name === '永続倉庫')).toBe(true));
   });
 });
 

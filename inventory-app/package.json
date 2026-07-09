@@ -11,9 +11,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "db:migrate": "wrangler d1 migrations apply inventory-db --local --config wrangler.local.jsonc",
-    "db:seed": "wrangler d1 execute inventory-db --local --config wrangler.local.jsonc --file=./seed.sql",
-    "db:query": "wrangler d1 execute inventory-db --local --config wrangler.local.jsonc --command"
+    "dev:api": "wrangler dev",
+    "db:migrate": "wrangler d1 migrations apply inventory-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply inventory-db --remote",
+    "db:seed": "wrangler d1 execute inventory-db --local --file=./seed.sql",
+    "db:query": "wrangler d1 execute inventory-db --local --command"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -21,6 +23,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

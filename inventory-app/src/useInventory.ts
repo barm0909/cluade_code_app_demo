@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 
 export interface Warehouse {
@@ -77,9 +77,38 @@ export function generateLotNo(expiryDate?: string): string {
   return new Date().toISOString().slice(0, 10).replace(/-/g, '');
 }
 
-const STORAGE_KEY = 'inventory_products_v2';
-const LEDGER_KEY = 'inventory_ledger_v1';
-const WAREHOUSE_KEY = 'inventory_warehouses_v1';
+// 永続化は Cloudflare Worker の /api/* 経由で D1 に保存する。
+// ローカル開発では vite の proxy → wrangler dev (ローカルD1)、本番では同一オリジンの Worker (リモートD1) に届く。
+// API に到達できない環境 (オフライン、テスト) ではメモリ内の状態だけで動作する。
+interface ServerState {
+  products: Product[];
+  warehouses: Warehouse[];
+  ledger: StockTransaction[];
+}
+
+async function fetchState(): Promise<ServerState | null> {
+  try {
+    const res = await fetch('/api/state');
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+type Slice = 'products' | 'warehouses' | 'ledger';
+
+function persist(slice: Slice, data: unknown) {
+  try {
+    void fetch(`/api/${slice}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).catch(() => {});
+  } catch {
+    // fetch が使えない環境では永続化をスキップ (メモリ内のみ)
+  }
+}
 
 const DEFAULT_WAREHOUSES: Warehouse[] = [
   { id: DEFAULT_WAREHOUSE_ID, name: '販売倉庫', color: '#4caf50' },
@@ -126,37 +155,20 @@ const SAMPLE_DATA: Product[] = [
   },
 ];
 
-function load(): Product[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const products: Product[] = JSON.parse(raw);
-      // 旧データの後方互換: warehouseId がないロットにデフォルトを付与
-      return products.map(p => ({
-        ...p,
-        lots: p.lots.map(l => ({ ...l, warehouseId: l.warehouseId ?? DEFAULT_WAREHOUSE_ID })),
-      }));
-    }
-  } catch {}
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(SAMPLE_DATA));
-  return SAMPLE_DATA;
-}
-
-function loadWarehouses(): Warehouse[] {
-  try {
-    const raw = localStorage.getItem(WAREHOUSE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  localStorage.setItem(WAREHOUSE_KEY, JSON.stringify(DEFAULT_WAREHOUSES));
-  return DEFAULT_WAREHOUSES;
+// 旧データの後方互換: warehouseId がないロットにデフォルトを付与
+function migrateProducts(products: Product[]): Product[] {
+  return products.map(p => ({
+    ...p,
+    lots: p.lots.map(l => ({ ...l, warehouseId: l.warehouseId ?? DEFAULT_WAREHOUSE_ID })),
+  }));
 }
 
 function saveWarehouses(warehouses: Warehouse[]) {
-  localStorage.setItem(WAREHOUSE_KEY, JSON.stringify(warehouses));
+  persist('warehouses', warehouses);
 }
 
 function save(products: Product[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+  persist('products', products);
 }
 
 // 旧区分（入庫/出庫）の帳票データを新区分へ移行する
@@ -183,26 +195,29 @@ function migrateLedger(txns: StockTransaction[]): { txns: StockTransaction[]; ch
   return { txns: migrated, changed };
 }
 
-function loadLedger(): StockTransaction[] {
-  try {
-    const raw = localStorage.getItem(LEDGER_KEY);
-    if (raw) {
-      const { txns, changed } = migrateLedger(JSON.parse(raw));
-      if (changed) saveLedger(txns);
-      return txns;
-    }
-  } catch {}
-  return [];
-}
-
 function saveLedger(txns: StockTransaction[]) {
-  localStorage.setItem(LEDGER_KEY, JSON.stringify(txns));
+  persist('ledger', txns);
 }
 
 export function useInventory() {
-  const [products, setProducts] = useState<Product[]>(load);
-  const [ledger, setLedger] = useState<StockTransaction[]>(loadLedger);
-  const [warehouses, setWarehouses] = useState<Warehouse[]>(loadWarehouses);
+  // API から取得できるまで (またはできない環境では) サンプルデータで動作する
+  const [products, setProducts] = useState<Product[]>(SAMPLE_DATA);
+  const [ledger, setLedger] = useState<StockTransaction[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>(DEFAULT_WAREHOUSES);
+
+  // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
+  useEffect(() => {
+    let cancelled = false;
+    fetchState().then(state => {
+      if (cancelled || !state) return;
+      setProducts(migrateProducts(state.products));
+      setWarehouses(state.warehouses.length > 0 ? state.warehouses : DEFAULT_WAREHOUSES);
+      const { txns, changed } = migrateLedger(state.ledger);
+      setLedger(txns);
+      if (changed) saveLedger(txns);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const addTransaction = useCallback((txn: Omit<StockTransaction, 'id' | 'date'>) => {
     setLedger(prev => {
@@ -455,15 +470,13 @@ export function useInventory() {
   }, [addTransaction, products]);
 
   const resetToSample = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(LEDGER_KEY);
-    localStorage.removeItem(WAREHOUSE_KEY);
     const fresh = JSON.parse(JSON.stringify(SAMPLE_DATA));
+    // 倉庫→商品の順で保存する (ロットが倉庫を参照するため)
+    setWarehouses(DEFAULT_WAREHOUSES);
+    saveWarehouses(DEFAULT_WAREHOUSES);
     update(fresh);
     setLedger([]);
     saveLedger([]);
-    setWarehouses(DEFAULT_WAREHOUSES);
-    saveWarehouses(DEFAULT_WAREHOUSES);
   }, []);
 
   return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot };

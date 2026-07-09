@@ -1,18 +1,11 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import { useInventory } from '../useInventory';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import { useInventory, type StockTransaction } from '../useInventory';
+import { stubApi } from './mockApi';
 
-// localStorage モック
-const store: Record<string, string> = {};
-const localStorageMock = {
-  getItem: (key: string) => store[key] ?? null,
-  setItem: (key: string, value: string) => { store[key] = value; },
-  removeItem: (key: string) => { delete store[key]; },
-  clear: () => { Object.keys(store).forEach(k => delete store[k]); },
-};
-vi.stubGlobal('localStorage', localStorageMock);
-
-beforeEach(() => { localStorageMock.clear(); });
+// fetch モックなし = API に到達できない環境として、メモリ内のサンプルデータで動作する。
+// 永続化を検証するテストだけ stubApi() で /api/* を模倣する。
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('useInventory — 商品操作', () => {
   it('初回ロード時にサンプルデータが入る', () => {
@@ -60,14 +53,20 @@ describe('useInventory — 商品操作', () => {
     expect(result.current.products.find(p => p.id === target.id)).toBeUndefined();
   });
 
-  it('LocalStorage に保存され、再ロードしても残る', () => {
-    const { result: r1 } = renderHook(() => useInventory());
+  it('API (D1) に保存され、再ロードしても残る', async () => {
+    const server = stubApi();
+    const { result: r1, unmount } = renderHook(() => useInventory());
+    // サーバー状態 (空) でのハイドレーション完了を待ってから操作する
+    await waitFor(() => expect(r1.current.products).toHaveLength(0));
+
     act(() => {
       r1.current.addProduct({ name: '永続テスト', sku: 'T-PER', category: '食品', minQuantity: 1, price: 50, costPrice: 50 });
     });
+    await waitFor(() => expect(server.products.some(p => p.sku === 'T-PER')).toBe(true));
+    unmount();
 
     const { result: r2 } = renderHook(() => useInventory());
-    expect(r2.current.products.some(p => p.sku === 'T-PER')).toBe(true);
+    await waitFor(() => expect(r2.current.products.some(p => p.sku === 'T-PER')).toBe(true));
   });
 });
 
@@ -200,17 +199,18 @@ describe('useInventory — ledger（入出庫記録）', () => {
     expect(result.current.ledger[0].quantity).toBe(4);
   });
 
-  it('旧区分（入庫/出庫）の帳票データはロード時に新区分へ移行される', () => {
+  it('旧区分（入庫/出庫）の帳票データはロード時に新区分へ移行される', async () => {
     const legacy = [
       { id: 't1', date: '2026-01-01T00:00:00Z', type: '入庫', productId: 'p1', productName: '牛乳', productSku: 'ML-001', lotNo: 'L1', quantity: 5, note: 'ロット追加' },
       { id: 't2', date: '2026-01-02T00:00:00Z', type: '入庫', productId: 'p1', productName: '牛乳', productSku: 'ML-001', lotNo: 'L1', quantity: 2, note: '' },
       { id: 't3', date: '2026-01-03T00:00:00Z', type: '出庫', productId: 'p1', productName: '牛乳', productSku: 'ML-001', lotNo: 'L1', quantity: 1, note: '' },
       { id: 't4', date: '2026-01-04T00:00:00Z', type: '出庫', productId: 'p1', productName: '牛乳', productSku: 'ML-001', lotNo: 'L1', quantity: 3, note: '倉庫移動', fromWarehouseId: 'wh-sales', toWarehouseId: 'wh-hold' },
       { id: 't5', date: '2026-01-04T00:00:00Z', type: '入庫', productId: 'p1', productName: '牛乳', productSku: 'ML-001', lotNo: 'L1', quantity: 3, note: '倉庫移動', fromWarehouseId: 'wh-sales', toWarehouseId: 'wh-hold' },
-    ];
-    localStorage.setItem('inventory_ledger_v1', JSON.stringify(legacy));
+    ] as unknown as StockTransaction[];
+    stubApi({ ledger: legacy });
 
     const { result } = renderHook(() => useInventory());
+    await waitFor(() => expect(result.current.ledger.length).toBeGreaterThan(0));
 
     const types = result.current.ledger.map(t => [t.id, t.type]);
     expect(types).toContainEqual(['t1', '入荷']);
