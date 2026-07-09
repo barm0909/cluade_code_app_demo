@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "db:migrate": "wrangler d1 migrations apply inventory-db --local --config wrangler.local.jsonc",
+    "db:seed": "wrangler d1 execute inventory-db --local --config wrangler.local.jsonc --file=./seed.sql",
+    "db:query": "wrangler d1 execute inventory-db --local --config wrangler.local.jsonc --command"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -30,6 +33,7 @@
     "oxlint": "^1.69.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.107.1"
   }
 }

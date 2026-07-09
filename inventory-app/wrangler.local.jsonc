@@ -1,0 +1,26 @@
+// ローカル開発専用の Wrangler 設定 (D1 データベース)
+//
+// 本番デプロイ用の wrangler.jsonc とは分離している:
+// 本番はまだアセット配信のみで、D1 バインディングを足すとデプロイが失敗するため。
+// 本番に D1 を載せるときは `npx wrangler d1 create inventory-db` で発行された
+// database_id をここと wrangler.jsonc に反映し、Worker (main) を追加すること。
+//
+// 使い方 (package.json の scripts 参照):
+//   npm run db:migrate   # migrations/ を ローカルD1 に適用
+//   npm run db:seed      # seed.sql でサンプルデータ投入
+//   npm run db:query -- "SELECT * FROM products"
+//
+// ローカルの実データは .wrangler/state/ 配下の SQLite ファイルに保存される (gitignore 済み)
+{
+  "name": "inventory-app-local",
+  "compatibility_date": "2026-07-05",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "inventory-db",
+      // ローカル実行では実IDは不要。リモート作成後に実IDへ置き換える
+      "database_id": "local-placeholder",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
