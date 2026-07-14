@@ -1,10 +1,31 @@
-// Cloudflare Workers (静的アセット配信) のデプロイ設定
-// Workers Builds が `npm run build` 後に `npx wrangler deploy` でこれを読み、dist/ を配信する
+// Cloudflare Workers のデプロイ設定
+// Workers Builds が `npm run build` 後に `npx wrangler deploy` でこれを読み、
+// worker/index.ts (API) + dist/ (静的アセット) を配信する
+//
+// D1 はローカル/リモートで同じ `DB` バインディングを使う:
+//   - ローカル開発: `npm run dev:api` (wrangler dev) が .wrangler/state 配下のローカルD1に接続
+//   - デプロイ後:   下記 database_id のリモートD1に接続
+//
+// リモートD1 は `wrangler d1 create inventory-db` で作成済み (2026-07-14, APAC)。
+// スキーマ変更時は migrations/ に SQL を追加して
+// `npm run db:migrate` (ローカル) と `npm run db:migrate:remote` (本番) の両方に適用すること。
 {
   "name": "cluadecodeappdemo",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-07-05",
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
-  }
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    // /api/* はアセットや SPA フォールバックより先に必ず Worker が処理する
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "inventory-db",
+      "database_id": "01f2f6ec-ecb2-47be-b0c3-5700f148ec16",
+      "migrations_dir": "migrations"
+    }
+  ]
 }

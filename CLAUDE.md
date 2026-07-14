@@ -15,12 +15,18 @@ cd inventory-app
 ## Commands
 
 ```bash
-npm run dev            # start Vite dev server
-npm run build           # tsc -b (typecheck) then vite build
-npm run lint             # oxlint
-npm run test              # vitest run (single run, CI mode)
-npm run test:watch        # vitest watch mode
-npm run test:coverage      # vitest run --coverage (v8 provider)
+npm run dev            # start Vite dev server (proxies /api → localhost:8787)
+npm run dev:api         # wrangler dev — Worker API + local D1 (run alongside npm run dev)
+npm run build            # tsc -b (typecheck incl. worker) then vite build
+npm run lint              # oxlint
+npm run test               # vitest run (single run, CI mode)
+npm run test:watch          # vitest watch mode
+npm run test:coverage        # vitest run --coverage (v8 provider)
+
+npm run db:migrate           # apply migrations/ to the LOCAL D1 (.wrangler/state)
+npm run db:migrate:remote     # apply migrations to the REMOTE D1 (needs wrangler login)
+npm run db:seed                # load seed.sql into the local D1 (re-runnable)
+npm run db:query -- "SQL"       # run arbitrary SQL against the local D1
 ```
 
 Run a single test file: `npx vitest run src/test/warehouse.test.ts`
@@ -32,7 +38,11 @@ Note that `npm run test` and `npm run lint` do not type-check (Vitest transforms
 
 ## Architecture
 
-This is a client-only React 19 + TypeScript + Vite SPA with **no backend**. All state is persisted to `localStorage` and re-hydrated on load.
+React 19 + TypeScript + Vite SPA with a thin Cloudflare Worker backend (`worker/index.ts`) that persists all state to **D1** (SQLite). The same `DB` binding resolves to a local SQLite file under `.wrangler/state/` during `wrangler dev` and to the remote Cloudflare D1 database once deployed — the Worker code is identical in both.
+
+- `wrangler.jsonc` is the single config for both local dev and deploy (`main` worker + `assets` + `d1_databases`). The `database_id` is a placeholder until someone runs `npx wrangler d1 create inventory-db` and pastes the real id — `wrangler deploy` fails until then. Changing `database_id` also re-keys the local D1 state, so re-run `npm run db:migrate && npm run db:seed` after touching it.
+- Local dev needs two processes: `npm run dev` (Vite, HMR) and `npm run dev:api` (Worker + local D1 on :8787); Vite proxies `/api` to the latter. `wrangler dev` requires `dist/` to exist (run `npm run build` once).
+- DB schema lives in `migrations/` (currently `0001_init.sql`: `products`, `lots`, `warehouses`, `stock_transactions` — a normalized form of the `useInventory.ts` model, snake_case columns). `seed.sql` mirrors `SAMPLE_DATA`. Keep all three in sync when the data model changes, and keep the worker's local type copies in `worker/index.ts` in sync too (it can't import `useInventory.ts` because that would pull react/xlsx into the Worker bundle).
 
 ### State lives in one hook: `useInventory.ts`
 
@@ -40,12 +50,7 @@ Everything — types, sample data, persistence, and all mutations — is defined
 
 - `src/types.ts` is a **stale leftover** from an earlier version of the data model (it lacks `lots`, `costPrice`, warehouses) and is not imported anywhere. Don't add new types there — extend `useInventory.ts` instead, or delete `types.ts` if you're cleaning up.
 
-Three localStorage keys, each independently loaded/saved/versioned:
-- `inventory_products_v2` — the product/lot catalog
-- `inventory_ledger_v1` — the stock transaction ledger (入出庫帳票)
-- `inventory_warehouses_v1` — warehouse definitions
-
-On first load (or missing key), each is seeded with defaults (`SAMPLE_DATA`, `[]`, `DEFAULT_WAREHOUSES`) and immediately written back to localStorage. `resetToSample()` clears all three keys and restores these defaults.
+Persistence is slice-based via the Worker API: `GET /api/state` returns everything on mount; each mutation fire-and-forgets a full-replace `PUT /api/products` / `/api/warehouses` / `/api/ledger` (see `persist()` in `useInventory.ts`). There is no localStorage anymore. When the API is unreachable (offline, jsdom tests), the hook runs purely in memory, starting from `SAMPLE_DATA` / `DEFAULT_WAREHOUSES` — that fallback is what most tests rely on; tests that verify persistence stub `fetch` with `src/test/mockApi.ts`. A fresh (empty) remote DB shows an empty inventory until リセット (`resetToSample()`) is clicked, which PUTs the sample data; the local DB is instead populated by `npm run db:seed`.
 
 ### Data model
 
