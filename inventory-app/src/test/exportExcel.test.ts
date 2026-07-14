@@ -93,7 +93,7 @@ describe('exportExcel', () => {
 
     // ロットなし商品を追加
     act(() => {
-      result.current.addProduct({ name: 'ロットなし商品', sku: 'NO-LOT', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: 'ロットなし商品', sku: 'NO-LOT', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
 
     act(() => { result.current.exportExcel(); });

@@ -27,7 +27,7 @@ describe('daysUntilExpiry', () => {
 
 describe('totalQuantity', () => {
   const makeProduct = (quantities: number[]): Product => ({
-    id: '1', name: 'test', sku: 'T-001', category: 'test',
+    id: '1', name: 'test', sku: 'T-001', categoryId: 'cat-test',
     minQuantity: 5, price: 100, costPrice: 50, updatedAt: '',
     lots: quantities.map((q, i) => ({ id: String(i), lotNo: `2026000${i}`, quantity: q, warehouseId: DEFAULT_WAREHOUSE_ID })),
   });

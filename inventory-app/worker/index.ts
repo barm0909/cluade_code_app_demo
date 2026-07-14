@@ -2,9 +2,10 @@
 // ローカル開発 (wrangler dev) では .wrangler/state のローカルD1、デプロイ後はリモートD1 に同じコードで接続される
 //
 // API 設計はフロント (useInventory.ts) の「スライス単位で全量保存」に合わせている:
-//   GET /api/state       → { products, warehouses, ledger } をまとめて返す
+//   GET /api/state       → { products, warehouses, categories, ledger } をまとめて返す
 //   PUT /api/products    → products + lots テーブルを全置換
 //   PUT /api/warehouses  → warehouses テーブルを全置換
+//   PUT /api/categories  → categories テーブルを全置換
 //   PUT /api/ledger      → stock_transactions テーブルを全置換
 
 export interface Env {
@@ -20,6 +21,11 @@ interface Warehouse {
   color: string;
 }
 
+interface Category {
+  id: string;
+  name: string;
+}
+
 interface Lot {
   id: string;
   lotNo: string;
@@ -32,7 +38,7 @@ interface Product {
   id: string;
   name: string;
   sku: string;
-  category: string;
+  categoryId: string;
   lots: Lot[];
   minQuantity: number;
   price: number;
@@ -58,7 +64,7 @@ interface ProductRow {
   id: string;
   name: string;
   sku: string;
-  category: string;
+  category_id: string | null;
   min_quantity: number;
   price: number;
   cost_price: number;
@@ -89,10 +95,11 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, txnsRes] = await db.batch([
-    db.prepare('SELECT id, name, sku, category, min_quantity, price, cost_price, updated_at FROM products'),
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes] = await db.batch([
+    db.prepare('SELECT id, name, sku, category_id, min_quantity, price, cost_price, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
+    db.prepare('SELECT id, name FROM categories'),
     db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id FROM stock_transactions ORDER BY date DESC'),
   ]);
 
@@ -114,7 +121,8 @@ async function readState(db: D1Database) {
     id: r.id,
     name: r.name,
     sku: r.sku,
-    category: r.category,
+    // category_id が NULL の旧データはフロント側 (migrateProducts) が「未分類」へ振り分ける
+    categoryId: r.category_id ?? '',
     minQuantity: r.min_quantity,
     price: r.price,
     costPrice: r.cost_price,
@@ -123,6 +131,7 @@ async function readState(db: D1Database) {
   }));
 
   const warehouses = warehousesRes.results as unknown as Warehouse[];
+  const categories = categoriesRes.results as unknown as Category[];
 
   const ledger: StockTransaction[] = (txnsRes.results as unknown as TransactionRow[]).map(r => ({
     id: r.id,
@@ -138,7 +147,7 @@ async function readState(db: D1Database) {
     ...(r.to_warehouse_id != null ? { toWarehouseId: r.to_warehouse_id } : {}),
   }));
 
-  return { products, warehouses, ledger };
+  return { products, warehouses, categories, ledger };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -146,13 +155,13 @@ async function readState(db: D1Database) {
 async function replaceProducts(db: D1Database, products: Product[]) {
   const stmts = [db.prepare('DELETE FROM lots'), db.prepare('DELETE FROM products')];
   const insertProduct = db.prepare(
-    'INSERT INTO products (id, name, sku, category, min_quantity, price, cost_price, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO products (id, name, sku, category_id, min_quantity, price, cost_price, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertLot = db.prepare(
     'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id) VALUES (?, ?, ?, ?, ?, ?)'
   );
   for (const p of products) {
-    stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.category, p.minQuantity, p.price, p.costPrice, p.updatedAt));
+    stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.categoryId, p.minQuantity, p.price, p.costPrice, p.updatedAt));
   }
   for (const p of products) {
     for (const l of p.lots) {
@@ -171,6 +180,18 @@ async function replaceWarehouses(db: D1Database, warehouses: Warehouse[]) {
   ];
   const insert = db.prepare('INSERT INTO warehouses (id, name, color) VALUES (?, ?, ?)');
   for (const w of warehouses) stmts.push(insert.bind(w.id, w.name, w.color));
+  await db.batch(stmts);
+}
+
+// categories を全置換。products が category_id を参照しているため、
+// 削除→再挿入の間だけ外部キー検査をトランザクション終了まで遅延させる
+async function replaceCategories(db: D1Database, categories: Category[]) {
+  const stmts = [
+    db.prepare('PRAGMA defer_foreign_keys = on'),
+    db.prepare('DELETE FROM categories'),
+  ];
+  const insert = db.prepare('INSERT INTO categories (id, name) VALUES (?, ?)');
+  for (const c of categories) stmts.push(insert.bind(c.id, c.name));
   await db.batch(stmts);
 }
 
@@ -197,6 +218,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/warehouses':
           await replaceWarehouses(env.DB, await request.json<Warehouse[]>());
+          return Response.json({ ok: true });
+        case '/api/categories':
+          await replaceCategories(env.DB, await request.json<Category[]>());
           return Response.json({ ok: true });
         case '/api/ledger':
           await replaceLedger(env.DB, await request.json<StockTransaction[]>());

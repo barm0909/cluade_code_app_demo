@@ -117,7 +117,7 @@ describe('exportCsv', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'ロットなし', sku: 'NO-LOT', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: 'ロットなし', sku: 'NO-LOT', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
 
     act(() => { result.current.exportCsv(); });

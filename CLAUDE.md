@@ -42,7 +42,7 @@ React 19 + TypeScript + Vite SPA with a thin Cloudflare Worker backend (`worker/
 
 - `wrangler.jsonc` is the single config for both local dev and deploy (`main` worker + `assets` + `d1_databases`). The `database_id` is a placeholder until someone runs `npx wrangler d1 create inventory-db` and pastes the real id — `wrangler deploy` fails until then. Changing `database_id` also re-keys the local D1 state, so re-run `npm run db:migrate && npm run db:seed` after touching it.
 - Local dev needs two processes: `npm run dev` (Vite, HMR) and `npm run dev:api` (Worker + local D1 on :8787); Vite proxies `/api` to the latter. `wrangler dev` requires `dist/` to exist (run `npm run build` once).
-- DB schema lives in `migrations/` (currently `0001_init.sql`: `products`, `lots`, `warehouses`, `stock_transactions` — a normalized form of the `useInventory.ts` model, snake_case columns). `seed.sql` mirrors `SAMPLE_DATA`. Keep all three in sync when the data model changes, and keep the worker's local type copies in `worker/index.ts` in sync too (it can't import `useInventory.ts` because that would pull react/xlsx into the Worker bundle).
+- DB schema lives in `migrations/` (`0001_init.sql`: `products`, `lots`, `warehouses`, `stock_transactions`; `0002_categories.sql`: `categories` + `products.category_id` — a normalized form of the `useInventory.ts` model, snake_case columns). `seed.sql` mirrors `SAMPLE_DATA` / `DEFAULT_CATEGORIES`. Keep all three in sync when the data model changes, and keep the worker's local type copies in `worker/index.ts` in sync too (it can't import `useInventory.ts` because that would pull react/xlsx into the Worker bundle).
 
 ### State lives in one hook: `useInventory.ts`
 
@@ -50,12 +50,13 @@ Everything — types, sample data, persistence, and all mutations — is defined
 
 - `src/types.ts` is a **stale leftover** from an earlier version of the data model (it lacks `lots`, `costPrice`, warehouses) and is not imported anywhere. Don't add new types there — extend `useInventory.ts` instead, or delete `types.ts` if you're cleaning up.
 
-Persistence is slice-based via the Worker API: `GET /api/state` returns everything on mount; each mutation fire-and-forgets a full-replace `PUT /api/products` / `/api/warehouses` / `/api/ledger` (see `persist()` in `useInventory.ts`). There is no localStorage anymore. When the API is unreachable (offline, jsdom tests), the hook runs purely in memory, starting from `SAMPLE_DATA` / `DEFAULT_WAREHOUSES` — that fallback is what most tests rely on; tests that verify persistence stub `fetch` with `src/test/mockApi.ts`. A fresh (empty) remote DB shows an empty inventory until リセット (`resetToSample()`) is clicked, which PUTs the sample data; the local DB is instead populated by `npm run db:seed`.
+Persistence is slice-based via the Worker API: `GET /api/state` returns everything on mount; each mutation fire-and-forgets a full-replace `PUT /api/products` / `/api/warehouses` / `/api/categories` / `/api/ledger` (see `persist()` in `useInventory.ts`). There is no localStorage anymore. When the API is unreachable (offline, jsdom tests), the hook runs purely in memory, starting from `SAMPLE_DATA` / `DEFAULT_WAREHOUSES` / `DEFAULT_CATEGORIES` — that fallback is what most tests rely on; tests that verify persistence stub `fetch` with `src/test/mockApi.ts`. A fresh (empty) remote DB shows an empty inventory until リセット (`resetToSample()`) is clicked, which PUTs the sample data; the local DB is instead populated by `npm run db:seed`.
 
 ### Data model
 
 - `Product` has many `Lot`s (lot-level tracking by expiry date and warehouse), not a single quantity field. `totalQuantity(product)` and `totalQuantityByWarehouse(product, warehouseId)` sum across lots.
-- Every `Lot` has a `warehouseId`. Loading old data without `warehouseId` migrates it to `DEFAULT_WAREHOUSE_ID` (`wh-sales`) — preserve this backward-compat mapping in `load()` if you touch it.
+- Every `Lot` has a `warehouseId`. Loading old data without `warehouseId` migrates it to `DEFAULT_WAREHOUSE_ID` (`wh-sales`) — preserve this backward-compat mapping in `migrateProducts()` if you touch it.
+- `Product.categoryId` references the `categories` master (`Category { id, name }`, managed via `addCategory`/`updateCategory`/`deleteCategory`; delete is blocked while any product uses the category). Renaming a category propagates everywhere because products hold the id, not the name. Loading old data with a legacy `category` string maps it to an existing category by name (or creates one, falling back to `未分類`) in `migrateProducts()`.
 - Any quantity-changing operation (`addLot`, `adjustLotQuantity`, `moveLot`, `importExcel`) also appends to the `ledger` via `addTransaction`, recording it as `入庫`/`出庫`/`移動`. If you add a new mutation that changes stock, wire it into the ledger the same way so 入出庫帳票 stays accurate.
 - `moveLot` full-quantity moves just update the lot's `warehouseId` in place; partial moves shrink the source lot and create a new lot (new id, same `lotNo`) in the target warehouse, then record both an outgoing and incoming ledger transaction.
 
@@ -65,6 +66,7 @@ Persistence is slice-based via the Worker API: `GET /api/state` returns everythi
 - `ProductModal.tsx` / `LotModal.tsx` — controlled create/edit forms for products and lots, taking `onSave`/`onClose` props; App.tsx decides whether `onSave` calls the `add*` or `update*` mutator based on whether it's editing `null`/`'new'` vs an existing record.
 - `MoveLotModal` — defined inline inside `App.tsx` (not a separate file) since it's tightly coupled to the lot table's row actions.
 - `LedgerView.tsx` — read-only table rendering the transaction ledger, resolving warehouse ids to names/colors via the `warehouses` list.
+- `ProductMasterView.tsx` / `CategoryMasterView.tsx` — inline-edit master tables, both rendered in the 商品マスタ tab (products first, categories below).
 - Excel import/export and CSV export (`exportCsv`, `exportExcel`, `importExcel` in `useInventory.ts`) use the `xlsx` package. Import matches rows by `SKU` + `ロットNo`(lot number) and only touches matching lots' quantities, diffing against current quantity to decide 入庫 vs 出庫 and by how much.
 
 ### Testing

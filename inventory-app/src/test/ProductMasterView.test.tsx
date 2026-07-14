@@ -19,7 +19,7 @@ const makeProduct = (overrides: Partial<Product> = {}): Product => ({
   id: '1',
   name: '牛乳',
   sku: 'ML-001',
-  category: '乳製品',
+  categoryId: 'cat-dairy',
   minQuantity: 5,
   price: 198,
   costPrice: 130,
@@ -28,8 +28,14 @@ const makeProduct = (overrides: Partial<Product> = {}): Product => ({
   ...overrides,
 });
 
+const TEST_CATEGORIES = [
+  { id: 'cat-dairy', name: '乳製品' },
+  { id: 'cat-bread', name: 'パン' },
+];
+
 const defaultProps = {
   products: [makeProduct()],
+  categories: TEST_CATEGORIES,
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
   onAddClick: vi.fn(),
@@ -41,7 +47,7 @@ describe('ProductMasterView — 表示', () => {
   it('全商品の商品名とSKUが表示される', () => {
     const products = [
       makeProduct(),
-      makeProduct({ id: '2', name: '食パン', sku: 'BR-001', category: 'パン' }),
+      makeProduct({ id: '2', name: '食パン', sku: 'BR-001', categoryId: 'cat-bread' }),
     ];
     render(<ProductMasterView {...defaultProps} products={products} />);
     expect(screen.getByText('牛乳')).toBeInTheDocument();
@@ -74,7 +80,7 @@ describe('ProductMasterView — インライン編集', () => {
 
     expect(screen.getByLabelText('商品名')).toHaveValue('牛乳');
     expect(screen.getByLabelText('SKU')).toHaveValue('ML-001');
-    expect(screen.getByLabelText('カテゴリ')).toHaveValue('乳製品');
+    expect(screen.getByLabelText('カテゴリ')).toHaveValue('cat-dairy');
     expect(screen.getByLabelText('最低在庫数')).toHaveValue(5);
     expect(screen.getByLabelText('販売定価')).toHaveValue(198);
     expect(screen.getByLabelText('原価')).toHaveValue(130);
@@ -94,7 +100,7 @@ describe('ProductMasterView — インライン編集', () => {
     expect(onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({
       name: '低脂肪牛乳',
       sku: 'ML-001',
-      category: '乳製品',
+      categoryId: 'cat-dairy',
     }));
   });
 
@@ -153,7 +159,7 @@ describe('ProductMasterView — インライン編集', () => {
     const onUpdate = vi.fn();
     const products = [
       makeProduct(),
-      makeProduct({ id: '2', name: '食パン', sku: 'BR-001', category: 'パン' }),
+      makeProduct({ id: '2', name: '食パン', sku: 'BR-001', categoryId: 'cat-bread' }),
     ];
     render(<ProductMasterView {...defaultProps} products={products} onUpdate={onUpdate} />);
 
