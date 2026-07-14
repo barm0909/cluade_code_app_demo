@@ -5,6 +5,7 @@ import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { LedgerView } from './LedgerView';
 import { ProductMasterView } from './ProductMasterView';
+import { CategoryMasterView } from './CategoryMasterView';
 import './App.css';
 
 function ExpiryBadge({ expiryDate }: { expiryDate?: string }) {
@@ -164,7 +165,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, moveLot } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, moveLot, categories, addCategory, updateCategory, deleteCategory } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -177,22 +178,24 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [activeTab, setActiveTab] = useState<'inventory' | 'master' | 'ledger'>('inventory');
 
-  const categories = useMemo(() => [...new Set(products.map(p => p.category))].sort(), [products]);
+  const categoryNameById = useMemo(() => new Map(categories.map(c => [c.id, c.name])), [categories]);
 
   const filtered = useMemo(() => {
     let list = products.filter(p => {
       const q = search.toLowerCase();
       const matchSearch = !q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q);
-      const matchCategory = !categoryFilter || p.category === categoryFilter;
+      const matchCategory = !categoryFilter || p.categoryId === categoryFilter;
       const matchWarehouse = !warehouseFilter || p.lots.some(l => l.warehouseId === warehouseFilter);
       return matchSearch && matchCategory && matchWarehouse;
     });
     return [...list].sort((a, b) => {
-      const av = a[sortField], bv = b[sortField];
+      // カテゴリはid参照なので、表示名 (マスタ解決後) で並べ替える
+      const av = sortField === 'category' ? categoryNameById.get(a.categoryId) ?? '' : a[sortField];
+      const bv = sortField === 'category' ? categoryNameById.get(b.categoryId) ?? '' : b[sortField];
       const cmp = typeof av === 'number' ? av - (bv as number) : String(av).localeCompare(String(bv));
       return sortOrder === 'asc' ? cmp : -cmp;
     });
-  }, [products, search, categoryFilter, warehouseFilter, sortField, sortOrder]);
+  }, [products, search, categoryFilter, warehouseFilter, sortField, sortOrder, categoryNameById]);
 
   const allLots = products.flatMap(p => p.lots);
   const expired = allLots.filter(l => l.expiryDate && daysUntilExpiry(l.expiryDate) < 0);
@@ -279,15 +282,16 @@ export default function App() {
 
       {activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
-      ) : activeTab === 'master' ? (
-        <ProductMasterView products={products} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
-      ) : (<>
+      ) : activeTab === 'master' ? (<>
+        <ProductMasterView products={products} categories={categories} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
+        <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
+      </>) : (<>
 
       <div className="controls">
         <input className="search-input" placeholder="商品名・SKUで検索..." value={search} onChange={e => setSearch(e.target.value)} />
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
           <option value="">全カテゴリ</option>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <select value={warehouseFilter} onChange={e => setWarehouseFilter(e.target.value)}>
           <option value="">全倉庫</option>
@@ -320,7 +324,7 @@ export default function App() {
                     <td className="expand-cell">{expanded ? '▼' : '▶'}</td>
                     <td><strong>{p.name}</strong></td>
                     <td className="mono">{p.sku}</td>
-                    <td><span className="badge">{p.category}</span></td>
+                    <td><span className="badge">{categoryNameById.get(p.categoryId) ?? '—'}</span></td>
                     <td>
                       <span className={qty <= p.minQuantity ? 'qty-low' : ''}>{qty}</span>
                       <span className="lot-count">（{p.lots.length}ロット）</span>
@@ -395,6 +399,7 @@ export default function App() {
       {editingProduct !== null && (
         <ProductModal
           product={editingProduct === 'new' ? null : editingProduct}
+          categories={categories}
           onSave={data => editingProduct === 'new' ? addProduct(data) : updateProduct((editingProduct as Product).id, data)}
           onClose={() => setEditingProduct(null)}
         />

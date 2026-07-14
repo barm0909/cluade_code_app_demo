@@ -3,8 +3,14 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ProductModal } from '../ProductModal';
 
+const TEST_CATEGORIES = [
+  { id: 'cat-food', name: '食品' },
+  { id: 'cat-dairy', name: '乳製品' },
+];
+
 const defaultProps = {
   product: null,
+  categories: TEST_CATEGORIES,
   onSave: vi.fn(),
   onClose: vi.fn(),
 };
@@ -18,17 +24,17 @@ describe('ProductModal — 表示', () => {
   });
 
   it('編集モードで「商品を編集」タイトルが表示される', () => {
-    const product = { id: '1', name: 'テスト', sku: 'T-001', category: '食品', minQuantity: 5, price: 100, costPrice: 60, lots: [], updatedAt: '' };
+    const product = { id: '1', name: 'テスト', sku: 'T-001', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 60, lots: [], updatedAt: '' };
     render(<ProductModal {...defaultProps} product={product} />);
     expect(screen.getByText('商品を編集')).toBeInTheDocument();
   });
 
   it('既存商品の値がフォームに反映される', () => {
-    const product = { id: '1', name: '牛乳', sku: 'ML-001', category: '乳製品', minQuantity: 5, price: 198, costPrice: 130, lots: [], updatedAt: '' };
+    const product = { id: '1', name: '牛乳', sku: 'ML-001', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130, lots: [], updatedAt: '' };
     render(<ProductModal {...defaultProps} product={product} />);
     expect(screen.getByDisplayValue('牛乳')).toBeInTheDocument();
     expect(screen.getByDisplayValue('ML-001')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('乳製品')).toBeInTheDocument();
+    expect(screen.getByLabelText(/カテゴリ/)).toHaveValue('cat-dairy');
     expect(screen.getByDisplayValue('198')).toBeInTheDocument();
     expect(screen.getByDisplayValue('130')).toBeInTheDocument();
   });
@@ -39,25 +45,25 @@ describe('ProductModal — 保存', () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
     const onClose = vi.fn();
-    render(<ProductModal product={null} onSave={onSave} onClose={onClose} />);
+    render(<ProductModal product={null} categories={TEST_CATEGORIES} onSave={onSave} onClose={onClose} />);
 
     await user.type(screen.getByLabelText(/商品名/), 'テスト商品');
     await user.type(screen.getByLabelText(/SKU/), 'T-999');
-    await user.type(screen.getByLabelText(/カテゴリ/), '食品');
+    await user.selectOptions(screen.getByLabelText(/カテゴリ/), 'cat-food');
     await user.click(screen.getByText('保存'));
 
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ name: 'テスト商品', sku: 'T-999', category: '食品' }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ name: 'テスト商品', sku: 'T-999', categoryId: 'cat-food' }));
     expect(onClose).toHaveBeenCalled();
   });
 
   it('保存時にonSaveへ渡すデータに価格と原価が含まれる', async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
-    render(<ProductModal product={null} onSave={onSave} onClose={vi.fn()} />);
+    render(<ProductModal product={null} categories={TEST_CATEGORIES} onSave={onSave} onClose={vi.fn()} />);
 
     await user.type(screen.getByLabelText(/商品名/), '商品');
     await user.type(screen.getByLabelText(/SKU/), 'A-001');
-    await user.type(screen.getByLabelText(/カテゴリ/), '食品');
+    await user.selectOptions(screen.getByLabelText(/カテゴリ/), 'cat-food');
     const priceInput = screen.getByLabelText(/販売定価/);
     await user.clear(priceInput);
     await user.type(priceInput, '500');

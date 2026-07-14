@@ -63,7 +63,7 @@ describe('useInventory — 倉庫管理', () => {
     const wh = result.current.warehouses.find(w => w.name === '使用中倉庫')!;
 
     act(() => {
-      result.current.addProduct({ name: '参照テスト品', sku: 'WH-REF', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: '参照テスト品', sku: 'WH-REF', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'WH-REF')!;
     act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5, warehouseId: wh.id }); });
@@ -98,7 +98,7 @@ describe('useInventory — ロット倉庫割り当て', () => {
 
     const holdWh = result.current.warehouses.find(w => w.name === '保留倉庫')!;
     act(() => {
-      result.current.addProduct({ name: 'wh test', sku: 'WT-001', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: 'wh test', sku: 'WT-001', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'WT-001')!;
 
@@ -112,7 +112,7 @@ describe('useInventory — ロット倉庫割り当て', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'default wh', sku: 'DW-001', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: 'default wh', sku: 'DW-001', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'DW-001')!;
 
@@ -133,7 +133,7 @@ describe('useInventory — moveLot', () => {
     const holdWh = result.current.warehouses.find(w => w.name === '保留倉庫')!;
 
     act(() => {
-      result.current.addProduct({ name: 'move test', sku: 'MV-001', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: 'move test', sku: 'MV-001', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'MV-001')!;
     act(() => {
@@ -213,7 +213,7 @@ describe('totalQuantityByWarehouse', () => {
     const holdWh = result.current.warehouses.find(w => w.name === '保留倉庫')!;
 
     act(() => {
-      result.current.addProduct({ name: 'qty wh test', sku: 'QW-001', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: 'qty wh test', sku: 'QW-001', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'QW-001')!;
 
@@ -232,7 +232,7 @@ describe('totalQuantityByWarehouse', () => {
     const { result } = renderHook(() => useInventory());
 
     act(() => {
-      result.current.addProduct({ name: 'empty wh', sku: 'EW-001', category: '食品', minQuantity: 1, price: 100, costPrice: 50 });
+      result.current.addProduct({ name: 'empty wh', sku: 'EW-001', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
     const product = result.current.products.find(p => p.sku === 'EW-001')!;
 

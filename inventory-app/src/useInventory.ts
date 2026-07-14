@@ -9,6 +9,11 @@ export interface Warehouse {
 
 export const DEFAULT_WAREHOUSE_ID = 'wh-sales';
 
+export interface Category {
+  id: string;
+  name: string;
+}
+
 export interface Lot {
   id: string;
   lotNo: string;
@@ -21,7 +26,7 @@ export interface Product {
   id: string;
   name: string;
   sku: string;
-  category: string;
+  categoryId: string;
   lots: Lot[];
   minQuantity: number;
   price: number;
@@ -77,12 +82,13 @@ export function generateLotNo(expiryDate?: string): string {
   return new Date().toISOString().slice(0, 10).replace(/-/g, '');
 }
 
-// 永続化は Cloudflare Worker の /api/* 経由で D1 に保存する。
+// 永続化は Cloudflare Worker の /api/* 経由で D1 に保存する (GET /api/state / PUT /api/{products,warehouses,categories,ledger})。
 // ローカル開発では vite の proxy → wrangler dev (ローカルD1)、本番では同一オリジンの Worker (リモートD1) に届く。
 // API に到達できない環境 (オフライン、テスト) ではメモリ内の状態だけで動作する。
 interface ServerState {
   products: Product[];
   warehouses: Warehouse[];
+  categories: Category[];
   ledger: StockTransaction[];
 }
 
@@ -96,7 +102,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'ledger';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -116,6 +122,12 @@ const DEFAULT_WAREHOUSES: Warehouse[] = [
   { id: 'wh-defect', name: '不良倉庫', color: '#f44336' },
 ];
 
+const DEFAULT_CATEGORIES: Category[] = [
+  { id: 'cat-dairy', name: '乳製品' },
+  { id: 'cat-bread', name: 'パン' },
+  { id: 'cat-label', name: 'ラベル' },
+];
+
 const d = (offset: number) => {
   const dt = new Date();
   dt.setDate(dt.getDate() + offset);
@@ -124,7 +136,7 @@ const d = (offset: number) => {
 
 const SAMPLE_DATA: Product[] = [
   {
-    id: '1', name: '牛乳', sku: 'ML-001', category: '乳製品', minQuantity: 5, price: 198, costPrice: 130,
+    id: '1', name: '牛乳', sku: 'ML-001', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130,
     lots: [
       { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
       { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
@@ -132,21 +144,21 @@ const SAMPLE_DATA: Product[] = [
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '2', name: '食パン', sku: 'BR-001', category: 'パン', minQuantity: 5, price: 150, costPrice: 90,
+    id: '2', name: '食パン', sku: 'BR-001', categoryId: 'cat-bread', minQuantity: 5, price: 150, costPrice: 90,
     lots: [
       { id: 'l3', lotNo: d(1).replace(/-/g, ''), expiryDate: d(1), quantity: 3, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', category: 'ラベル', minQuantity: 100, price: 5, costPrice: 2,
+    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', categoryId: 'cat-label', minQuantity: 100, price: 5, costPrice: 2,
     lots: [
       { id: 'l4', lotNo: '20260101', quantity: 500, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '4', name: 'チーズ', sku: 'CS-001', category: '乳製品', minQuantity: 4, price: 350, costPrice: 220,
+    id: '4', name: 'チーズ', sku: 'CS-001', categoryId: 'cat-dairy', minQuantity: 4, price: 350, costPrice: 220,
     lots: [
       { id: 'l5', lotNo: d(-2).replace(/-/g, ''), expiryDate: d(-2), quantity: 2, warehouseId: 'wh-hold' },
       { id: 'l6', lotNo: d(14).replace(/-/g, ''), expiryDate: d(14), quantity: 4, warehouseId: DEFAULT_WAREHOUSE_ID },
@@ -155,16 +167,39 @@ const SAMPLE_DATA: Product[] = [
   },
 ];
 
-// 旧データの後方互換: warehouseId がないロットにデフォルトを付与
-function migrateProducts(products: Product[]): Product[] {
-  return products.map(p => ({
-    ...p,
-    lots: p.lots.map(l => ({ ...l, warehouseId: l.warehouseId ?? DEFAULT_WAREHOUSE_ID })),
-  }));
+// 旧データの後方互換:
+// - warehouseId がないロットにデフォルトを付与
+// - categoryId がない商品 (旧 category 文字列) はカテゴリマスタへ名前で対応付け、なければカテゴリを作成
+function migrateProducts(products: Product[], categories: Category[]): { products: Product[]; categories: Category[] } {
+  const cats = [...categories];
+  const idByName = new Map(cats.map(c => [c.name, c.id]));
+  const migrated = products.map(p => {
+    let categoryId = p.categoryId;
+    if (!categoryId) {
+      const legacyName = (p as Product & { category?: string }).category || '未分類';
+      let id = idByName.get(legacyName);
+      if (!id) {
+        id = crypto.randomUUID();
+        cats.push({ id, name: legacyName });
+        idByName.set(legacyName, id);
+      }
+      categoryId = id;
+    }
+    return {
+      ...p,
+      categoryId,
+      lots: p.lots.map(l => ({ ...l, warehouseId: l.warehouseId ?? DEFAULT_WAREHOUSE_ID })),
+    };
+  });
+  return { products: migrated, categories: cats };
 }
 
 function saveWarehouses(warehouses: Warehouse[]) {
   persist('warehouses', warehouses);
+}
+
+function saveCategories(categories: Category[]) {
+  persist('categories', categories);
 }
 
 function save(products: Product[]) {
@@ -204,13 +239,17 @@ export function useInventory() {
   const [products, setProducts] = useState<Product[]>(SAMPLE_DATA);
   const [ledger, setLedger] = useState<StockTransaction[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>(DEFAULT_WAREHOUSES);
+  const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
     let cancelled = false;
     fetchState().then(state => {
       if (cancelled || !state) return;
-      setProducts(migrateProducts(state.products));
+      const baseCategories = (state.categories?.length ?? 0) > 0 ? state.categories : DEFAULT_CATEGORIES;
+      const migrated = migrateProducts(state.products, baseCategories);
+      setProducts(migrated.products);
+      setCategories(migrated.categories);
       setWarehouses(state.warehouses.length > 0 ? state.warehouses : DEFAULT_WAREHOUSES);
       const { txns, changed } = migrateLedger(state.ledger);
       setLedger(txns);
@@ -319,11 +358,12 @@ export function useInventory() {
   }, [products]);
 
   const exportCsv = useCallback(() => {
+    const categoryName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
     const header = '商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
     const rows = products.flatMap(p =>
       p.lots.length > 0
-        ? p.lots.map(l => [p.name, p.sku, p.category, p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
-        : [[p.name, p.sku, p.category, p.price, p.costPrice, '', '', 0].join(',')]
+        ? p.lots.map(l => [p.name, p.sku, categoryName(p.categoryId), p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
+        : [[p.name, p.sku, categoryName(p.categoryId), p.price, p.costPrice, '', '', 0].join(',')]
     );
     const blob = new Blob([header + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -332,7 +372,7 @@ export function useInventory() {
     a.download = `inventory_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [products]);
+  }, [products, categories]);
 
   const importExcel = useCallback((file: File): Promise<{ updated: number; errors: string[] }> => {
     return new Promise((resolve, reject) => {
@@ -436,6 +476,36 @@ export function useInventory() {
     });
   }, [products]);
 
+  const addCategory = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCategories(prev => {
+      if (prev.some(c => c.name === trimmed)) return prev;
+      const next = [...prev, { id: crypto.randomUUID(), name: trimmed }];
+      saveCategories(next); return next;
+    });
+  }, []);
+
+  const updateCategory = useCallback((id: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    setCategories(prev => {
+      // 他カテゴリと同名になる変更は不可 (名前の一意性を保つ)
+      if (prev.some(c => c.id !== id && c.name === trimmed)) return prev;
+      const next = prev.map(c => c.id === id ? { ...c, name: trimmed } : c);
+      saveCategories(next); return next;
+    });
+  }, []);
+
+  const deleteCategory = useCallback((id: string) => {
+    const inUse = products.some(p => p.categoryId === id);
+    if (inUse) return;
+    setCategories(prev => {
+      const next = prev.filter(c => c.id !== id);
+      saveCategories(next); return next;
+    });
+  }, [products]);
+
   const moveLot = useCallback((productId: string, lotId: string, targetWarehouseId: string, quantity: number) => {
     const product = products.find(p => p.id === productId);
     const lot = product?.lots.find(l => l.id === lotId);
@@ -471,13 +541,15 @@ export function useInventory() {
 
   const resetToSample = useCallback(() => {
     const fresh = JSON.parse(JSON.stringify(SAMPLE_DATA));
-    // 倉庫→商品の順で保存する (ロットが倉庫を参照するため)
+    // 倉庫・カテゴリ→商品の順で保存する (ロットが倉庫を、商品がカテゴリを参照するため)
     setWarehouses(DEFAULT_WAREHOUSES);
     saveWarehouses(DEFAULT_WAREHOUSES);
+    setCategories(DEFAULT_CATEGORIES);
+    saveCategories(DEFAULT_CATEGORIES);
     update(fresh);
     setLedger([]);
     saveLedger([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory };
 }

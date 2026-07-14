@@ -1,20 +1,21 @@
 import { useState, useEffect } from 'react';
-import type { Product } from './useInventory';
+import type { Category, Product } from './useInventory';
 
 interface Props {
   product: Product | null;
+  categories: Category[];
   onSave: (data: Omit<Product, 'id' | 'updatedAt' | 'lots'>) => void;
   onClose: () => void;
 }
 
-const EMPTY = { name: '', sku: '', category: '', minQuantity: 5, price: 0, costPrice: 0 };
+const EMPTY = { name: '', sku: '', categoryId: '', minQuantity: 5, price: 0, costPrice: 0 };
 
-export function ProductModal({ product, onSave, onClose }: Props) {
+export function ProductModal({ product, categories, onSave, onClose }: Props) {
   const [form, setForm] = useState(EMPTY);
 
   useEffect(() => {
     setForm(product
-      ? { name: product.name, sku: product.sku, category: product.category, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice }
+      ? { name: product.name, sku: product.sku, categoryId: product.categoryId, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice }
       : EMPTY
     );
   }, [product]);
@@ -28,7 +29,12 @@ export function ProductModal({ product, onSave, onClose }: Props) {
         <form onSubmit={e => { e.preventDefault(); onSave(form); onClose(); }}>
           <label>商品名 <input required value={form.name} onChange={e => set('name', e.target.value)} /></label>
           <label>SKU <input required value={form.sku} onChange={e => set('sku', e.target.value)} /></label>
-          <label>カテゴリ <input required value={form.category} onChange={e => set('category', e.target.value)} /></label>
+          <label>カテゴリ
+            <select required value={form.categoryId} onChange={e => set('categoryId', e.target.value)}>
+              <option value="" disabled>選択してください</option>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </label>
           <label>最低在庫数 <input type="number" min={0} required value={form.minQuantity} onChange={e => set('minQuantity', +e.target.value)} /></label>
           <label>販売定価 (円) <input type="number" min={0} required value={form.price} onChange={e => set('price', +e.target.value)} /></label>
           <label>原価 (円) <input type="number" min={0} required value={form.costPrice} onChange={e => set('costPrice', +e.target.value)} /></label>
