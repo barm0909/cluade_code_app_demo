@@ -6,10 +6,9 @@
 //   - ローカル開発: `npm run dev:api` (wrangler dev) が .wrangler/state 配下のローカルD1に接続
 //   - デプロイ後:   下記 database_id のリモートD1に接続
 //
-// ★ 初回のみ: `npx wrangler login` 後に `npx wrangler d1 create inventory-db` を実行し、
-//   発行された database_id を下の placeholder と置き換えること。
-//   その後 `npm run db:migrate:remote` でリモートにスキーマを適用する。
-//   置き換えるまで `wrangler deploy` は失敗する。
+// リモートD1 は `wrangler d1 create inventory-db` で作成済み (2026-07-14, APAC)。
+// スキーマ変更時は migrations/ に SQL を追加して
+// `npm run db:migrate` (ローカル) と `npm run db:migrate:remote` (本番) の両方に適用すること。
 {
   "name": "cluadecodeappdemo",
   "main": "worker/index.ts",
@@ -25,7 +24,7 @@
     {
       "binding": "DB",
       "database_name": "inventory-db",
-      "database_id": "REPLACE_WITH_REAL_ID_AFTER_wrangler_d1_create",
+      "database_id": "01f2f6ec-ecb2-47be-b0c3-5700f148ec16",
       "migrations_dir": "migrations"
     }
   ]
