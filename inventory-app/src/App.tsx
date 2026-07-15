@@ -6,6 +6,7 @@ import { LotModal } from './LotModal';
 import { LedgerView } from './LedgerView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
+import { WarehouseMasterView } from './WarehouseMasterView';
 import './App.css';
 
 function ExpiryBadge({ expiryDate }: { expiryDate?: string }) {
@@ -165,7 +166,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, moveLot, categories, addCategory, updateCategory, deleteCategory } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -285,6 +286,7 @@ export default function App() {
       ) : activeTab === 'master' ? (<>
         <ProductMasterView products={products} categories={categories} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
+        <WarehouseMasterView warehouses={warehouses} products={products} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
       </>) : (<>
 
       <div className="controls">
