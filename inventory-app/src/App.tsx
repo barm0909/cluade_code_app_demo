@@ -184,15 +184,15 @@ export default function App() {
   const filtered = useMemo(() => {
     let list = products.filter(p => {
       const q = search.toLowerCase();
-      const matchSearch = !q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q);
+      const matchSearch = !q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.janCode ?? '').includes(q);
       const matchCategory = !categoryFilter || p.categoryId === categoryFilter;
       const matchWarehouse = !warehouseFilter || p.lots.some(l => l.warehouseId === warehouseFilter);
       return matchSearch && matchCategory && matchWarehouse;
     });
     return [...list].sort((a, b) => {
       // カテゴリはid参照なので、表示名 (マスタ解決後) で並べ替える
-      const av = sortField === 'category' ? categoryNameById.get(a.categoryId) ?? '' : a[sortField];
-      const bv = sortField === 'category' ? categoryNameById.get(b.categoryId) ?? '' : b[sortField];
+      const av = sortField === 'category' ? categoryNameById.get(a.categoryId) ?? '' : a[sortField] ?? '';
+      const bv = sortField === 'category' ? categoryNameById.get(b.categoryId) ?? '' : b[sortField] ?? '';
       const cmp = typeof av === 'number' ? av - (bv as number) : String(av).localeCompare(String(bv));
       return sortOrder === 'asc' ? cmp : -cmp;
     });
@@ -290,7 +290,7 @@ export default function App() {
       </>) : (<>
 
       <div className="controls">
-        <input className="search-input" placeholder="商品名・SKUで検索..." value={search} onChange={e => setSearch(e.target.value)} />
+        <input className="search-input" placeholder="商品名・SKU・JANコードで検索..." value={search} onChange={e => setSearch(e.target.value)} />
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
           <option value="">全カテゴリ</option>
           {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -308,6 +308,7 @@ export default function App() {
               <th style={{ width: 32 }}></th>
               <th onClick={() => toggleSort('name')} className="sortable">商品名{sortIcon('name')}</th>
               <th onClick={() => toggleSort('sku')} className="sortable">SKU{sortIcon('sku')}</th>
+              <th onClick={() => toggleSort('janCode')} className="sortable">JANコード{sortIcon('janCode')}</th>
               <th onClick={() => toggleSort('category')} className="sortable">カテゴリ{sortIcon('category')}</th>
               <th>合計在庫</th>
               <th onClick={() => toggleSort('price')} className="sortable">販売定価{sortIcon('price')}</th>
@@ -326,6 +327,7 @@ export default function App() {
                     <td className="expand-cell">{expanded ? '▼' : '▶'}</td>
                     <td><strong>{p.name}</strong></td>
                     <td className="mono">{p.sku}</td>
+                    <td className="mono">{p.janCode || '—'}</td>
                     <td><span className="badge">{categoryNameById.get(p.categoryId) ?? '—'}</span></td>
                     <td>
                       <span className={qty <= p.minQuantity ? 'qty-low' : ''}>{qty}</span>
@@ -342,7 +344,7 @@ export default function App() {
                   </tr>
                   {expanded && (
                     <tr key={`${p.id}-lots`} className="lot-row-wrapper">
-                      <td colSpan={8} className="lot-cell">
+                      <td colSpan={9} className="lot-cell">
                         <div className="lot-section">
                           <div className="lot-header">
                             <span>ロット一覧</span>
@@ -392,7 +394,7 @@ export default function App() {
                 </>
               );
             })}
-            {filtered.length === 0 && <tr><td colSpan={8} className="empty">商品が見つかりません</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={9} className="empty">商品が見つかりません</td></tr>}
           </tbody>
         </table>
       </div>
