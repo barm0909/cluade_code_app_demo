@@ -12,7 +12,7 @@ interface Props {
 type MasterForm = Omit<Product, 'id' | 'updatedAt' | 'lots'>;
 
 const toForm = (p: Product): MasterForm => ({
-  name: p.name, sku: p.sku, categoryId: p.categoryId, minQuantity: p.minQuantity, price: p.price, costPrice: p.costPrice,
+  name: p.name, sku: p.sku, janCode: p.janCode ?? '', categoryId: p.categoryId, minQuantity: p.minQuantity, price: p.price, costPrice: p.costPrice,
 });
 
 export function ProductMasterView({ products, categories, onUpdate, onDelete, onAddClick }: Props) {
@@ -27,7 +27,9 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
   const saveEdit = () => {
     if (!editingId || !form) return;
     if (!form.name.trim() || !form.sku.trim()) return;
-    onUpdate(editingId, form);
+    const janCode = form.janCode?.trim() ?? '';
+    if (janCode && !/^(\d{8}|\d{13})$/.test(janCode)) return;
+    onUpdate(editingId, { ...form, janCode: janCode || undefined });
     cancelEdit();
   };
 
@@ -41,6 +43,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
           <tr>
             <th>商品名</th>
             <th>SKU</th>
+            <th>JANコード</th>
             <th>カテゴリ</th>
             <th>最低在庫数</th>
             <th>販売定価</th>
@@ -53,6 +56,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
             <tr key={p.id} className="master-editing-row">
               <td><input className="master-input" aria-label="商品名" required value={form.name} onChange={e => set('name', e.target.value)} /></td>
               <td><input className="master-input" aria-label="SKU" required value={form.sku} onChange={e => set('sku', e.target.value)} /></td>
+              <td><input className="master-input" aria-label="JANコード" inputMode="numeric" pattern="\d{8}|\d{13}" title="8桁または13桁の数字で入力してください" value={form.janCode ?? ''} onChange={e => set('janCode', e.target.value)} /></td>
               <td>
                 <select className="master-input" aria-label="カテゴリ" required value={form.categoryId} onChange={e => set('categoryId', e.target.value)}>
                   <option value="" disabled>選択してください</option>
@@ -73,6 +77,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
             <tr key={p.id}>
               <td><strong>{p.name}</strong></td>
               <td className="mono">{p.sku}</td>
+              <td className="mono">{p.janCode || '—'}</td>
               <td><span className="badge">{categories.find(c => c.id === p.categoryId)?.name ?? '—'}</span></td>
               <td>{p.minQuantity}</td>
               <td>¥{p.price.toLocaleString()}</td>
@@ -85,7 +90,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
               </td>
             </tr>
           ))}
-          {products.length === 0 && <tr><td colSpan={7} className="empty">商品がありません</td></tr>}
+          {products.length === 0 && <tr><td colSpan={8} className="empty">商品がありません</td></tr>}
         </tbody>
       </table>
     </div>

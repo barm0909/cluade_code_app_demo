@@ -8,14 +8,14 @@ interface Props {
   onClose: () => void;
 }
 
-const EMPTY = { name: '', sku: '', categoryId: '', minQuantity: 5, price: 0, costPrice: 0 };
+const EMPTY = { name: '', sku: '', janCode: '', categoryId: '', minQuantity: 5, price: 0, costPrice: 0 };
 
 export function ProductModal({ product, categories, onSave, onClose }: Props) {
   const [form, setForm] = useState(EMPTY);
 
   useEffect(() => {
     setForm(product
-      ? { name: product.name, sku: product.sku, categoryId: product.categoryId, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice }
+      ? { name: product.name, sku: product.sku, janCode: product.janCode ?? '', categoryId: product.categoryId, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice }
       : EMPTY
     );
   }, [product]);
@@ -26,9 +26,10 @@ export function ProductModal({ product, categories, onSave, onClose }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h2>{product ? '商品を編集' : '商品を追加'}</h2>
-        <form onSubmit={e => { e.preventDefault(); onSave(form); onClose(); }}>
+        <form onSubmit={e => { e.preventDefault(); onSave({ ...form, janCode: form.janCode.trim() || undefined }); onClose(); }}>
           <label>商品名 <input required value={form.name} onChange={e => set('name', e.target.value)} /></label>
           <label>SKU <input required value={form.sku} onChange={e => set('sku', e.target.value)} /></label>
+          <label>JANコード <input inputMode="numeric" pattern="\d{8}|\d{13}" title="8桁または13桁の数字で入力してください" placeholder="未設定可" value={form.janCode} onChange={e => set('janCode', e.target.value)} /></label>
           <label>カテゴリ
             <select required value={form.categoryId} onChange={e => set('categoryId', e.target.value)}>
               <option value="" disabled>選択してください</option>

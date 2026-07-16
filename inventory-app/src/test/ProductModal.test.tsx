@@ -30,13 +30,20 @@ describe('ProductModal — 表示', () => {
   });
 
   it('既存商品の値がフォームに反映される', () => {
-    const product = { id: '1', name: '牛乳', sku: 'ML-001', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130, lots: [], updatedAt: '' };
+    const product = { id: '1', name: '牛乳', sku: 'ML-001', janCode: '4901234567894', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130, lots: [], updatedAt: '' };
     render(<ProductModal {...defaultProps} product={product} />);
     expect(screen.getByDisplayValue('牛乳')).toBeInTheDocument();
     expect(screen.getByDisplayValue('ML-001')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('4901234567894')).toBeInTheDocument();
     expect(screen.getByLabelText(/カテゴリ/)).toHaveValue('cat-dairy');
     expect(screen.getByDisplayValue('198')).toBeInTheDocument();
     expect(screen.getByDisplayValue('130')).toBeInTheDocument();
+  });
+
+  it('JANコードのない既存商品はJANコード欄が空になる', () => {
+    const product = { id: '1', name: 'ラベル', sku: 'LB-001', categoryId: 'cat-food', minQuantity: 5, price: 5, costPrice: 2, lots: [], updatedAt: '' };
+    render(<ProductModal {...defaultProps} product={product} />);
+    expect(screen.getByLabelText(/JANコード/)).toHaveValue('');
   });
 });
 
@@ -73,6 +80,33 @@ describe('ProductModal — 保存', () => {
     await user.click(screen.getByText('保存'));
 
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ price: 500, costPrice: 300 }));
+  });
+
+  it('JANコードを入力して保存するとonSaveへ渡される', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProductModal product={null} categories={TEST_CATEGORIES} onSave={onSave} onClose={vi.fn()} />);
+
+    await user.type(screen.getByLabelText(/商品名/), 'JAN商品');
+    await user.type(screen.getByLabelText(/SKU/), 'J-001');
+    await user.selectOptions(screen.getByLabelText(/カテゴリ/), 'cat-food');
+    await user.type(screen.getByLabelText(/JANコード/), '4901234567894');
+    await user.click(screen.getByText('保存'));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ janCode: '4901234567894' }));
+  });
+
+  it('JANコード未入力で保存するとjanCodeはundefinedになる', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProductModal product={null} categories={TEST_CATEGORIES} onSave={onSave} onClose={vi.fn()} />);
+
+    await user.type(screen.getByLabelText(/商品名/), 'JANなし商品');
+    await user.type(screen.getByLabelText(/SKU/), 'J-002');
+    await user.selectOptions(screen.getByLabelText(/カテゴリ/), 'cat-food');
+    await user.click(screen.getByText('保存'));
+
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ janCode: undefined }));
   });
 });
 

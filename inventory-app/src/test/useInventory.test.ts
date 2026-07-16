@@ -40,6 +40,21 @@ describe('useInventory — 商品操作', () => {
     expect(result.current.products.find(p => p.id === target.id)?.name).toBe('新名前');
   });
 
+  it('addProduct/updateProduct でJANコードが保存・更新される', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'JANテスト', sku: 'T-JAN', janCode: '4901234567894', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const added = result.current.products.find(p => p.sku === 'T-JAN')!;
+    expect(added.janCode).toBe('4901234567894');
+
+    act(() => {
+      result.current.updateProduct(added.id, { ...added, janCode: '49123456' });
+    });
+    expect(result.current.products.find(p => p.id === added.id)?.janCode).toBe('49123456');
+  });
+
   it('deleteProduct で商品が削除される', () => {
     const { result } = renderHook(() => useInventory());
 

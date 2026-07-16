@@ -86,7 +86,7 @@ describe('exportCsv', () => {
     const { result } = renderHook(() => useInventory());
     act(() => { result.current.exportCsv(); });
     const lines = getBlobText().split('\n');
-    expect(lines[0]).toBe('商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数');
+    expect(lines[0]).toBe('商品名,SKU,JANコード,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数');
   });
 
   it('ロットを持つ商品は各ロットが1行になる', () => {
@@ -124,7 +124,7 @@ describe('exportCsv', () => {
     const lines = getBlobText().split('\n');
     const line = lines.find(l => l.includes('NO-LOT'));
     expect(line).toBeDefined();
-    // 行フォーマット: 商品名,SKU,カテゴリ,販売定価,原価,ロットNo(空),賞味期限(空),在庫数(0)
+    // 行フォーマット: 商品名,SKU,JANコード,カテゴリ,販売定価,原価,ロットNo(空),賞味期限(空),在庫数(0)
     expect(line).toMatch(/,,,0$/);
   });
 
@@ -137,6 +137,20 @@ describe('exportCsv', () => {
     const line = lines.find(l => l.includes('LB-R01'));
     expect(line).toBeDefined();
     const cols = line!.split(',');
-    expect(cols[6]).toBe(''); // 賞味期限列
+    expect(cols[7]).toBe(''); // 賞味期限列
+  });
+
+  it('JANコードのある商品はJANコード列に出力され、ない商品は空になる', () => {
+    const { result } = renderHook(() => useInventory());
+    act(() => { result.current.exportCsv(); });
+    const lines = getBlobText().split('\n');
+
+    // 牛乳(ML-001)はJANコードあり
+    const milkLine = lines.find(l => l.includes('ML-001'))!;
+    expect(milkLine.split(',')[2]).toBe('4901234567894');
+
+    // 値札ラベル(LB-R01)はJANコードなし
+    const labelLine = lines.find(l => l.includes('LB-R01'))!;
+    expect(labelLine.split(',')[2]).toBe('');
   });
 });

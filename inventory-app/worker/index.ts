@@ -38,6 +38,7 @@ interface Product {
   id: string;
   name: string;
   sku: string;
+  janCode?: string;
   categoryId: string;
   lots: Lot[];
   minQuantity: number;
@@ -64,6 +65,7 @@ interface ProductRow {
   id: string;
   name: string;
   sku: string;
+  jan_code: string | null;
   category_id: string | null;
   min_quantity: number;
   price: number;
@@ -96,7 +98,7 @@ interface TransactionRow {
 
 async function readState(db: D1Database) {
   const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes] = await db.batch([
-    db.prepare('SELECT id, name, sku, category_id, min_quantity, price, cost_price, updated_at FROM products'),
+    db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
@@ -121,6 +123,7 @@ async function readState(db: D1Database) {
     id: r.id,
     name: r.name,
     sku: r.sku,
+    ...(r.jan_code != null ? { janCode: r.jan_code } : {}),
     // category_id が NULL の旧データはフロント側 (migrateProducts) が「未分類」へ振り分ける
     categoryId: r.category_id ?? '',
     minQuantity: r.min_quantity,
@@ -155,13 +158,13 @@ async function readState(db: D1Database) {
 async function replaceProducts(db: D1Database, products: Product[]) {
   const stmts = [db.prepare('DELETE FROM lots'), db.prepare('DELETE FROM products')];
   const insertProduct = db.prepare(
-    'INSERT INTO products (id, name, sku, category_id, min_quantity, price, cost_price, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertLot = db.prepare(
     'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id) VALUES (?, ?, ?, ?, ?, ?)'
   );
   for (const p of products) {
-    stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.categoryId, p.minQuantity, p.price, p.costPrice, p.updatedAt));
+    stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.janCode || null, p.categoryId, p.minQuantity, p.price, p.costPrice, p.updatedAt));
   }
   for (const p of products) {
     for (const l of p.lots) {

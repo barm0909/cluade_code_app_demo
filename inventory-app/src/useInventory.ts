@@ -26,6 +26,7 @@ export interface Product {
   id: string;
   name: string;
   sku: string;
+  janCode?: string; // JANコード (8桁 or 13桁)。JANのない商品 (自社ラベル等) は未設定
   categoryId: string;
   lots: Lot[];
   minQuantity: number;
@@ -59,7 +60,7 @@ export interface StockTransaction {
   toWarehouseId?: string;
 }
 
-export type SortField = 'name' | 'sku' | 'category' | 'price' | 'costPrice';
+export type SortField = 'name' | 'sku' | 'janCode' | 'category' | 'price' | 'costPrice';
 export type SortOrder = 'asc' | 'desc';
 
 export function daysUntilExpiry(expiryDate: string): number {
@@ -136,7 +137,7 @@ const d = (offset: number) => {
 
 const SAMPLE_DATA: Product[] = [
   {
-    id: '1', name: '牛乳', sku: 'ML-001', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130,
+    id: '1', name: '牛乳', sku: 'ML-001', janCode: '4901234567894', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130,
     lots: [
       { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
       { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
@@ -144,7 +145,7 @@ const SAMPLE_DATA: Product[] = [
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '2', name: '食パン', sku: 'BR-001', categoryId: 'cat-bread', minQuantity: 5, price: 150, costPrice: 90,
+    id: '2', name: '食パン', sku: 'BR-001', janCode: '4912345678904', categoryId: 'cat-bread', minQuantity: 5, price: 150, costPrice: 90,
     lots: [
       { id: 'l3', lotNo: d(1).replace(/-/g, ''), expiryDate: d(1), quantity: 3, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
@@ -158,7 +159,7 @@ const SAMPLE_DATA: Product[] = [
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '4', name: 'チーズ', sku: 'CS-001', categoryId: 'cat-dairy', minQuantity: 4, price: 350, costPrice: 220,
+    id: '4', name: 'チーズ', sku: 'CS-001', janCode: '4901987654322', categoryId: 'cat-dairy', minQuantity: 4, price: 350, costPrice: 220,
     lots: [
       { id: 'l5', lotNo: d(-2).replace(/-/g, ''), expiryDate: d(-2), quantity: 2, warehouseId: 'wh-hold' },
       { id: 'l6', lotNo: d(14).replace(/-/g, ''), expiryDate: d(14), quantity: 4, warehouseId: DEFAULT_WAREHOUSE_ID },
@@ -359,11 +360,11 @@ export function useInventory() {
 
   const exportCsv = useCallback(() => {
     const categoryName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
-    const header = '商品名,SKU,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
+    const header = '商品名,SKU,JANコード,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
     const rows = products.flatMap(p =>
       p.lots.length > 0
-        ? p.lots.map(l => [p.name, p.sku, categoryName(p.categoryId), p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
-        : [[p.name, p.sku, categoryName(p.categoryId), p.price, p.costPrice, '', '', 0].join(',')]
+        ? p.lots.map(l => [p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
+        : [[p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, '', '', 0].join(',')]
     );
     const blob = new Blob([header + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
