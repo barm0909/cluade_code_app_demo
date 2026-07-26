@@ -197,6 +197,101 @@ describe('ProductMasterView — バリデーション', () => {
 
     expect(onUpdate).not.toHaveBeenCalled();
   });
+
+  it('必須項目が空のまま保存するとエラーメッセージが表示される', async () => {
+    const user = userEvent.setup();
+    render(<ProductMasterView {...defaultProps} />);
+
+    await user.click(screen.getByText('編集'));
+    await user.clear(screen.getByLabelText('商品名'));
+    await user.click(screen.getByText('保存'));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('商品名とSKUは必須です');
+    // 編集内容を失わないよう編集モードは維持される
+    expect(screen.getByLabelText('商品名')).toBeInTheDocument();
+  });
+});
+
+describe('ProductMasterView — JANコード', () => {
+  it('JANコード未設定の商品に13桁を入力して保存できる', async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<ProductMasterView {...defaultProps} onUpdate={onUpdate} />);
+
+    await user.click(screen.getByText('編集'));
+    expect(screen.getByLabelText('JANコード')).toHaveValue('');
+    await user.type(screen.getByLabelText('JANコード'), '4901234567894');
+    await user.click(screen.getByText('保存'));
+
+    expect(onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ janCode: '4901234567894' }));
+  });
+
+  it('全角数字で入力しても半角に正規化されて保存できる', async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<ProductMasterView {...defaultProps} onUpdate={onUpdate} />);
+
+    await user.click(screen.getByText('編集'));
+    await user.type(screen.getByLabelText('JANコード'), '４９０１２３４５６７８９４');
+    await user.click(screen.getByText('保存'));
+
+    expect(onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ janCode: '4901234567894' }));
+  });
+
+  it('ハイフン区切りで入力しても除去されて保存できる', async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<ProductMasterView {...defaultProps} onUpdate={onUpdate} />);
+
+    await user.click(screen.getByText('編集'));
+    await user.type(screen.getByLabelText('JANコード'), '49-0123456-7894');
+    await user.click(screen.getByText('保存'));
+
+    expect(onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ janCode: '4901234567894' }));
+  });
+
+  it('桁数が不正な場合はエラーメッセージが表示され保存されない', async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<ProductMasterView {...defaultProps} onUpdate={onUpdate} />);
+
+    await user.click(screen.getByText('編集'));
+    await user.type(screen.getByLabelText('JANコード'), '490123456789'); // 12桁
+    await user.click(screen.getByText('保存'));
+
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('JANコードは数字8桁または13桁で入力してください');
+  });
+
+  it('エラー表示後に入力を直すと保存できる', async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    render(<ProductMasterView {...defaultProps} onUpdate={onUpdate} />);
+
+    await user.click(screen.getByText('編集'));
+    await user.type(screen.getByLabelText('JANコード'), '490123456789');
+    await user.click(screen.getByText('保存'));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('JANコード'), '4');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await user.click(screen.getByText('保存'));
+
+    expect(onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ janCode: '4901234567894' }));
+  });
+
+  it('JANコードを空にして保存するとundefinedになる', async () => {
+    const user = userEvent.setup();
+    const onUpdate = vi.fn();
+    const products = [makeProduct({ janCode: '4901234567894' })];
+    render(<ProductMasterView {...defaultProps} products={products} onUpdate={onUpdate} />);
+
+    await user.click(screen.getByText('編集'));
+    await user.clear(screen.getByLabelText('JANコード'));
+    await user.click(screen.getByText('保存'));
+
+    expect(onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ janCode: undefined }));
+  });
 });
 
 describe('ProductMasterView — 商品追加', () => {

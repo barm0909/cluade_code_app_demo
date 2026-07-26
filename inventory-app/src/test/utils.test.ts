@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { daysUntilExpiry, totalQuantity, generateLotNo, DEFAULT_WAREHOUSE_ID } from '../useInventory';
+import { daysUntilExpiry, totalQuantity, generateLotNo, normalizeJanCode, isValidJanCode, DEFAULT_WAREHOUSE_ID } from '../useInventory';
 import type { Product } from '../useInventory';
 
 const FIXED_NOW = new Date('2026-06-27T00:00:00.000Z');
@@ -56,5 +56,49 @@ describe('generateLotNo', () => {
 
   it('LOT-プレフィックスを含まない', () => {
     expect(generateLotNo('2026-12-31')).not.toMatch(/^LOT-/);
+  });
+});
+
+describe('normalizeJanCode', () => {
+  it('半角数字はそのまま返す', () => {
+    expect(normalizeJanCode('4901234567894')).toBe('4901234567894');
+  });
+
+  it('全角数字を半角に変換する', () => {
+    expect(normalizeJanCode('４９０１２３４５６７８９４')).toBe('4901234567894');
+  });
+
+  it('ハイフン・空白などの区切り文字を除去する', () => {
+    expect(normalizeJanCode('49-0123456 7894')).toBe('4901234567894');
+  });
+
+  it('13桁を超える入力は13桁に切り詰める', () => {
+    expect(normalizeJanCode('49012345678941234')).toBe('4901234567894');
+  });
+
+  it('空文字はそのまま空文字を返す', () => {
+    expect(normalizeJanCode('')).toBe('');
+  });
+});
+
+describe('isValidJanCode', () => {
+  it('未入力 (空文字) は有効とみなす', () => {
+    expect(isValidJanCode('')).toBe(true);
+  });
+
+  it('8桁は有効', () => {
+    expect(isValidJanCode('49123456')).toBe(true);
+  });
+
+  it('13桁は有効', () => {
+    expect(isValidJanCode('4901234567894')).toBe(true);
+  });
+
+  it('12桁は無効', () => {
+    expect(isValidJanCode('490123456789')).toBe(false);
+  });
+
+  it('数字以外を含む場合は無効', () => {
+    expect(isValidJanCode('49012345678a')).toBe(false);
   });
 });

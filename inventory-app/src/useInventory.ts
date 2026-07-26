@@ -78,6 +78,20 @@ export function totalQuantityByWarehouse(product: Product, warehouseId: string):
   return product.lots.filter(l => l.warehouseId === warehouseId).reduce((s, l) => s + l.quantity, 0);
 }
 
+// JANコード入力の正規化: 全角数字を半角へ直し、ハイフン・空白などの区切り文字を除去する
+// (IME オンのままの入力やバーコード表記のハイフンで検証に落ちないようにするため)
+export function normalizeJanCode(value: string): string {
+  return value
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/\D/g, '')
+    .slice(0, 13);
+}
+
+// 未入力 (未設定) は許可。入力があるときだけ 8桁/13桁 を要求する
+export function isValidJanCode(value: string): boolean {
+  return value === '' || /^(\d{8}|\d{13})$/.test(value);
+}
+
 export function generateLotNo(expiryDate?: string): string {
   if (expiryDate) return expiryDate.replace(/-/g, '');
   return new Date().toISOString().slice(0, 10).replace(/-/g, '');

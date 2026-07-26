@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { normalizeJanCode } from './useInventory';
 import type { Category, Product } from './useInventory';
 
 interface Props {
@@ -29,7 +30,7 @@ export function ProductModal({ product, categories, onSave, onClose }: Props) {
         <form onSubmit={e => { e.preventDefault(); onSave({ ...form, janCode: form.janCode.trim() || undefined }); onClose(); }}>
           <label>商品名 <input required value={form.name} onChange={e => set('name', e.target.value)} /></label>
           <label>SKU <input required value={form.sku} onChange={e => set('sku', e.target.value)} /></label>
-          <label>JANコード <input inputMode="numeric" pattern="\d{8}|\d{13}" title="8桁または13桁の数字で入力してください" placeholder="未設定可" value={form.janCode} onChange={e => set('janCode', e.target.value)} /></label>
+          <label>JANコード <input inputMode="numeric" maxLength={13} pattern="\d{8}|\d{13}" title="8桁または13桁の数字で入力してください" placeholder="未設定可" value={form.janCode} onChange={e => set('janCode', normalizeJanCode(e.target.value))} /></label>
           <label>カテゴリ
             <select required value={form.categoryId} onChange={e => set('categoryId', e.target.value)}>
               <option value="" disabled>選択してください</option>
