@@ -1,5 +1,8 @@
 .claude/settings.local.json
 
+# ルートで npm/wrangler/vitest を実行した際にできる生成物・キャッシュ
+node_modules/
+
 # Terraform (deploy/terraform, deploy/terraform-backend)
 deploy/**/.terraform/
 deploy/**/.terraform.lock.hcl
