@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
+import { isValidJanCode, normalizeJanCode } from './useInventory';
 import type { Category, Product } from './useInventory';
 
 interface Props {
@@ -18,17 +19,21 @@ const toForm = (p: Product): MasterForm => ({
 export function ProductMasterView({ products, categories, onUpdate, onDelete, onAddClick }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<MasterForm | null>(null);
+  const [error, setError] = useState('');
 
-  const startEdit = (p: Product) => { setEditingId(p.id); setForm(toForm(p)); };
-  const cancelEdit = () => { setEditingId(null); setForm(null); };
+  const startEdit = (p: Product) => { setEditingId(p.id); setForm(toForm(p)); setError(''); };
+  const cancelEdit = () => { setEditingId(null); setForm(null); setError(''); };
 
-  const set = (k: keyof MasterForm, v: string | number) => setForm(f => f ? { ...f, [k]: v } : f);
+  const set = (k: keyof MasterForm, v: string | number) => {
+    setForm(f => f ? { ...f, [k]: v } : f);
+    setError('');
+  };
 
   const saveEdit = () => {
     if (!editingId || !form) return;
-    if (!form.name.trim() || !form.sku.trim()) return;
-    const janCode = form.janCode?.trim() ?? '';
-    if (janCode && !/^(\d{8}|\d{13})$/.test(janCode)) return;
+    if (!form.name.trim() || !form.sku.trim()) { setError('商品名とSKUは必須です'); return; }
+    const janCode = normalizeJanCode(form.janCode ?? '');
+    if (!isValidJanCode(janCode)) { setError('JANコードは数字8桁または13桁で入力してください'); return; }
     onUpdate(editingId, { ...form, janCode: janCode || undefined });
     cancelEdit();
   };
@@ -53,10 +58,11 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
         </thead>
         <tbody>
           {products.map(p => editingId === p.id && form ? (
-            <tr key={p.id} className="master-editing-row">
+            <Fragment key={p.id}>
+            <tr className="master-editing-row">
               <td><input className="master-input" aria-label="商品名" required value={form.name} onChange={e => set('name', e.target.value)} /></td>
               <td><input className="master-input" aria-label="SKU" required value={form.sku} onChange={e => set('sku', e.target.value)} /></td>
-              <td><input className="master-input" aria-label="JANコード" inputMode="numeric" pattern="\d{8}|\d{13}" title="8桁または13桁の数字で入力してください" value={form.janCode ?? ''} onChange={e => set('janCode', e.target.value)} /></td>
+              <td><input className="master-input" aria-label="JANコード" inputMode="numeric" maxLength={13} title="8桁または13桁の数字で入力してください" value={form.janCode ?? ''} onChange={e => set('janCode', normalizeJanCode(e.target.value))} /></td>
               <td>
                 <select className="master-input" aria-label="カテゴリ" required value={form.categoryId} onChange={e => set('categoryId', e.target.value)}>
                   <option value="" disabled>選択してください</option>
@@ -73,6 +79,8 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
                 </div>
               </td>
             </tr>
+            {error && <tr className="master-editing-row"><td colSpan={8}><span className="field-error" role="alert">{error}</span></td></tr>}
+            </Fragment>
           ) : (
             <tr key={p.id}>
               <td><strong>{p.name}</strong></td>
