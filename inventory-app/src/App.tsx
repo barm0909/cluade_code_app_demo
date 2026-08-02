@@ -7,27 +7,10 @@ import { LedgerView } from './LedgerView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
+import { StocktakeView } from './StocktakeView';
+import { ExpiryBadge, WarehouseDot } from './badges';
 import { useConfirm, useNotify } from './useConfirm';
 import './App.css';
-
-function ExpiryBadge({ expiryDate }: { expiryDate?: string }) {
-  if (!expiryDate) return <span className="expiry-none">—</span>;
-  const days = daysUntilExpiry(expiryDate);
-  if (days < 0) return <span className="expiry-badge expired">期限切れ</span>;
-  if (days === 0) return <span className="expiry-badge expiring-today">今日まで</span>;
-  if (days <= 7) return <span className="expiry-badge expiring-soon">{days}日後</span>;
-  return <span className="expiry-badge ok">{expiryDate}</span>;
-}
-
-function WarehouseDot({ warehouse }: { warehouse?: Warehouse }) {
-  if (!warehouse) return <span className="wh-unknown">—</span>;
-  return (
-    <span className="wh-badge" style={{ borderColor: warehouse.color, color: warehouse.color }}>
-      <span className="wh-dot" style={{ background: warehouse.color }} />
-      {warehouse.name}
-    </span>
-  );
-}
 
 function lotRowClass(lot: Lot) {
   if (!lot.expiryDate) return '';
@@ -167,7 +150,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -178,7 +161,7 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'inventory' | 'master' | 'ledger'>('inventory');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'master' | 'stocktake' | 'ledger'>('inventory');
   const { confirm, confirmDialog } = useConfirm();
   const { notify, notifyDialog } = useNotify();
 
@@ -288,11 +271,14 @@ export default function App() {
       <div className="tabs">
         <button className={activeTab === 'inventory' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inventory')}>在庫一覧</button>
         <button className={activeTab === 'master' ? 'tab active' : 'tab'} onClick={() => setActiveTab('master')}>商品マスタ</button>
+        <button className={activeTab === 'stocktake' ? 'tab active' : 'tab'} onClick={() => setActiveTab('stocktake')}>棚卸</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
       </div>
 
       {activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
+      ) : activeTab === 'stocktake' ? (
+        <StocktakeView products={products} categories={categories} warehouses={warehouses} onApply={applyStocktake} />
       ) : activeTab === 'master' ? (<>
         <ProductMasterView products={products} categories={categories} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />

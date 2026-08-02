@@ -248,10 +248,34 @@ tr:hover td { background: #fafbff; }
 .ledger-summary .btn-add-lot { margin-left: auto; }
 .ledger-summary .btn-add-lot:disabled { background: #ccc; cursor: not-allowed; }
 
+/* Stocktake */
+.qty-matched { color: #999; }
+.stocktake-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.85rem; color: #888; font-weight: 600; cursor: pointer;
+}
+.stocktake-toggle input { cursor: pointer; }
+.stocktake-summary .stocktake-actions {
+  margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.stocktake-summary .btn-add-lot { margin-left: 0; }
+.stocktake-actions .btn-ghost-light:disabled { opacity: 0.4; cursor: not-allowed; }
+.stocktake-actions .btn-danger { padding: 9px 14px; font-size: 0.85rem; }
+.stocktake-actions .btn-danger:disabled { background: #ccc; cursor: not-allowed; }
+.stocktake-input {
+  width: 84px; padding: 5px 8px; text-align: right;
+  border: 1px solid #ddd; border-radius: 6px; font-size: 0.9rem; font-weight: 600;
+}
+.stocktake-input:focus { outline: none; border-color: #4f6ef7; }
+.stocktake-matched td { background: #fafafa; }
+.stocktake-over td { background: #f1f8f2; }
+.stocktake-short td { background: #fff5f5; }
+
 @media (max-width: 640px) {
   .stats-row { flex-direction: column; }
   .controls { flex-direction: column; }
   .ledger-controls { align-items: stretch; }
+  .stocktake-summary .stocktake-actions { margin-left: 0; }
   th:nth-child(3), td:nth-child(3) { display: none; }
 }
 
