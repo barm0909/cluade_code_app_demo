@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Warehouse, Product } from './useInventory';
+import { useConfirm } from './useConfirm';
 
 interface Props {
   warehouses: Warehouse[];
@@ -17,6 +18,7 @@ export function WarehouseMasterView({ warehouses, products, onAdd, onUpdate, onD
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
+  const { confirm, confirmDialog } = useConfirm();
 
   // 使用ロット数 = この倉庫を参照しているロットの数 (0 のときだけ削除可)
   const usageCount = (id: string) => products.reduce((s, p) => s + p.lots.filter(l => l.warehouseId === id).length, 0);
@@ -100,7 +102,10 @@ export function WarehouseMasterView({ warehouses, products, onAdd, onUpdate, onD
                         className="btn-delete"
                         disabled={count > 0}
                         title={count > 0 ? 'ロットが使用中の倉庫は削除できません' : undefined}
-                        onClick={() => { if (confirm(`倉庫「${w.name}」を削除しますか？`)) onDelete(w.id); }}
+                        onClick={async () => {
+                          const ok = await confirm({ message: `倉庫「${w.name}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
+                          if (ok) onDelete(w.id);
+                        }}
                       >削除</button>
                     </div>
                   </td>
@@ -111,6 +116,7 @@ export function WarehouseMasterView({ warehouses, products, onAdd, onUpdate, onD
           </tbody>
         </table>
       </div>
+      {confirmDialog}
     </section>
   );
 }

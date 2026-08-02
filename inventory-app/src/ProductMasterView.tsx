@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react';
 import { isValidJanCode, normalizeJanCode } from './useInventory';
 import type { Category, Product } from './useInventory';
+import { useConfirm } from './useConfirm';
 
 interface Props {
   products: Product[];
@@ -20,6 +21,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<MasterForm | null>(null);
   const [error, setError] = useState('');
+  const { confirm, confirmDialog } = useConfirm();
 
   const startEdit = (p: Product) => { setEditingId(p.id); setForm(toForm(p)); setError(''); };
   const cancelEdit = () => { setEditingId(null); setForm(null); setError(''); };
@@ -93,7 +95,10 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
               <td>
                 <div className="row-actions">
                   <button className="btn-edit" onClick={() => startEdit(p)}>編集</button>
-                  <button className="btn-delete" onClick={() => { if (confirm(`「${p.name}」を削除しますか？`)) onDelete(p.id); }}>削除</button>
+                  <button className="btn-delete" onClick={async () => {
+                    const ok = await confirm({ message: `「${p.name}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
+                    if (ok) onDelete(p.id);
+                  }}>削除</button>
                 </div>
               </td>
             </tr>
@@ -102,5 +107,6 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
         </tbody>
       </table>
     </div>
+    {confirmDialog}
   </>);
 }

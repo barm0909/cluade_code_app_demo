@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Category, Product } from './useInventory';
+import { useConfirm } from './useConfirm';
 
 interface Props {
   categories: Category[];
@@ -13,6 +14,7 @@ export function CategoryMasterView({ categories, products, onAdd, onUpdate, onDe
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const { confirm, confirmDialog } = useConfirm();
 
   const usageCount = (id: string) => products.filter(p => p.categoryId === id).length;
 
@@ -79,7 +81,10 @@ export function CategoryMasterView({ categories, products, onAdd, onUpdate, onDe
                         className="btn-delete"
                         disabled={count > 0}
                         title={count > 0 ? '使用中のカテゴリは削除できません' : undefined}
-                        onClick={() => { if (confirm(`カテゴリ「${c.name}」を削除しますか？`)) onDelete(c.id); }}
+                        onClick={async () => {
+                          const ok = await confirm({ message: `カテゴリ「${c.name}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
+                          if (ok) onDelete(c.id);
+                        }}
                       >削除</button>
                     </div>
                   </td>
@@ -90,6 +95,7 @@ export function CategoryMasterView({ categories, products, onAdd, onUpdate, onDe
           </tbody>
         </table>
       </div>
+      {confirmDialog}
     </section>
   );
 }

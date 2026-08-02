@@ -7,6 +7,7 @@ import { LedgerView } from './LedgerView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
+import { useConfirm, useNotify } from './useConfirm';
 import './App.css';
 
 function ExpiryBadge({ expiryDate }: { expiryDate?: string }) {
@@ -178,6 +179,8 @@ export default function App() {
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
   const [activeTab, setActiveTab] = useState<'inventory' | 'master' | 'ledger'>('inventory');
+  const { confirm, confirmDialog } = useConfirm();
+  const { notify, notifyDialog } = useNotify();
 
   const categoryNameById = useMemo(() => new Map(categories.map(c => [c.id, c.name])), [categories]);
 
@@ -237,7 +240,14 @@ export default function App() {
       <header className="header">
         <h1>食品在庫管理システム</h1>
         <div className="header-actions">
-          <button className="btn-ghost" onClick={() => { if (confirm('サンプルデータにリセットしますか？')) resetToSample(); }}>リセット</button>
+          <button className="btn-ghost" onClick={async () => {
+            const ok = await confirm({
+              message: '現在の在庫・入出庫記録をすべて破棄して、サンプルデータに戻します。よろしいですか？',
+              confirmLabel: 'リセット',
+              tone: 'danger',
+            });
+            if (ok) resetToSample();
+          }}>リセット</button>
           <button className="btn-secondary" onClick={exportCsv}>CSVエクスポート</button>
           <button className="btn-secondary" onClick={exportExcel}>Excelエクスポート</button>
           <label className="btn-secondary" style={{ cursor: 'pointer' }}>
@@ -249,9 +259,9 @@ export default function App() {
               try {
                 const { updated, errors } = await importExcel(file);
                 const msg = `${updated}件の在庫数を更新しました。` + (errors.length ? `\n\n警告:\n${errors.join('\n')}` : '');
-                alert(msg);
+                notify(msg, 'Excelインポート');
               } catch {
-                alert('Excelファイルの読み込みに失敗しました。');
+                notify('Excelファイルの読み込みに失敗しました。', 'Excelインポート');
               }
             }} />
           </label>
@@ -338,7 +348,10 @@ export default function App() {
                     <td onClick={e => e.stopPropagation()}>
                       <div className="row-actions">
                         <button className="btn-edit" onClick={() => setEditingProduct(p)}>編集</button>
-                        <button className="btn-delete" onClick={() => { if (confirm(`「${p.name}」を削除しますか？`)) deleteProduct(p.id); }}>削除</button>
+                        <button className="btn-delete" onClick={async () => {
+                          const ok = await confirm({ message: `「${p.name}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
+                          if (ok) deleteProduct(p.id);
+                        }}>削除</button>
                       </div>
                     </td>
                   </tr>
@@ -378,7 +391,10 @@ export default function App() {
                                           <button className="btn-ship" onClick={() => setIoLot({ product: p, lot: l, direction: 'out' })} disabled={l.quantity === 0}>出庫</button>
                                           <button className="btn-move" onClick={() => setMovingLot({ product: p, lot: l })}>移動</button>
                                           <button className="btn-edit" onClick={() => setEditingLot({ productId: p.id, lot: l })}>編集</button>
-                                          <button className="btn-delete" onClick={() => { if (confirm(`ロット「${l.lotNo}」を削除しますか？`)) deleteLot(p.id, l.id); }}>削除</button>
+                                          <button className="btn-delete" onClick={async () => {
+                                            const ok = await confirm({ message: `ロット「${l.lotNo}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
+                                            if (ok) deleteLot(p.id, l.id);
+                                          }}>削除</button>
                                         </div>
                                       </td>
                                     </tr>
@@ -438,6 +454,8 @@ export default function App() {
           onClose={() => setIoLot(null)}
         />
       )}
+      {confirmDialog}
+      {notifyDialog}
     </div>
   );
 }
