@@ -309,26 +309,39 @@ describe('ProductMasterView — 商品追加', () => {
 describe('ProductMasterView — 削除', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('削除ボタンで確認してOKするとonDeleteが商品IDで呼ばれる', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('削除ボタンだけではonDeleteは呼ばれず、確認モーダルが開く', async () => {
     const user = userEvent.setup();
     const onDelete = vi.fn();
     render(<ProductMasterView {...defaultProps} onDelete={onDelete} />);
 
     await user.click(screen.getByText('削除'));
 
-    expect(onDelete).toHaveBeenCalledWith('1');
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('「牛乳」を削除しますか？');
+    expect(onDelete).not.toHaveBeenCalled();
   });
 
-  it('確認ダイアログでキャンセルするとonDeleteが呼ばれない', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
+  it('確認モーダルで削除するとonDeleteが商品IDで呼ばれる', async () => {
     const user = userEvent.setup();
     const onDelete = vi.fn();
     render(<ProductMasterView {...defaultProps} onDelete={onDelete} />);
 
     await user.click(screen.getByText('削除'));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '削除' }));
+
+    expect(onDelete).toHaveBeenCalledWith('1');
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('確認モーダルでキャンセルするとonDeleteが呼ばれない', async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    render(<ProductMasterView {...defaultProps} onDelete={onDelete} />);
+
+    await user.click(screen.getByText('削除'));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'キャンセル' }));
 
     expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { WarehouseMasterView } from '../WarehouseMasterView';
 import type { Product, Warehouse } from '../useInventory';
@@ -108,19 +108,19 @@ describe('WarehouseMasterView — 削除', () => {
 
   it('未使用の倉庫を削除確認すると onDelete が呼ばれる', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', vi.fn(() => true));
     render(<WarehouseMasterView {...defaultProps} />);
     await user.click(screen.getAllByText('削除')[1]);
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('倉庫「保留倉庫」を削除しますか？');
+    await user.click(within(dialog).getByRole('button', { name: '削除' }));
     expect(defaultProps.onDelete).toHaveBeenCalledWith('wh-hold');
-    vi.unstubAllGlobals();
   });
 
   it('削除確認をキャンセルすると onDelete は呼ばれない', async () => {
     const user = userEvent.setup();
-    vi.stubGlobal('confirm', vi.fn(() => false));
     render(<WarehouseMasterView {...defaultProps} />);
     await user.click(screen.getAllByText('削除')[1]);
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'キャンセル' }));
     expect(defaultProps.onDelete).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 });
