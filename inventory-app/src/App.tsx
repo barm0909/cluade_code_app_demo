@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { Fragment, useState, useMemo } from 'react';
 import { useInventory, daysUntilExpiry, totalQuantity, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
 import type { Product, Lot, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
@@ -332,8 +332,8 @@ export default function App() {
               const qty = totalQuantity(p);
               const lots = visibleLots(p);
               return (
-                <>
-                  <tr key={p.id} className={`product-row ${productRowClass(p)}`} onClick={() => toggleExpand(p.id)}>
+                <Fragment key={p.id}>
+                  <tr className={`product-row ${productRowClass(p)}`} onClick={() => toggleExpand(p.id)}>
                     <td className="expand-cell">{expanded ? '▼' : '▶'}</td>
                     <td><strong>{p.name}</strong></td>
                     <td className="mono">{p.sku}</td>
@@ -356,7 +356,7 @@ export default function App() {
                     </td>
                   </tr>
                   {expanded && (
-                    <tr key={`${p.id}-lots`} className="lot-row-wrapper">
+                    <tr className="lot-row-wrapper">
                       <td colSpan={9} className="lot-cell">
                         <div className="lot-section">
                           <div className="lot-header">
@@ -407,7 +407,7 @@ export default function App() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               );
             })}
             {filtered.length === 0 && <tr><td colSpan={9} className="empty">商品が見つかりません</td></tr>}
