@@ -344,6 +344,124 @@ export function exportLedgerCsv(txns: StockTransaction[], warehouses: Warehouse[
   downloadCsv(`ledger_${new Date().toISOString().slice(0, 10)}.csv`, ledgerCsv(txns, warehouses));
 }
 
+// ---- 棚卸 (実地棚卸) ----
+// 帳簿在庫 (lot.quantity) に対して実地カウント数を入力し、差異を 調整入庫/調整出庫 として
+// 一括で確定する。ロット単位でカウントするので、counts は lotId をキーにした実数のマップ。
+
+export interface StocktakeFilter {
+  keyword: string; // 商品名・SKU・ロットNo の部分一致
+  categoryId: string;
+  warehouseId: string;
+}
+
+export const EMPTY_STOCKTAKE_FILTER: StocktakeFilter = { keyword: '', categoryId: '', warehouseId: '' };
+
+/** 棚卸表の1行 = 1ロット。商品側の情報を平坦に持たせて表示・CSV から参照しやすくする */
+export interface StocktakeRow {
+  productId: string;
+  productName: string;
+  productSku: string;
+  categoryId: string;
+  lotId: string;
+  lotNo: string;
+  expiryDate?: string;
+  warehouseId: string;
+  bookQuantity: number; // 帳簿在庫
+  costPrice: number;
+}
+
+export interface StocktakeDiff extends StocktakeRow {
+  actualQuantity: number; // 実地カウント数
+  diff: number; // 実数 - 帳簿 (正なら棚卸増、負なら棚卸減)
+  diffValue: number; // 差異金額 (原価ベース)
+}
+
+/** lotId → 実地カウント数。未カウントのロットはキー自体を持たない */
+export type StocktakeCounts = Record<string, number>;
+
+export function stocktakeRows(products: Product[], filter: StocktakeFilter): StocktakeRow[] {
+  const q = filter.keyword.trim().toLowerCase();
+  const rows: StocktakeRow[] = [];
+  for (const p of products) {
+    if (filter.categoryId && p.categoryId !== filter.categoryId) continue;
+    for (const l of p.lots) {
+      if (filter.warehouseId && l.warehouseId !== filter.warehouseId) continue;
+      if (q && !(p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || l.lotNo.toLowerCase().includes(q))) continue;
+      rows.push({
+        productId: p.id,
+        productName: p.name,
+        productSku: p.sku,
+        categoryId: p.categoryId,
+        lotId: l.id,
+        lotNo: l.lotNo,
+        expiryDate: l.expiryDate,
+        warehouseId: l.warehouseId,
+        bookQuantity: l.quantity,
+        costPrice: p.costPrice,
+      });
+    }
+  }
+  return rows;
+}
+
+/** カウント済みの行だけを差異付きで返す (差異0の行も「カウント済み」として含む) */
+export function stocktakeDiffs(rows: StocktakeRow[], counts: StocktakeCounts): StocktakeDiff[] {
+  const diffs: StocktakeDiff[] = [];
+  for (const row of rows) {
+    const actual = counts[row.lotId];
+    if (actual === undefined || !Number.isFinite(actual) || actual < 0) continue;
+    const diff = actual - row.bookQuantity;
+    diffs.push({ ...row, actualQuantity: actual, diff, diffValue: diff * row.costPrice });
+  }
+  return diffs;
+}
+
+export interface StocktakeTotals {
+  counted: number; // カウント済みロット数
+  matched: number; // 差異なし
+  over: number; // 棚卸増 (実数 > 帳簿)
+  short: number; // 棚卸減 (実数 < 帳簿)
+  diffValue: number; // 差異金額の合計 (原価ベース)
+}
+
+export function stocktakeTotals(diffs: StocktakeDiff[]): StocktakeTotals {
+  const totals: StocktakeTotals = { counted: diffs.length, matched: 0, over: 0, short: 0, diffValue: 0 };
+  for (const d of diffs) {
+    if (d.diff === 0) totals.matched++;
+    else if (d.diff > 0) totals.over++;
+    else totals.short++;
+    totals.diffValue += d.diffValue;
+  }
+  return totals;
+}
+
+// 棚卸表の CSV。未カウントの行は実数・差異を空欄で出すので、印刷してカウント用紙にも使える
+export function stocktakeCsv(rows: StocktakeRow[], counts: StocktakeCounts, warehouses: Warehouse[]): string {
+  const whName = (id: string) => warehouses.find(w => w.id === id)?.name ?? id;
+  const header = '商品名,SKU,ロットNo,賞味期限,倉庫,帳簿在庫,実数,差異,差異金額';
+  const body = rows.map(r => {
+    const actual = counts[r.lotId];
+    const counted = actual !== undefined && Number.isFinite(actual) && actual >= 0;
+    const diff = counted ? actual - r.bookQuantity : null;
+    return [
+      r.productName,
+      r.productSku,
+      r.lotNo,
+      r.expiryDate ?? '',
+      whName(r.warehouseId),
+      r.bookQuantity,
+      counted ? actual : '',
+      diff === null ? '' : diff,
+      diff === null ? '' : diff * r.costPrice,
+    ].map(csvCell).join(',');
+  });
+  return [header, ...body].join('\n');
+}
+
+export function exportStocktakeCsv(rows: StocktakeRow[], counts: StocktakeCounts, warehouses: Warehouse[]) {
+  downloadCsv(`stocktake_${new Date().toISOString().slice(0, 10)}.csv`, stocktakeCsv(rows, counts, warehouses));
+}
+
 export function useInventory() {
   // API から取得できるまで (またはできない環境では) サンプルデータで動作する
   const [products, setProducts] = useState<Product[]>(SAMPLE_DATA);
@@ -368,13 +486,21 @@ export function useInventory() {
     return () => { cancelled = true; };
   }, []);
 
-  const addTransaction = useCallback((txn: Omit<StockTransaction, 'id' | 'date'>) => {
+  // 棚卸のように複数件をまとめて記録したいとき用。1回の state 更新・1回の保存で済ませる
+  const addTransactions = useCallback((txns: Omit<StockTransaction, 'id' | 'date'>[]) => {
+    if (txns.length === 0) return;
     setLedger(prev => {
-      const next = [{ ...txn, id: crypto.randomUUID(), date: new Date().toISOString() }, ...prev];
+      const date = new Date().toISOString();
+      const created = txns.map(t => ({ ...t, id: crypto.randomUUID(), date }));
+      const next = [...created, ...prev];
       saveLedger(next);
       return next;
     });
   }, []);
+
+  const addTransaction = useCallback((txn: Omit<StockTransaction, 'id' | 'date'>) => {
+    addTransactions([txn]);
+  }, [addTransactions]);
 
   const update = (next: Product[]) => { save(next); setProducts(next); };
 
@@ -649,6 +775,42 @@ export function useInventory() {
     addTransaction({ type: '移動', productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, quantity: moveQty, note: '倉庫移動', fromWarehouseId, toWarehouseId: targetWarehouseId });
   }, [addTransaction, products]);
 
+  // 棚卸の確定。差異のあるロットだけ実数に置き換え、差異を 調整入庫/調整出庫 として帳票に残す。
+  // 画面の絞り込みに関係なく counts に入っているロットすべてを対象にする (絞り込みを変えても
+  // 入力済みのカウントが落ちないように)。確定した件数を返す。
+  const applyStocktake = useCallback((counts: StocktakeCounts): number => {
+    const diffs = stocktakeDiffs(stocktakeRows(products, EMPTY_STOCKTAKE_FILTER), counts).filter(d => d.diff !== 0);
+    if (diffs.length === 0) return 0;
+
+    const qtyByLotId = new Map(diffs.map(d => [d.lotId, d.actualQuantity]));
+    setProducts(prev => {
+      const now = new Date().toISOString();
+      const next = prev.map(p => {
+        if (!p.lots.some(l => qtyByLotId.has(l.id))) return p;
+        return {
+          ...p,
+          updatedAt: now,
+          lots: p.lots.map(l => qtyByLotId.has(l.id) ? { ...l, quantity: qtyByLotId.get(l.id)! } : l),
+        };
+      });
+      save(next);
+      return next;
+    });
+
+    addTransactions(diffs.map(d => ({
+      type: (d.diff > 0 ? '調整入庫' : '調整出庫') as TransactionType,
+      productId: d.productId,
+      productName: d.productName,
+      productSku: d.productSku,
+      lotNo: d.lotNo,
+      quantity: Math.abs(d.diff),
+      note: '棚卸',
+      ...(d.diff > 0 ? { toWarehouseId: d.warehouseId } : { fromWarehouseId: d.warehouseId }),
+    })));
+
+    return diffs.length;
+  }, [addTransactions, products]);
+
   const resetToSample = useCallback(() => {
     const fresh = JSON.parse(JSON.stringify(SAMPLE_DATA));
     // 倉庫・カテゴリ→商品の順で保存する (ロットが倉庫を、商品がカテゴリを参照するため)
@@ -661,5 +823,5 @@ export function useInventory() {
     saveLedger([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake };
 }
