@@ -39,6 +39,7 @@ export type TransactionType = '入荷' | '調整入庫' | '売上出庫' | '調�
 
 export const INBOUND_TYPES: TransactionType[] = ['入荷', '調整入庫'];
 export const OUTBOUND_TYPES: TransactionType[] = ['売上出庫', '調整出庫', '廃棄'];
+export const ALL_TRANSACTION_TYPES: TransactionType[] = [...INBOUND_TYPES, ...OUTBOUND_TYPES, '移動'];
 
 export function transactionDirection(type: TransactionType): 'in' | 'out' | 'move' {
   if (INBOUND_TYPES.includes(type)) return 'in';
@@ -62,6 +63,62 @@ export interface StockTransaction {
 
 export type SortField = 'name' | 'sku' | 'janCode' | 'category' | 'price' | 'costPrice';
 export type SortOrder = 'asc' | 'desc';
+
+// 帳票 (入出庫) の絞り込み条件。空文字は「その条件では絞らない」を意味する
+export interface LedgerFilter {
+  keyword: string; // 商品名・SKU・ロットNo の部分一致
+  from: string; // YYYY-MM-DD (この日を含む)
+  to: string; // YYYY-MM-DD (この日を含む)
+  type: TransactionType | '';
+  warehouseId: string; // 移動元・移動先のどちらかに一致すればヒット
+}
+
+export const EMPTY_LEDGER_FILTER: LedgerFilter = { keyword: '', from: '', to: '', type: '', warehouseId: '' };
+
+// txn.date は UTC の ISO 文字列だが帳票の表示は端末のローカル時刻。
+// 日付での絞り込みも表示と食い違わないようローカル日付に直してから比較する。
+export function localDateKey(iso: string): string {
+  const dt = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
+
+export function formatLedgerDateTime(iso: string): string {
+  const dt = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}/${pad(dt.getMonth() + 1)}/${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
+
+export function filterLedger(txns: StockTransaction[], filter: LedgerFilter): StockTransaction[] {
+  const q = filter.keyword.trim().toLowerCase();
+  return txns.filter(t => {
+    if (q && !(t.productName.toLowerCase().includes(q) || t.productSku.toLowerCase().includes(q) || t.lotNo.toLowerCase().includes(q))) return false;
+    if (filter.from || filter.to) {
+      const day = localDateKey(t.date);
+      if (filter.from && day < filter.from) return false;
+      if (filter.to && day > filter.to) return false;
+    }
+    if (filter.type && t.type !== filter.type) return false;
+    if (filter.warehouseId && t.fromWarehouseId !== filter.warehouseId && t.toWarehouseId !== filter.warehouseId) return false;
+    return true;
+  });
+}
+
+// 入庫は正、出庫は負。移動は総在庫を増減させないので符号なし
+export function signedQuantity(txn: StockTransaction): number {
+  return transactionDirection(txn.type) === 'out' ? -txn.quantity : txn.quantity;
+}
+
+export function ledgerTotals(txns: StockTransaction[]): { inbound: number; outbound: number; move: number } {
+  const totals = { inbound: 0, outbound: 0, move: 0 };
+  for (const t of txns) {
+    const dir = transactionDirection(t.type);
+    if (dir === 'in') totals.inbound += t.quantity;
+    else if (dir === 'out') totals.outbound += t.quantity;
+    else totals.move += t.quantity;
+  }
+  return totals;
+}
 
 export function daysUntilExpiry(expiryDate: string): number {
   const expiry = Date.parse(expiryDate); // YYYY-MM-DD → UTC midnight
@@ -249,6 +306,44 @@ function saveLedger(txns: StockTransaction[]) {
   persist('ledger', txns);
 }
 
+function downloadCsv(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// カンマ・改行・引用符を含む値だけ CSV の引用符でくくる (備考は自由入力のため)
+function csvCell(value: string | number): string {
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+export function ledgerCsv(txns: StockTransaction[], warehouses: Warehouse[]): string {
+  const whName = (id?: string) => id ? (warehouses.find(w => w.id === id)?.name ?? id) : '';
+  const header = '日時,区分,商品名,SKU,ロットNo,数量,移動元倉庫,移動先倉庫,備考';
+  const rows = txns.map(t => [
+    formatLedgerDateTime(t.date),
+    t.type,
+    t.productName,
+    t.productSku,
+    t.lotNo,
+    signedQuantity(t),
+    whName(t.fromWarehouseId),
+    whName(t.toWarehouseId),
+    t.note,
+  ].map(csvCell).join(','));
+  return [header, ...rows].join('\n');
+}
+
+// 絞り込み後の帳票をそのまま CSV に出す (画面に見えているものが出力される)
+export function exportLedgerCsv(txns: StockTransaction[], warehouses: Warehouse[]) {
+  downloadCsv(`ledger_${new Date().toISOString().slice(0, 10)}.csv`, ledgerCsv(txns, warehouses));
+}
+
 export function useInventory() {
   // API から取得できるまで (またはできない環境では) サンプルデータで動作する
   const [products, setProducts] = useState<Product[]>(SAMPLE_DATA);
@@ -346,14 +441,19 @@ export function useInventory() {
       return next;
     });
     if (product && lot && actualDelta !== 0) {
+      const txnType = type ?? (actualDelta > 0 ? '調整入庫' : '調整出庫');
       addTransaction({
-        type: type ?? (actualDelta > 0 ? '調整入庫' : '調整出庫'),
+        type: txnType,
         productId,
         productName: product.name,
         productSku: product.sku,
         lotNo: lot.lotNo,
         quantity: Math.abs(actualDelta),
         note: '',
+        // 倉庫での絞り込み・集計ができるよう、入出庫にもロットの倉庫を残す
+        ...(transactionDirection(txnType) === 'out'
+          ? { fromWarehouseId: lot.warehouseId }
+          : { toWarehouseId: lot.warehouseId }),
       });
     }
   }, [addTransaction, products]);
@@ -380,13 +480,7 @@ export function useInventory() {
         ? p.lots.map(l => [p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
         : [[p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, '', '', 0].join(',')]
     );
-    const blob = new Blob([header + '\n' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `inventory_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(`inventory_${new Date().toISOString().slice(0, 10)}.csv`, header + '\n' + rows.join('\n'));
   }, [products, categories]);
 
   const importExcel = useCallback((file: File): Promise<{ updated: number; errors: string[] }> => {
@@ -454,6 +548,7 @@ export function useInventory() {
                   lotNo: lot.lotNo,
                   quantity: Math.abs(c.delta),
                   note: 'Excelインポート',
+                  ...(c.delta > 0 ? { toWarehouseId: lot.warehouseId } : { fromWarehouseId: lot.warehouseId }),
                 });
               }
             }
