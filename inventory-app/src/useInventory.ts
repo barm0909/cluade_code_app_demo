@@ -725,8 +725,22 @@ export function useInventory() {
   }, []);
 
   const deleteProduct = useCallback((id: string) => {
+    const product = products.find(p => p.id === id);
     setProducts(prev => { const next = prev.filter(p => p.id !== id); save(next); return next; });
-  }, []);
+    // 商品を消すと在庫も一緒に消えるので、残っていたロットの分を 調整出庫 として帳票に残す
+    if (product) {
+      addTransactions(product.lots.filter(l => l.quantity > 0).map(l => ({
+        type: '調整出庫' as TransactionType,
+        productId: id,
+        productName: product.name,
+        productSku: product.sku,
+        lotNo: l.lotNo,
+        quantity: l.quantity,
+        note: '商品削除',
+        fromWarehouseId: l.warehouseId,
+      })));
+    }
+  }, [addTransactions, products]);
 
   const addLot = useCallback((productId: string, lot: Omit<Lot, 'id' | 'warehouseId'> & { warehouseId?: string }) => {
     const lotWithWarehouse = { ...lot, warehouseId: lot.warehouseId ?? DEFAULT_WAREHOUSE_ID };
@@ -743,23 +757,60 @@ export function useInventory() {
     }
   }, [addTransaction, products]);
 
+  // 編集フォームは数量も倉庫も直接書き換えられるので、その差分を帳票に残す。
+  // 両方変わったときは「移動してから数量を調整した」とみなす (移動は編集前の数量、
+  // 数量調整は移動後の倉庫に付く) ことで、倉庫ごとの増減が食い違わないようにする。
   const updateLot = useCallback((productId: string, lotId: string, lot: Omit<Lot, 'id'>) => {
+    const product = products.find(p => p.id === productId);
+    const before = product?.lots.find(l => l.id === lotId);
     setProducts(prev => {
       const next = prev.map(p => p.id === productId
         ? { ...p, lots: p.lots.map(l => l.id === lotId ? { ...lot, id: lotId } : l), updatedAt: new Date().toISOString() }
         : p);
       save(next); return next;
     });
-  }, []);
+    if (!product || !before) return;
+
+    const base = { productId, productName: product.name, productSku: product.sku, lotNo: lot.lotNo, note: 'ロット編集' };
+    const txns: Omit<StockTransaction, 'id' | 'date'>[] = [];
+    if (before.warehouseId !== lot.warehouseId && before.quantity > 0) {
+      txns.push({ ...base, type: '移動', quantity: before.quantity, fromWarehouseId: before.warehouseId, toWarehouseId: lot.warehouseId });
+    }
+    const delta = lot.quantity - before.quantity;
+    if (delta !== 0) {
+      txns.push({
+        ...base,
+        type: delta > 0 ? '調整入庫' : '調整出庫',
+        quantity: Math.abs(delta),
+        ...(delta > 0 ? { toWarehouseId: lot.warehouseId } : { fromWarehouseId: lot.warehouseId }),
+      });
+    }
+    addTransactions(txns);
+  }, [addTransactions, products]);
 
   const deleteLot = useCallback((productId: string, lotId: string) => {
+    const product = products.find(p => p.id === productId);
+    const lot = product?.lots.find(l => l.id === lotId);
     setProducts(prev => {
       const next = prev.map(p => p.id === productId
         ? { ...p, lots: p.lots.filter(l => l.id !== lotId), updatedAt: new Date().toISOString() }
         : p);
       save(next); return next;
     });
-  }, []);
+    // ロットを消した分だけ在庫が減るので、調整出庫として帳票に残す
+    if (product && lot && lot.quantity > 0) {
+      addTransaction({
+        type: '調整出庫',
+        productId,
+        productName: product.name,
+        productSku: product.sku,
+        lotNo: lot.lotNo,
+        quantity: lot.quantity,
+        note: 'ロット削除',
+        fromWarehouseId: lot.warehouseId,
+      });
+    }
+  }, [addTransaction, products]);
 
   const adjustLotQuantity = useCallback((productId: string, lotId: string, delta: number, type?: TransactionType) => {
     const product = products.find(p => p.id === productId);
