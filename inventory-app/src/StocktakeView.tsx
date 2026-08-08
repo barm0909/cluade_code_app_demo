@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
   EMPTY_STOCKTAKE_FILTER,
+  csvExportHint,
+  csvExportLabel,
   exportStocktakeCsv,
   stocktakeDiffs,
   stocktakeRows,
@@ -135,8 +137,13 @@ export function StocktakeView({ products, categories, warehouses, onApply }: Pro
           <button className="btn-ghost-light" onClick={() => setCounts({})} disabled={totals.counted === 0}>
             入力クリア
           </button>
-          <button className="btn-add-lot" onClick={() => exportStocktakeCsv(rows, counts, warehouses)} disabled={rows.length === 0}>
-            CSVエクスポート
+          <button
+            className="btn-add-lot"
+            onClick={() => exportStocktakeCsv(rows, counts, warehouses)}
+            disabled={rows.length === 0}
+            title={csvExportHint('stocktake')}
+          >
+            {csvExportLabel('stocktake')}
           </button>
           <button className="btn-danger" onClick={handleApply} disabled={diffCount === 0}>
             棚卸を確定（{diffCount}件）

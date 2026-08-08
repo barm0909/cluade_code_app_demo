@@ -1,5 +1,5 @@
 import { Fragment, useState, useMemo } from 'react';
-import { useInventory, daysUntilExpiry, totalQuantity, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
+import { useInventory, daysUntilExpiry, totalQuantity, csvExportHint, csvExportLabel, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
 import type { Product, Lot, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
@@ -231,7 +231,9 @@ export default function App() {
             });
             if (ok) resetToSample();
           }}>リセット</button>
-          <button className="btn-secondary" onClick={exportCsv}>CSVエクスポート</button>
+          <button className="btn-secondary" onClick={exportCsv} title={csvExportHint('inventory')}>
+            {csvExportLabel('inventory')}
+          </button>
           <button className="btn-secondary" onClick={exportExcel}>Excelエクスポート</button>
           <label className="btn-secondary" style={{ cursor: 'pointer' }}>
             Excelインポート

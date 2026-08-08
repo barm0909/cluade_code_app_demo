@@ -63,11 +63,10 @@ describe('exportCsv', () => {
     expect(mockClick).toHaveBeenCalledTimes(1);
   });
 
-  it('download 属性に今日の日付を含む .csv ファイル名が設定される', () => {
+  it('download 属性に中身が分かるラベルと今日の日付を含む .csv ファイル名が設定される', () => {
     const { result } = renderHook(() => useInventory());
     act(() => { result.current.exportCsv(); });
-    expect(mockAnchor.download).toContain('2026-06-28');
-    expect(mockAnchor.download).toMatch(/\.csv$/);
+    expect(mockAnchor.download).toBe('在庫一覧_2026-06-28.csv');
   });
 
   it('href に createObjectURL の戻り値が設定される', () => {

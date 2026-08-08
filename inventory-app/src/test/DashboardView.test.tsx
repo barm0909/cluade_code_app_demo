@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DashboardView } from '../DashboardView';
+import { csvExportLabel } from '../useInventory';
 import type { Category, Product, Warehouse } from '../useInventory';
 
 const WAREHOUSES: Warehouse[] = [
@@ -72,7 +73,7 @@ describe('DashboardView', () => {
     const enough: Product[] = [{ ...PRODUCTS[0], minQuantity: 1 }];
     render(<DashboardView products={enough} categories={CATEGORIES} warehouses={WAREHOUSES} />);
     expect(screen.getByText(/発注点を下回っている商品はありません/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'CSVエクスポート' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: csvExportLabel('reorder') })).toBeDisabled();
   });
 
   it('期限アラートは既定で7日以内、表示範囲を広げると対象が増える', async () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LedgerView } from '../LedgerView';
+import { csvExportLabel } from '../useInventory';
 import type { StockTransaction, Warehouse } from '../useInventory';
 
 const WAREHOUSES: Warehouse[] = [
@@ -118,7 +119,7 @@ describe('LedgerView — CSVエクスポート', () => {
   it('ボタンを押すとダウンロードが発火する', async () => {
     const user = userEvent.setup();
     render(<LedgerView ledger={LEDGER} warehouses={WAREHOUSES} />);
-    await user.click(screen.getByRole('button', { name: 'CSVエクスポート' }));
+    await user.click(screen.getByRole('button', { name: csvExportLabel('ledger') }));
     expect(mockClick).toHaveBeenCalledTimes(1);
   });
 
@@ -126,14 +127,14 @@ describe('LedgerView — CSVエクスポート', () => {
     const user = userEvent.setup();
     render(<LedgerView ledger={LEDGER} warehouses={WAREHOUSES} />);
     await user.type(screen.getByPlaceholderText(/商品名・SKU・ロットNoで検索/), 'チーズ');
-    expect(screen.getByRole('button', { name: 'CSVエクスポート' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: csvExportLabel('ledger') })).toBeDisabled();
   });
 
   it('出力されるのは絞り込み後の記録だけ', async () => {
     const user = userEvent.setup();
     render(<LedgerView ledger={LEDGER} warehouses={WAREHOUSES} />);
     await user.selectOptions(screen.getByLabelText('区分'), '廃棄');
-    await user.click(screen.getByRole('button', { name: 'CSVエクスポート' }));
+    await user.click(screen.getByRole('button', { name: csvExportLabel('ledger') }));
 
     const blob = mockCreateObjectURL.mock.calls.at(-1)![0];
     const text = await blob.text();
