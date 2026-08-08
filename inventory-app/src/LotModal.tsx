@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Lot, Warehouse } from './useInventory';
 import { generateLotNo, DEFAULT_WAREHOUSE_ID } from './useInventory';
+import { NumberInput } from './NumberInput';
 
 interface Props {
   lot: Lot | null;
@@ -74,7 +75,7 @@ export function LotModal({ lot, warehouses, onSave, onClose }: Props) {
             />
             {lotError && <span className="field-error">{lotError}</span>}
           </label>
-          <label htmlFor="lot-qty">在庫数 <input id="lot-qty" type="number" min={0} required value={form.quantity} onChange={e => setForm(f => ({ ...f, quantity: +e.target.value }))} /></label>
+          <label htmlFor="lot-qty">在庫数 <NumberInput id="lot-qty" min={0} required value={form.quantity} onValueChange={v => setForm(f => ({ ...f, quantity: v }))} /></label>
           <label htmlFor="lot-warehouse">
             倉庫
             <select id="lot-warehouse" value={form.warehouseId} onChange={e => setForm(f => ({ ...f, warehouseId: e.target.value }))}>

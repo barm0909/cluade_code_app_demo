@@ -10,6 +10,7 @@ import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
 import { StocktakeView } from './StocktakeView';
 import { ExpiryBadge, WarehouseDot } from './badges';
+import { NumberInput } from './NumberInput';
 import { useConfirm, useNotify } from './useConfirm';
 import './App.css';
 
@@ -64,14 +65,13 @@ function MoveLotModal({ lot, product, warehouses, onMove, onClose }: MoveLotModa
           </label>
           <label htmlFor="move-qty">
             移動数量
-            <input
+            <NumberInput
               id="move-qty"
-              type="number"
               min={1}
               max={lot.quantity}
               required
               value={qty}
-              onChange={e => setQty(+e.target.value)}
+              onValueChange={setQty}
             />
           </label>
           <div className="modal-actions">
@@ -130,14 +130,13 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
           </label>
           <label htmlFor="io-qty">
             {label}数量
-            <input
+            <NumberInput
               id="io-qty"
-              type="number"
               min={1}
               max={maxQty}
               required
               value={qty}
-              onChange={e => setQty(+e.target.value)}
+              onValueChange={setQty}
             />
           </label>
           <div className="modal-actions">

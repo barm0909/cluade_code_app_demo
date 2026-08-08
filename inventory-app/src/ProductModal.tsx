@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { normalizeJanCode } from './useInventory';
 import type { Category, Product } from './useInventory';
+import { NumberInput } from './NumberInput';
 
 interface Props {
   product: Product | null;
@@ -37,9 +38,9 @@ export function ProductModal({ product, categories, onSave, onClose }: Props) {
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </label>
-          <label>最低在庫数 <input type="number" min={0} required value={form.minQuantity} onChange={e => set('minQuantity', +e.target.value)} /></label>
-          <label>販売定価 (円) <input type="number" min={0} required value={form.price} onChange={e => set('price', +e.target.value)} /></label>
-          <label>原価 (円) <input type="number" min={0} required value={form.costPrice} onChange={e => set('costPrice', +e.target.value)} /></label>
+          <label>最低在庫数 <NumberInput min={0} required value={form.minQuantity} onValueChange={v => set('minQuantity', v)} /></label>
+          <label>販売定価 (円) <NumberInput min={0} required value={form.price} onValueChange={v => set('price', v)} /></label>
+          <label>原価 (円) <NumberInput min={0} required value={form.costPrice} onValueChange={v => set('costPrice', v)} /></label>
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
             <button type="submit" className="btn-primary">保存</button>
