@@ -315,3 +315,33 @@ tr:hover td { background: #fafbff; }
   background: #f5f5f5; border-radius: 8px; padding: 10px 14px;
   margin-bottom: 16px; font-size: 0.9rem; line-height: 1.7;
 }
+
+/* Dashboard */
+.dashboard-stats .stat-card { flex: 1 1 180px; }
+.stat-sub { font-size: 0.75rem; color: #999; margin-top: 4px; }
+.dashboard-section { margin-bottom: 28px; }
+.dashboard-section-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.dashboard-section-title { margin: 0; font-size: 1rem; color: #333; }
+.dashboard-section-note { font-size: 0.85rem; color: #888; font-weight: 600; }
+.dashboard-section-head .btn-add-lot { margin-left: auto; }
+.dashboard-section-head .btn-add-lot:disabled { background: #ccc; cursor: not-allowed; }
+.dashboard-days {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.85rem; color: #888; font-weight: 600;
+}
+.dashboard-days select {
+  padding: 5px 8px; border: 1px solid #ddd; border-radius: 6px;
+  font-size: 0.85rem; background: white; color: #333;
+}
+.dashboard-columns { display: flex; gap: 16px; flex-wrap: wrap; }
+.dashboard-half { flex: 1 1 420px; min-width: 0; }
+.share-bar {
+  position: relative; display: flex; align-items: center;
+  height: 18px; min-width: 90px; background: #eef1f8; border-radius: 4px; overflow: hidden;
+}
+.share-bar-fill { height: 100%; background: #4f6ef7; opacity: 0.35; }
+.share-bar-label {
+  position: absolute; left: 8px; font-size: 0.75rem; font-weight: 600; color: #445;
+}

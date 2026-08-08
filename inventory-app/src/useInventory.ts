@@ -462,6 +462,212 @@ export function exportStocktakeCsv(rows: StocktakeRow[], counts: StocktakeCounts
   downloadCsv(`stocktake_${new Date().toISOString().slice(0, 10)}.csv`, stocktakeCsv(rows, counts, warehouses));
 }
 
+// ---------------------------------------------------------------------------
+// ダッシュボード
+// 既存の products / categories / warehouses を集計するだけで、専用の永続データは持たない。
+// ---------------------------------------------------------------------------
+
+/** 「期限間近」の既定しきい値 (日)。在庫一覧のアラートバナーと同じ 7日 */
+export const EXPIRY_SOON_DAYS = 7;
+
+/** ダッシュボードの期限アラートで選べるしきい値 (日) */
+export const DASHBOARD_EXPIRY_OPTIONS = [7, 14, 30];
+
+export interface DashboardTotals {
+  productCount: number;
+  lotCount: number;
+  quantity: number; // 全ロットの在庫数合計
+  costValue: number; // 在庫金額 (原価ベース)
+  retailValue: number; // 在庫金額 (販売定価ベース)
+  expiredLots: number; // 期限切れロット数 (在庫が残っているロットのみ)
+  expiringLots: number; // withinDays 以内に期限を迎えるロット数 (同上)
+  lowStock: number; // 在庫数 <= 発注点 の商品数 (欠品を含む)
+  outOfStock: number; // 在庫数 0 の商品数 (lowStock の内数)
+}
+
+export function dashboardTotals(products: Product[], withinDays: number = EXPIRY_SOON_DAYS): DashboardTotals {
+  const totals: DashboardTotals = {
+    productCount: products.length,
+    lotCount: 0,
+    quantity: 0,
+    costValue: 0,
+    retailValue: 0,
+    expiredLots: 0,
+    expiringLots: 0,
+    lowStock: 0,
+    outOfStock: 0,
+  };
+  for (const p of products) {
+    const qty = totalQuantity(p);
+    totals.lotCount += p.lots.length;
+    totals.quantity += qty;
+    totals.costValue += qty * p.costPrice;
+    totals.retailValue += qty * p.price;
+    if (qty <= p.minQuantity) totals.lowStock++;
+    if (qty === 0) totals.outOfStock++;
+    for (const l of p.lots) {
+      if (!l.expiryDate || l.quantity <= 0) continue;
+      const days = daysUntilExpiry(l.expiryDate);
+      if (days < 0) totals.expiredLots++;
+      else if (days <= withinDays) totals.expiringLots++;
+    }
+  }
+  return totals;
+}
+
+/** 要発注リストの1行 = 1商品 (在庫数が発注点以下のもの) */
+export interface LowStockRow {
+  productId: string;
+  productName: string;
+  productSku: string;
+  categoryId: string;
+  quantity: number;
+  minQuantity: number;
+  shortage: number; // 発注点までの不足数 (発注点ちょうどなら 0)
+  costPrice: number;
+  restockCost: number; // 不足数を原価で埋めた場合の金額
+}
+
+/** 在庫数 <= 発注点 の商品を、不足数の大きい順 (同数なら商品名順) に返す */
+export function lowStockRows(products: Product[]): LowStockRow[] {
+  const rows: LowStockRow[] = [];
+  for (const p of products) {
+    const quantity = totalQuantity(p);
+    if (quantity > p.minQuantity) continue;
+    const shortage = Math.max(0, p.minQuantity - quantity);
+    rows.push({
+      productId: p.id,
+      productName: p.name,
+      productSku: p.sku,
+      categoryId: p.categoryId,
+      quantity,
+      minQuantity: p.minQuantity,
+      shortage,
+      costPrice: p.costPrice,
+      restockCost: shortage * p.costPrice,
+    });
+  }
+  return rows.sort((a, b) => b.shortage - a.shortage || a.productName.localeCompare(b.productName));
+}
+
+/** 期限アラートの1行 = 1ロット */
+export interface ExpiryRow {
+  productId: string;
+  productName: string;
+  productSku: string;
+  lotId: string;
+  lotNo: string;
+  expiryDate: string;
+  days: number; // 期限までの日数 (負なら期限切れ)
+  quantity: number;
+  warehouseId: string;
+  costValue: number; // そのロットの在庫金額 (原価ベース)
+}
+
+/**
+ * 期限切れ + withinDays 以内に期限を迎えるロットを、期限の早い順に返す。
+ * 在庫が残っていないロット・期限のないロットは対象外。
+ */
+export function expiringLotRows(products: Product[], withinDays: number = EXPIRY_SOON_DAYS): ExpiryRow[] {
+  const rows: ExpiryRow[] = [];
+  for (const p of products) {
+    for (const l of p.lots) {
+      if (!l.expiryDate || l.quantity <= 0) continue;
+      const days = daysUntilExpiry(l.expiryDate);
+      if (days > withinDays) continue;
+      rows.push({
+        productId: p.id,
+        productName: p.name,
+        productSku: p.sku,
+        lotId: l.id,
+        lotNo: l.lotNo,
+        expiryDate: l.expiryDate,
+        days,
+        quantity: l.quantity,
+        warehouseId: l.warehouseId,
+        costValue: l.quantity * p.costPrice,
+      });
+    }
+  }
+  return rows.sort((a, b) => a.expiryDate.localeCompare(b.expiryDate) || a.productName.localeCompare(b.productName));
+}
+
+/** 倉庫別・カテゴリ別サマリの1行 */
+export interface GroupSummary {
+  id: string;
+  name: string;
+  productCount: number;
+  lotCount: number;
+  quantity: number;
+  costValue: number;
+  retailValue: number;
+  share: number; // 原価金額の構成比 (0〜1)。全体が0なら0
+}
+
+function withShare(rows: GroupSummary[]): GroupSummary[] {
+  const total = rows.reduce((s, r) => s + r.costValue, 0);
+  if (total <= 0) return rows;
+  return rows.map(r => ({ ...r, share: r.costValue / total }));
+}
+
+/**
+ * 倉庫ごとの在庫サマリ。マスタに存在しない倉庫を参照するロット
+ * (通常は起こらない — 使用中の倉庫は削除できない) は集計から外れる。
+ */
+export function warehouseSummaries(products: Product[], warehouses: Warehouse[]): GroupSummary[] {
+  const rows = warehouses.map(w => {
+    const row: GroupSummary = {
+      id: w.id, name: w.name, productCount: 0, lotCount: 0, quantity: 0, costValue: 0, retailValue: 0, share: 0,
+    };
+    for (const p of products) {
+      const lots = p.lots.filter(l => l.warehouseId === w.id);
+      if (lots.length === 0) continue;
+      const qty = lots.reduce((s, l) => s + l.quantity, 0);
+      row.productCount++;
+      row.lotCount += lots.length;
+      row.quantity += qty;
+      row.costValue += qty * p.costPrice;
+      row.retailValue += qty * p.price;
+    }
+    return row;
+  });
+  return withShare(rows);
+}
+
+/** カテゴリごとの在庫サマリ */
+export function categorySummaries(products: Product[], categories: Category[]): GroupSummary[] {
+  const rows = categories.map(c => {
+    const row: GroupSummary = {
+      id: c.id, name: c.name, productCount: 0, lotCount: 0, quantity: 0, costValue: 0, retailValue: 0, share: 0,
+    };
+    for (const p of products) {
+      if (p.categoryId !== c.id) continue;
+      const qty = totalQuantity(p);
+      row.productCount++;
+      row.lotCount += p.lots.length;
+      row.quantity += qty;
+      row.costValue += qty * p.costPrice;
+      row.retailValue += qty * p.price;
+    }
+    return row;
+  });
+  return withShare(rows);
+}
+
+/** 要発注リストの CSV。そのまま発注依頼の下書きに使える想定 */
+export function lowStockCsv(rows: LowStockRow[], categories: Category[]): string {
+  const catName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
+  const header = '商品名,SKU,カテゴリ,在庫数,発注点,不足数,発注見込金額';
+  const body = rows.map(r => [
+    r.productName, r.productSku, catName(r.categoryId), r.quantity, r.minQuantity, r.shortage, r.restockCost,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportLowStockCsv(rows: LowStockRow[], categories: Category[]) {
+  downloadCsv(`reorder_${new Date().toISOString().slice(0, 10)}.csv`, lowStockCsv(rows, categories));
+}
+
 export function useInventory() {
   // API から取得できるまで (またはできない環境では) サンプルデータで動作する
   const [products, setProducts] = useState<Product[]>(SAMPLE_DATA);
