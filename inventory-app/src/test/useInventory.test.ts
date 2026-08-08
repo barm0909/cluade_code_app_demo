@@ -214,6 +214,147 @@ describe('useInventory — ledger（入出庫記録）', () => {
     expect(result.current.ledger[0].quantity).toBe(4);
   });
 
+  it('deleteLot で残っていた在庫が調整出庫として記録される', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'del ledger', sku: 'DL-001', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'DL-001')!;
+    act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 7, warehouseId: 'wh-hold' }); });
+    const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
+    const beforeCount = result.current.ledger.length;
+
+    act(() => { result.current.deleteLot(product.id, lot.id); });
+
+    expect(result.current.ledger.length).toBe(beforeCount + 1);
+    expect(result.current.ledger[0].type).toBe('調整出庫');
+    expect(result.current.ledger[0].quantity).toBe(7);
+    expect(result.current.ledger[0].lotNo).toBe('20261231');
+    expect(result.current.ledger[0].note).toBe('ロット削除');
+    expect(result.current.ledger[0].fromWarehouseId).toBe('wh-hold');
+  });
+
+  it('在庫0のロットを削除しても帳票には何も記録されない', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'zero lot', sku: 'DL-002', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'DL-002')!;
+    act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 0 }); });
+    const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
+    const beforeCount = result.current.ledger.length;
+
+    act(() => { result.current.deleteLot(product.id, lot.id); });
+
+    expect(result.current.ledger.length).toBe(beforeCount);
+  });
+
+  it('deleteProduct で在庫の残る全ロットが調整出庫として記録される', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'del product ledger', sku: 'DP-001', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'DP-001')!;
+    act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 4 }); });
+    act(() => { result.current.addLot(product.id, { lotNo: '20270101', quantity: 6, warehouseId: 'wh-hold' }); });
+    act(() => { result.current.addLot(product.id, { lotNo: '20270202', quantity: 0 }); });
+    const beforeCount = result.current.ledger.length;
+
+    act(() => { result.current.deleteProduct(product.id); });
+
+    // 在庫0のロットは記録しないので2件
+    expect(result.current.ledger.length).toBe(beforeCount + 2);
+    const recorded = result.current.ledger.slice(0, 2);
+    expect(recorded.every(t => t.type === '調整出庫' && t.note === '商品削除')).toBe(true);
+    expect(recorded.map(t => [t.lotNo, t.quantity, t.fromWarehouseId])).toEqual([
+      ['20261231', 4, 'wh-sales'],
+      ['20270101', 6, 'wh-hold'],
+    ]);
+  });
+
+  it('updateLot で数量を変えると差分が調整入庫・調整出庫として記録される', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'upd ledger', sku: 'UL-001', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'UL-001')!;
+    act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5 }); });
+    const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
+
+    act(() => { result.current.updateLot(product.id, lot.id, { lotNo: '20261231', quantity: 12, warehouseId: lot.warehouseId }); });
+    expect(result.current.ledger[0].type).toBe('調整入庫');
+    expect(result.current.ledger[0].quantity).toBe(7);
+    expect(result.current.ledger[0].note).toBe('ロット編集');
+    expect(result.current.ledger[0].toWarehouseId).toBe('wh-sales');
+
+    act(() => { result.current.updateLot(product.id, lot.id, { lotNo: '20261231', quantity: 2, warehouseId: lot.warehouseId }); });
+    expect(result.current.ledger[0].type).toBe('調整出庫');
+    expect(result.current.ledger[0].quantity).toBe(10);
+    expect(result.current.ledger[0].fromWarehouseId).toBe('wh-sales');
+  });
+
+  it('updateLot で倉庫だけ変えると移動として記録される', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'upd wh', sku: 'UL-002', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'UL-002')!;
+    act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5 }); });
+    const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
+    const beforeCount = result.current.ledger.length;
+
+    act(() => { result.current.updateLot(product.id, lot.id, { lotNo: '20261231', quantity: 5, warehouseId: 'wh-defect' }); });
+
+    expect(result.current.ledger.length).toBe(beforeCount + 1);
+    expect(result.current.ledger[0].type).toBe('移動');
+    expect(result.current.ledger[0].quantity).toBe(5);
+    expect(result.current.ledger[0].fromWarehouseId).toBe('wh-sales');
+    expect(result.current.ledger[0].toWarehouseId).toBe('wh-defect');
+  });
+
+  it('updateLot で数量と倉庫を同時に変えると移動と数量調整の2件が記録される', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'upd both', sku: 'UL-003', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'UL-003')!;
+    act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5 }); });
+    const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
+    const beforeCount = result.current.ledger.length;
+
+    act(() => { result.current.updateLot(product.id, lot.id, { lotNo: '20261231', quantity: 8, warehouseId: 'wh-hold' }); });
+
+    expect(result.current.ledger.length).toBe(beforeCount + 2);
+    // 移動は編集前の数量、数量調整は移動後の倉庫に付く
+    const [move, adjust] = result.current.ledger;
+    expect([move.type, move.quantity, move.fromWarehouseId, move.toWarehouseId]).toEqual(['移動', 5, 'wh-sales', 'wh-hold']);
+    expect([adjust.type, adjust.quantity, adjust.toWarehouseId]).toEqual(['調整入庫', 3, 'wh-hold']);
+  });
+
+  it('updateLot で数量も倉庫も変わらなければ帳票には記録されない', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => {
+      result.current.addProduct({ name: 'upd noop', sku: 'UL-004', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'UL-004')!;
+    act(() => { result.current.addLot(product.id, { lotNo: '20261231', quantity: 5 }); });
+    const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
+    const beforeCount = result.current.ledger.length;
+
+    // 賞味期限とロットNo だけの変更は在庫を動かさない
+    act(() => { result.current.updateLot(product.id, lot.id, { lotNo: '20270303', expiryDate: '2027-03-03', quantity: 5, warehouseId: lot.warehouseId }); });
+
+    expect(result.current.ledger.length).toBe(beforeCount);
+    expect(result.current.products.find(p => p.id === product.id)!.lots[0].lotNo).toBe('20270303');
+  });
+
   it('旧区分（入庫/出庫）の帳票データはロード時に新区分へ移行される', async () => {
     const legacy = [
       { id: 't1', date: '2026-01-01T00:00:00Z', type: '入庫', productId: 'p1', productName: '牛乳', productSku: 'ML-001', lotNo: 'L1', quantity: 5, note: 'ロット追加' },
