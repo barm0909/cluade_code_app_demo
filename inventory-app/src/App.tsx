@@ -3,6 +3,7 @@ import { useInventory, daysUntilExpiry, totalQuantity, INBOUND_TYPES, OUTBOUND_T
 import type { Product, Lot, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
+import { DashboardView } from './DashboardView';
 import { LedgerView } from './LedgerView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
@@ -161,7 +162,7 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'inventory' | 'master' | 'stocktake' | 'ledger'>('inventory');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'master' | 'stocktake' | 'ledger'>('inventory');
   const { confirm, confirmDialog } = useConfirm();
   const { notify, notifyDialog } = useNotify();
 
@@ -251,31 +252,37 @@ export default function App() {
         </div>
       </header>
 
-      {expired.length > 0 && (
-        <div className="alert-banner danger"><strong>期限切れロットあり:</strong> {expired.map(l => l.lotNo).join('、')}</div>
-      )}
-      {expiringSoon.length > 0 && (
-        <div className="alert-banner warning"><strong>期限間近（7日以内）:</strong> {expiringSoon.map(l => `${l.lotNo}（${daysUntilExpiry(l.expiryDate!)}日後）`).join('、')}</div>
-      )}
-      {lowStock.length > 0 && (
-        <div className="alert-banner info"><strong>在庫不足:</strong> {lowStock.map(p => `${p.name}（残${totalQuantity(p)}）`).join('、')}</div>
-      )}
+      {/* ダッシュボードタブは同じ内容をより詳しく出すので、共通のバナー・サマリは重複させない */}
+      {activeTab !== 'dashboard' && (<>
+        {expired.length > 0 && (
+          <div className="alert-banner danger"><strong>期限切れロットあり:</strong> {expired.map(l => l.lotNo).join('、')}</div>
+        )}
+        {expiringSoon.length > 0 && (
+          <div className="alert-banner warning"><strong>期限間近（7日以内）:</strong> {expiringSoon.map(l => `${l.lotNo}（${daysUntilExpiry(l.expiryDate!)}日後）`).join('、')}</div>
+        )}
+        {lowStock.length > 0 && (
+          <div className="alert-banner info"><strong>在庫不足:</strong> {lowStock.map(p => `${p.name}（残${totalQuantity(p)}）`).join('、')}</div>
+        )}
 
-      <div className="stats-row">
-        <div className="stat-card"><div className="stat-label">総商品数</div><div className="stat-value">{products.length}</div></div>
-        <div className="stat-card"><div className="stat-label">期限切れロット</div><div className="stat-value expired-text">{expired.length}</div></div>
-        <div className="stat-card"><div className="stat-label">期限間近ロット</div><div className="stat-value warning-text">{expiringSoon.length}</div></div>
-        <div className="stat-card"><div className="stat-label">在庫総額</div><div className="stat-value">¥{totalValue.toLocaleString()}</div></div>
-      </div>
+        <div className="stats-row">
+          <div className="stat-card"><div className="stat-label">総商品数</div><div className="stat-value">{products.length}</div></div>
+          <div className="stat-card"><div className="stat-label">期限切れロット</div><div className="stat-value expired-text">{expired.length}</div></div>
+          <div className="stat-card"><div className="stat-label">期限間近ロット</div><div className="stat-value warning-text">{expiringSoon.length}</div></div>
+          <div className="stat-card"><div className="stat-label">在庫総額</div><div className="stat-value">¥{totalValue.toLocaleString()}</div></div>
+        </div>
+      </>)}
 
       <div className="tabs">
+        <button className={activeTab === 'dashboard' ? 'tab active' : 'tab'} onClick={() => setActiveTab('dashboard')}>ダッシュボード</button>
         <button className={activeTab === 'inventory' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inventory')}>在庫一覧</button>
         <button className={activeTab === 'master' ? 'tab active' : 'tab'} onClick={() => setActiveTab('master')}>商品マスタ</button>
         <button className={activeTab === 'stocktake' ? 'tab active' : 'tab'} onClick={() => setActiveTab('stocktake')}>棚卸</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
       </div>
 
-      {activeTab === 'ledger' ? (
+      {activeTab === 'dashboard' ? (
+        <DashboardView products={products} categories={categories} warehouses={warehouses} />
+      ) : activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
       ) : activeTab === 'stocktake' ? (
         <StocktakeView products={products} categories={categories} warehouses={warehouses} onApply={applyStocktake} />

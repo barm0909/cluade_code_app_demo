@@ -10,7 +10,7 @@ This repo contains a single app, `inventory-app/` (a Japanese-language food inve
 cd inventory-app
 ```
 
-`docs/warehouse-feature.md` (repo root) documents the warehouse/multi-location feature in Japanese and is kept in sync with `useInventory.ts`/`App.tsx` — update it when warehouse behavior changes.
+`docs/warehouse-feature.md` (repo root) documents the warehouse/multi-location feature in Japanese and is kept in sync with `useInventory.ts`/`App.tsx` — update it when warehouse behavior changes. `docs/dashboard-feature.md` does the same for the ダッシュボード tab (`DashboardView.tsx` + its aggregation functions in `useInventory.ts`).
 
 ## Commands
 
@@ -68,13 +68,14 @@ Persistence is slice-based via the Worker API: `GET /api/state` returns everythi
 - `LedgerView.tsx` — read-only table rendering the transaction ledger, resolving warehouse ids to names/colors via the `warehouses` list. It owns the ledger filter state (keyword / date range / type / warehouse) locally; the filtering, totals and CSV serialization themselves are pure functions in `useInventory.ts` (`filterLedger`, `ledgerTotals`, `ledgerCsv`, `exportLedgerCsv`) so they can be tested without rendering (`src/test/ledger.test.ts`).
 - `ProductMasterView.tsx` / `CategoryMasterView.tsx` — inline-edit master tables, both rendered in the 商品マスタ tab (products first, categories below).
 - `StocktakeView.tsx` — 棚卸 tab. One row per lot with the book quantity and an 実数 input; counts live in local state keyed by `lotId` (absent key = uncounted) and are only written back when 棚卸を確定 calls `applyStocktake`. Like `LedgerView`, all the logic is pure functions in `useInventory.ts` (`stocktakeRows`, `stocktakeDiffs`, `stocktakeTotals`, `stocktakeCsv`, `exportStocktakeCsv`) tested in `src/test/stocktake.test.ts`. `applyStocktake` deliberately ignores the view's filter and applies every entry in `counts`, so changing the filter mid-count never drops input.
-- `badges.tsx` — the shared `ExpiryBadge` / `WarehouseDot` presentational components used by both the inventory table and the stocktake table.
+- `DashboardView.tsx` — ダッシュボード tab (first tab; 在庫一覧 is still the default). Read-only summary of stock value, 要発注 (`totalQuantity <= minQuantity`), expiry alerts, and per-warehouse / per-category breakdowns. Its only local state is the expiry threshold (7/14/30 days); every aggregation is a pure function in `useInventory.ts` (`dashboardTotals`, `lowStockRows`, `expiringLotRows`, `warehouseSummaries`, `categorySummaries`, `lowStockCsv`, `exportLowStockCsv`) tested in `src/test/dashboard.test.ts`. App.tsx hides the shared alert banners and stats row on this tab to avoid duplicating them. See `docs/dashboard-feature.md`.
+- `badges.tsx` — the shared `ExpiryBadge` / `WarehouseDot` presentational components used by both the inventory table and the stocktake table. `ExpiryBadge` switches to a plain date past 7 days, so `DashboardView` uses its own `DaysLeftBadge` for the wider 14/30-day ranges.
 - `ConfirmDialog.tsx` / `useConfirm.tsx` — in-app replacements for `window.confirm` / `window.alert`. Use `const { confirm, confirmDialog } = useConfirm()` (or `useNotify`) and render the returned node; **don't call the native `confirm`/`alert`** — they are silently suppressed in embedded browsers and in tabs where the user checked "don't show more dialogs", which makes the button look dead. The two files are split because a file exporting both a component and hooks breaks React Fast Refresh (oxlint `react(only-export-components)`).
 - Excel import/export and CSV export (`exportCsv`, `exportExcel`, `importExcel` in `useInventory.ts`) use the `xlsx` package. Import matches rows by `SKU` + `ロットNo`(lot number) and only touches matching lots' quantities, diffing against current quantity to decide 入庫 vs 出庫 and by how much.
 
 ### Testing
 
-Vitest + Testing Library + jsdom (`vite.config.ts` sets `environment: 'jsdom'`, `setupFiles: './src/test/setup.ts'`). Tests live in `src/test/`, one file per concern (`useInventory.test.ts`, `warehouse.test.ts`, `stocktake.test.ts`, `exportCsv.test.ts`, `exportExcel.test.ts`, `importExcel.test.ts`, `LotModal.test.tsx`, `ProductModal.test.tsx`, `utils.test.ts`). When adding a mutator or utility to `useInventory.ts`, add its tests to the matching existing file rather than creating a new one, unless it's a genuinely new concern (as `warehouse.test.ts` was for the warehouse feature).
+Vitest + Testing Library + jsdom (`vite.config.ts` sets `environment: 'jsdom'`, `setupFiles: './src/test/setup.ts'`). Tests live in `src/test/`, one file per concern (`useInventory.test.ts`, `warehouse.test.ts`, `stocktake.test.ts`, `dashboard.test.ts`, `exportCsv.test.ts`, `exportExcel.test.ts`, `importExcel.test.ts`, `LotModal.test.tsx`, `ProductModal.test.tsx`, `utils.test.ts`). When adding a mutator or utility to `useInventory.ts`, add its tests to the matching existing file rather than creating a new one, unless it's a genuinely new concern (as `warehouse.test.ts` was for the warehouse feature).
 
 ### Linting
 
