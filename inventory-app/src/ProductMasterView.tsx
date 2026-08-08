@@ -2,6 +2,7 @@ import { Fragment, useState } from 'react';
 import { isValidJanCode, normalizeJanCode } from './useInventory';
 import type { Category, Product } from './useInventory';
 import { useConfirm } from './useConfirm';
+import { NumberInput } from './NumberInput';
 
 interface Props {
   products: Product[];
@@ -71,9 +72,9 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
                   {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </td>
-              <td><input className="master-input" aria-label="最低在庫数" type="number" min={0} value={form.minQuantity} onChange={e => set('minQuantity', +e.target.value)} /></td>
-              <td><input className="master-input" aria-label="販売定価" type="number" min={0} value={form.price} onChange={e => set('price', +e.target.value)} /></td>
-              <td><input className="master-input" aria-label="原価" type="number" min={0} value={form.costPrice} onChange={e => set('costPrice', +e.target.value)} /></td>
+              <td><NumberInput className="master-input" aria-label="最低在庫数" min={0} value={form.minQuantity} onValueChange={v => set('minQuantity', v)} /></td>
+              <td><NumberInput className="master-input" aria-label="販売定価" min={0} value={form.price} onValueChange={v => set('price', v)} /></td>
+              <td><NumberInput className="master-input" aria-label="原価" min={0} value={form.costPrice} onValueChange={v => set('costPrice', v)} /></td>
               <td>
                 <div className="row-actions">
                   <button className="btn-primary" onClick={saveEdit}>保存</button>
