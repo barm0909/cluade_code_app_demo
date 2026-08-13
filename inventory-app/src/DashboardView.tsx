@@ -3,6 +3,8 @@ import {
   DASHBOARD_EXPIRY_OPTIONS,
   EXPIRY_SOON_DAYS,
   categorySummaries,
+  csvExportHint,
+  csvExportLabel,
   dashboardTotals,
   expiringLotRows,
   exportLowStockCsv,
@@ -129,8 +131,9 @@ export function DashboardView({ products, categories, warehouses }: Props) {
             className="btn-add-lot"
             onClick={() => exportLowStockCsv(reorder, categories)}
             disabled={reorder.length === 0}
+            title={csvExportHint('reorder')}
           >
-            CSVエクスポート
+            {csvExportLabel('reorder')}
           </button>
         </div>
         <div className="table-wrapper">

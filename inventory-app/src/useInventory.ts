@@ -306,6 +306,34 @@ function saveLedger(txns: StockTransaction[]) {
   persist('ledger', txns);
 }
 
+// ---- CSV エクスポートの種類 ----
+// 画面に CSV エクスポートボタンが4つあり、どれも中身が違う。ボタンの表示名・ツールチップ・
+// 出力ファイル名をここ1箇所で決めることで、「どのボタンから何のファイルが出るのか」を
+// 画面上でもダウンロードフォルダでも見分けられるようにする。
+export const CSV_EXPORTS = {
+  inventory: { label: '在庫一覧', description: '商品×ロット単位の在庫一覧' },
+  ledger: { label: '入出庫帳票', description: '絞り込み後の入出庫履歴' },
+  stocktake: { label: '棚卸表', description: '帳簿在庫と実数カウントの一覧' },
+  reorder: { label: '要発注リスト', description: '発注点を下回っている商品' },
+} as const;
+
+export type CsvExportKind = keyof typeof CSV_EXPORTS;
+
+/** 出力ファイル名。例: `在庫一覧_2026-06-28.csv` */
+export function csvFileName(kind: CsvExportKind, extension = 'csv'): string {
+  return `${CSV_EXPORTS[kind].label}_${new Date().toISOString().slice(0, 10)}.${extension}`;
+}
+
+/** ボタンの表示名。例: `CSVエクスポート（在庫一覧）` */
+export function csvExportLabel(kind: CsvExportKind): string {
+  return `CSVエクスポート（${CSV_EXPORTS[kind].label}）`;
+}
+
+/** ボタンの title 属性。押す前に中身と実際のファイル名を確認できるようにする */
+export function csvExportHint(kind: CsvExportKind): string {
+  return `${CSV_EXPORTS[kind].description}を CSV で書き出します（${csvFileName(kind)}）`;
+}
+
 function downloadCsv(filename: string, text: string) {
   const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -341,7 +369,7 @@ export function ledgerCsv(txns: StockTransaction[], warehouses: Warehouse[]): st
 
 // 絞り込み後の帳票をそのまま CSV に出す (画面に見えているものが出力される)
 export function exportLedgerCsv(txns: StockTransaction[], warehouses: Warehouse[]) {
-  downloadCsv(`ledger_${new Date().toISOString().slice(0, 10)}.csv`, ledgerCsv(txns, warehouses));
+  downloadCsv(csvFileName('ledger'), ledgerCsv(txns, warehouses));
 }
 
 // ---- 棚卸 (実地棚卸) ----
@@ -459,7 +487,7 @@ export function stocktakeCsv(rows: StocktakeRow[], counts: StocktakeCounts, ware
 }
 
 export function exportStocktakeCsv(rows: StocktakeRow[], counts: StocktakeCounts, warehouses: Warehouse[]) {
-  downloadCsv(`stocktake_${new Date().toISOString().slice(0, 10)}.csv`, stocktakeCsv(rows, counts, warehouses));
+  downloadCsv(csvFileName('stocktake'), stocktakeCsv(rows, counts, warehouses));
 }
 
 // ---------------------------------------------------------------------------
@@ -665,7 +693,7 @@ export function lowStockCsv(rows: LowStockRow[], categories: Category[]): string
 }
 
 export function exportLowStockCsv(rows: LowStockRow[], categories: Category[]) {
-  downloadCsv(`reorder_${new Date().toISOString().slice(0, 10)}.csv`, lowStockCsv(rows, categories));
+  downloadCsv(csvFileName('reorder'), lowStockCsv(rows, categories));
 }
 
 export function useInventory() {
@@ -863,7 +891,7 @@ export function useInventory() {
         ? p.lots.map(l => [p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
         : [[p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, '', '', 0].join(',')]
     );
-    downloadCsv(`inventory_${new Date().toISOString().slice(0, 10)}.csv`, header + '\n' + rows.join('\n'));
+    downloadCsv(csvFileName('inventory'), header + '\n' + rows.join('\n'));
   }, [products, categories]);
 
   const importExcel = useCallback((file: File): Promise<{ updated: number; errors: string[] }> => {

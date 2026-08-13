@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import {
   ALL_TRANSACTION_TYPES,
   EMPTY_LEDGER_FILTER,
+  csvExportHint,
+  csvExportLabel,
   exportLedgerCsv,
   filterLedger,
   formatLedgerDateTime,
@@ -73,8 +75,9 @@ export function LedgerView({ ledger, warehouses }: Props) {
           className="btn-add-lot"
           disabled={filtered.length === 0}
           onClick={() => exportLedgerCsv(filtered, warehouses)}
+          title={csvExportHint('ledger')}
         >
-          CSVエクスポート
+          {csvExportLabel('ledger')}
         </button>
       </div>
 

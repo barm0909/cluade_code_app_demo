@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { daysUntilExpiry, totalQuantity, generateLotNo, normalizeJanCode, isValidJanCode, DEFAULT_WAREHOUSE_ID } from '../useInventory';
+import { daysUntilExpiry, totalQuantity, generateLotNo, normalizeJanCode, isValidJanCode, DEFAULT_WAREHOUSE_ID, CSV_EXPORTS, csvFileName, csvExportLabel, csvExportHint } from '../useInventory';
+import type { CsvExportKind } from '../useInventory';
 import type { Product } from '../useInventory';
 
 const FIXED_NOW = new Date('2026-06-27T00:00:00.000Z');
@@ -100,5 +101,41 @@ describe('isValidJanCode', () => {
 
   it('数字以外を含む場合は無効', () => {
     expect(isValidJanCode('49012345678a')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CSV エクスポートのラベル / ファイル名
+// ---------------------------------------------------------------------------
+
+const KINDS = Object.keys(CSV_EXPORTS) as CsvExportKind[];
+
+describe('csvFileName', () => {
+  it('種類ごとの日本語ラベルと当日の日付を含むファイル名になる', () => {
+    expect(csvFileName('inventory')).toBe('在庫一覧_2026-06-27.csv');
+    expect(csvFileName('ledger')).toBe('入出庫帳票_2026-06-27.csv');
+    expect(csvFileName('stocktake')).toBe('棚卸表_2026-06-27.csv');
+    expect(csvFileName('reorder')).toBe('要発注リスト_2026-06-27.csv');
+  });
+
+  it('拡張子を指定できる', () => {
+    expect(csvFileName('inventory', 'xlsx')).toBe('在庫一覧_2026-06-27.xlsx');
+  });
+
+  it('種類ごとにファイル名が重複しない', () => {
+    const names = KINDS.map(k => csvFileName(k));
+    expect(new Set(names).size).toBe(KINDS.length);
+  });
+});
+
+describe('csvExportLabel / csvExportHint', () => {
+  it('ボタン表示にエクスポート対象が入る', () => {
+    expect(csvExportLabel('reorder')).toBe('CSVエクスポート（要発注リスト）');
+  });
+
+  it('ツールチップに中身の説明と出力ファイル名が入る', () => {
+    const hint = csvExportHint('ledger');
+    expect(hint).toContain(CSV_EXPORTS.ledger.description);
+    expect(hint).toContain('入出庫帳票_2026-06-27.csv');
   });
 });
