@@ -10,6 +10,8 @@ This repo contains a single app, `inventory-app/` (a Japanese-language food inve
 cd inventory-app
 ```
 
+`docs/spec/` holds the screen-by-screen specification written for non-programmers (`README.md` = index/glossary, then `common.md`, `dashboard.md`, `inventory.md`, `fefo.md`, `master.md`, `stocktake.md`, `ledger.md`, and `data-and-rules.md` for the cross-cutting rules). When you change UI behavior, validation, or what gets written to the ledger, update the matching page there — `data-and-rules.md` carries the operation→ledger table that must stay exhaustive.
+
 `docs/warehouse-feature.md` (repo root) documents the warehouse/multi-location feature in Japanese and is kept in sync with `useInventory.ts`/`App.tsx` — update it when warehouse behavior changes. `docs/dashboard-feature.md` does the same for the ダッシュボード tab (`DashboardView.tsx` + its aggregation functions in `useInventory.ts`), and `docs/fefo-feature.md` for FEFO出庫 (`ShipFefoModal.tsx` + `planFefoShipment`/`shipFefo`).
 
 ## Commands
