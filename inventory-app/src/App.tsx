@@ -3,6 +3,7 @@ import { useInventory, daysUntilExpiry, totalQuantity, csvExportHint, csvExportL
 import type { Product, Lot, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
+import { ShipFefoModal } from './ShipFefoModal';
 import { DashboardView } from './DashboardView';
 import { LedgerView } from './LedgerView';
 import { ProductMasterView } from './ProductMasterView';
@@ -150,10 +151,12 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
+  // FEFO出庫は商品単位なので、商品そのものではなく id を持って毎回最新の商品を引き直す
+  const [fefoProductId, setFefoProductId] = useState<string | null>(null);
   const [ioLot, setIoLot] = useState<{ product: Product; lot: Lot; direction: 'in' | 'out' } | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
@@ -213,6 +216,8 @@ export default function App() {
     if (totalQuantity(p) <= p.minQuantity) return 'row-alert';
     return '';
   };
+
+  const fefoTarget = fefoProductId ? products.find(p => p.id === fefoProductId) ?? null : null;
 
   const visibleLots = (p: Product) => warehouseFilter
     ? p.lots.filter(l => l.warehouseId === warehouseFilter)
@@ -341,6 +346,12 @@ export default function App() {
                     <td>¥{p.costPrice.toLocaleString()}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <div className="row-actions">
+                        <button
+                          className="btn-ship"
+                          onClick={() => setFefoProductId(p.id)}
+                          disabled={qty === 0}
+                          title="賞味期限の近いロットから自動で引き当てて出庫します"
+                        >FEFO出庫</button>
                         <button className="btn-edit" onClick={() => setEditingProduct(p)}>編集</button>
                         <button className="btn-delete" onClick={async () => {
                           const ok = await confirm({ message: `「${p.name}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
@@ -446,6 +457,22 @@ export default function App() {
           direction={ioLot.direction}
           onSubmit={(qty, type) => adjustLotQuantity(ioLot.product.id, ioLot.lot.id, ioLot.direction === 'in' ? qty : -qty, type)}
           onClose={() => setIoLot(null)}
+        />
+      )}
+      {fefoTarget !== null && (
+        <ShipFefoModal
+          product={fefoTarget}
+          warehouses={warehouses}
+          onShip={(qty, options) => {
+            const plan = shipFefo(fefoTarget.id, qty, options);
+            const lots = plan.allocations.map(a => `${a.lotNo}: ${a.quantity}`).join('、');
+            notify(
+              `${fefoTarget.name} を ${plan.allocated} 出庫しました（${plan.allocations.length}ロットから引当）。\n${lots}`
+              + (plan.shortage > 0 ? `\n\n在庫不足のため ${plan.shortage} は出庫できませんでした。` : ''),
+              'FEFO出庫',
+            );
+          }}
+          onClose={() => setFefoProductId(null)}
         />
       )}
       {confirmDialog}
