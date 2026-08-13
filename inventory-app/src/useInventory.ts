@@ -37,13 +37,16 @@ export interface Product {
 
 export type TransactionType = '入荷' | '調整入庫' | '売上出庫' | '調整出庫' | '廃棄' | '移動';
 
+/** 出庫系の区分だけを指す型 (FEFO出庫のように出庫しか受け付けない API 用) */
+export type OutboundTransactionType = Extract<TransactionType, '売上出庫' | '調整出庫' | '廃棄'>;
+
 export const INBOUND_TYPES: TransactionType[] = ['入荷', '調整入庫'];
-export const OUTBOUND_TYPES: TransactionType[] = ['売上出庫', '調整出庫', '廃棄'];
+export const OUTBOUND_TYPES: OutboundTransactionType[] = ['売上出庫', '調整出庫', '廃棄'];
 export const ALL_TRANSACTION_TYPES: TransactionType[] = [...INBOUND_TYPES, ...OUTBOUND_TYPES, '移動'];
 
 export function transactionDirection(type: TransactionType): 'in' | 'out' | 'move' {
   if (INBOUND_TYPES.includes(type)) return 'in';
-  if (OUTBOUND_TYPES.includes(type)) return 'out';
+  if ((OUTBOUND_TYPES as TransactionType[]).includes(type)) return 'out';
   return 'move';
 }
 
@@ -491,6 +494,102 @@ export function exportStocktakeCsv(rows: StocktakeRow[], counts: StocktakeCounts
 }
 
 // ---------------------------------------------------------------------------
+// FEFO 出庫 (First Expired, First Out)
+// 商品と数量だけを指定すると、賞味期限の近いロットから順に自動で引き当てる。
+// 引当計画 (planFefoShipment) は純粋関数なので、モーダルのプレビューと
+// 実際の出庫 (shipFefo) がまったく同じ計算を共有する。
+// ---------------------------------------------------------------------------
+
+/** 1ロットからの引当 1件 */
+export interface FefoAllocation {
+  lotId: string;
+  lotNo: string;
+  expiryDate?: string;
+  warehouseId: string;
+  /** 引当前の在庫数 */
+  availableQuantity: number;
+  /** このロットから引き当てる数量 */
+  quantity: number;
+}
+
+export interface FefoPlan {
+  allocations: FefoAllocation[];
+  /** 引き当てられた合計数量 */
+  allocated: number;
+  /** 引き当てられなかった数量。0 より大きければ在庫不足 */
+  shortage: number;
+  /** 期限切れのため引当対象から除外した在庫数 (includeExpired 時は 0) */
+  skippedExpired: number;
+}
+
+export interface FefoOptions {
+  /** 指定するとその倉庫のロットだけを引当対象にする (未指定は全倉庫) */
+  warehouseId?: string;
+  /** 既定 false: 期限切れロットは引き当てない (食品は廃棄が原則のため) */
+  includeExpired?: boolean;
+}
+
+function isExpired(lot: Lot): boolean {
+  return !!lot.expiryDate && daysUntilExpiry(lot.expiryDate) < 0;
+}
+
+/**
+ * 引当順の比較。賞味期限の早いロットが先。
+ * 期限なし (ラベル等) は最後に回し、同順位はロットNo→id で並べて結果を安定させる。
+ */
+function compareFefo(a: Lot, b: Lot): number {
+  if (a.expiryDate !== b.expiryDate) {
+    if (!a.expiryDate) return 1;
+    if (!b.expiryDate) return -1;
+    return a.expiryDate < b.expiryDate ? -1 : 1;
+  }
+  if (a.lotNo !== b.lotNo) return a.lotNo < b.lotNo ? -1 : 1;
+  return a.id < b.id ? -1 : 1;
+}
+
+/** 引当対象のロットを FEFO 順に並べて返す (在庫 0 のロットは対象外) */
+export function fefoLotOrder(product: Product, options: FefoOptions = {}): Lot[] {
+  const { warehouseId, includeExpired = false } = options;
+  return product.lots
+    .filter(l => l.quantity > 0)
+    .filter(l => !warehouseId || l.warehouseId === warehouseId)
+    .filter(l => includeExpired || !isExpired(l))
+    .sort(compareFefo);
+}
+
+/**
+ * 出庫数量を FEFO 順のロットへ割り付ける。状態は一切変更しない。
+ * 在庫が足りなければ引けるところまで引き当て、残りを shortage として返す。
+ */
+export function planFefoShipment(product: Product, quantity: number, options: FefoOptions = {}): FefoPlan {
+  const requested = Math.max(0, Math.floor(quantity));
+  const skippedExpired = options.includeExpired
+    ? 0
+    : product.lots
+        .filter(l => l.quantity > 0 && (!options.warehouseId || l.warehouseId === options.warehouseId))
+        .filter(isExpired)
+        .reduce((s, l) => s + l.quantity, 0);
+
+  const allocations: FefoAllocation[] = [];
+  let remaining = requested;
+  for (const lot of fefoLotOrder(product, options)) {
+    if (remaining <= 0) break;
+    const take = Math.min(lot.quantity, remaining);
+    allocations.push({
+      lotId: lot.id,
+      lotNo: lot.lotNo,
+      expiryDate: lot.expiryDate,
+      warehouseId: lot.warehouseId,
+      availableQuantity: lot.quantity,
+      quantity: take,
+    });
+    remaining -= take;
+  }
+
+  return { allocations, allocated: requested - remaining, shortage: remaining, skippedExpired };
+}
+
+// ---------------------------------------------------------------------------
 // ダッシュボード
 // 既存の products / categories / warehouses を集計するだけで、専用の永続データは持たない。
 // ---------------------------------------------------------------------------
@@ -869,6 +968,45 @@ export function useInventory() {
     }
   }, [addTransaction, products]);
 
+  // FEFO 出庫: 商品と数量だけを受け取り、賞味期限の近いロットから順に引き落とす。
+  // 引当先の決定は planFefoShipment (純粋関数) に任せ、ここでは在庫の反映と帳票への記録だけを行う。
+  // 在庫が足りないときは引ける分だけ引き当て、不足数を shortage として返す (呼び出し側が通知する)。
+  const shipFefo = useCallback((productId: string, quantity: number, options: FefoOptions & { type?: OutboundTransactionType; note?: string } = {}): FefoPlan => {
+    const product = products.find(p => p.id === productId);
+    if (!product) return { allocations: [], allocated: 0, shortage: Math.max(0, Math.floor(quantity)), skippedExpired: 0 };
+
+    const plan = planFefoShipment(product, quantity, options);
+    if (plan.allocations.length === 0) return plan;
+
+    const takenByLotId = new Map(plan.allocations.map(a => [a.lotId, a.quantity]));
+    setProducts(prev => {
+      const now = new Date().toISOString();
+      const next = prev.map(p => p.id === productId
+        ? {
+            ...p,
+            updatedAt: now,
+            lots: p.lots.map(l => takenByLotId.has(l.id) ? { ...l, quantity: l.quantity - takenByLotId.get(l.id)! } : l),
+          }
+        : p);
+      save(next);
+      return next;
+    });
+
+    // 引き当てたロットごとに1件ずつ記録する (どのロットを何個出したかが帳票に残るように)
+    addTransactions(plan.allocations.map(a => ({
+      type: (options.type ?? '売上出庫') as TransactionType,
+      productId,
+      productName: product.name,
+      productSku: product.sku,
+      lotNo: a.lotNo,
+      quantity: a.quantity,
+      note: options.note ?? 'FEFO出庫',
+      fromWarehouseId: a.warehouseId,
+    })));
+
+    return plan;
+  }, [addTransactions, products]);
+
   const exportExcel = useCallback(() => {
     const wsData: (string | number)[][] = [['SKU', 'ロットNo', '在庫数']];
     for (const p of products) {
@@ -1108,5 +1246,5 @@ export function useInventory() {
     saveLedger([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake };
 }

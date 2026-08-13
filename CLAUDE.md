@@ -10,7 +10,7 @@ This repo contains a single app, `inventory-app/` (a Japanese-language food inve
 cd inventory-app
 ```
 
-`docs/warehouse-feature.md` (repo root) documents the warehouse/multi-location feature in Japanese and is kept in sync with `useInventory.ts`/`App.tsx` — update it when warehouse behavior changes. `docs/dashboard-feature.md` does the same for the ダッシュボード tab (`DashboardView.tsx` + its aggregation functions in `useInventory.ts`).
+`docs/warehouse-feature.md` (repo root) documents the warehouse/multi-location feature in Japanese and is kept in sync with `useInventory.ts`/`App.tsx` — update it when warehouse behavior changes. `docs/dashboard-feature.md` does the same for the ダッシュボード tab (`DashboardView.tsx` + its aggregation functions in `useInventory.ts`), and `docs/fefo-feature.md` for FEFO出庫 (`ShipFefoModal.tsx` + `planFefoShipment`/`shipFefo`).
 
 ## Commands
 
@@ -57,14 +57,16 @@ Persistence is slice-based via the Worker API: `GET /api/state` returns everythi
 - `Product` has many `Lot`s (lot-level tracking by expiry date and warehouse), not a single quantity field. `totalQuantity(product)` and `totalQuantityByWarehouse(product, warehouseId)` sum across lots.
 - Every `Lot` has a `warehouseId`. Loading old data without `warehouseId` migrates it to `DEFAULT_WAREHOUSE_ID` (`wh-sales`) — preserve this backward-compat mapping in `migrateProducts()` if you touch it.
 - `Product.categoryId` references the `categories` master (`Category { id, name }`, managed via `addCategory`/`updateCategory`/`deleteCategory`; delete is blocked while any product uses the category). Renaming a category propagates everywhere because products hold the id, not the name. Loading old data with a legacy `category` string maps it to an existing category by name (or creates one, falling back to `未分類`) in `migrateProducts()`.
-- Any quantity-changing operation (`addLot`, `adjustLotQuantity`, `moveLot`, `importExcel`, `applyStocktake`) also appends to the `ledger` via `addTransaction` (or `addTransactions` for batches like 棚卸, which records all rows in one state update / one PUT), recording it as `入庫`/`出庫`/`移動`. If you add a new mutation that changes stock, wire it into the ledger the same way so 入出庫帳票 stays accurate.
+- Any quantity-changing operation (`addLot`, `adjustLotQuantity`, `moveLot`, `shipFefo`, `importExcel`, `applyStocktake`) also appends to the `ledger` via `addTransaction` (or `addTransactions` for batches like 棚卸, which records all rows in one state update / one PUT), recording it as `入庫`/`出庫`/`移動`. If you add a new mutation that changes stock, wire it into the ledger the same way so 入出庫帳票 stays accurate.
+- `shipFefo(productId, quantity, options?)` is the product-level出庫: it ships from the earliest-expiring lots first (FEFO). The allocation itself is the pure `planFefoShipment(product, quantity, options)`, which `ShipFefoModal` also uses for its live preview — keep the two sharing that function so the preview can't diverge from what actually ships. Expired lots are excluded unless `includeExpired` is set, and one ledger row is written per allocated lot. See `docs/fefo-feature.md`.
 - `moveLot` full-quantity moves just update the lot's `warehouseId` in place; partial moves shrink the source lot and create a new lot (new id, same `lotNo`) in the target warehouse, then record both an outgoing and incoming ledger transaction.
 
 ### Component structure
 
 - `App.tsx` — single top-level component holding all UI state (filters, sort, modals, active tab) and rendering the product/lot table plus the ledger tab. Product rows expand inline to show a nested lot table.
 - `ProductModal.tsx` / `LotModal.tsx` — controlled create/edit forms for products and lots, taking `onSave`/`onClose` props; App.tsx decides whether `onSave` calls the `add*` or `update*` mutator based on whether it's editing `null`/`'new'` vs an existing record.
-- `MoveLotModal` — defined inline inside `App.tsx` (not a separate file) since it's tightly coupled to the lot table's row actions.
+- `MoveLotModal` / `StockIoModal` — defined inline inside `App.tsx` (not separate files) since they're tightly coupled to the lot table's row actions.
+- `ShipFefoModal.tsx` — the FEFO出庫 form opened from a product row (not a lot row). It renders a live allocation preview from `planFefoShipment` and blocks submission while `shortage > 0`; `App.tsx` reports the executed plan through `notify`.
 - `LedgerView.tsx` — read-only table rendering the transaction ledger, resolving warehouse ids to names/colors via the `warehouses` list. It owns the ledger filter state (keyword / date range / type / warehouse) locally; the filtering, totals and CSV serialization themselves are pure functions in `useInventory.ts` (`filterLedger`, `ledgerTotals`, `ledgerCsv`, `exportLedgerCsv`) so they can be tested without rendering (`src/test/ledger.test.ts`).
 - `ProductMasterView.tsx` / `CategoryMasterView.tsx` — inline-edit master tables, both rendered in the 商品マスタ tab (products first, categories below).
 - `StocktakeView.tsx` — 棚卸 tab. One row per lot with the book quantity and an 実数 input; counts live in local state keyed by `lotId` (absent key = uncounted) and are only written back when 棚卸を確定 calls `applyStocktake`. Like `LedgerView`, all the logic is pure functions in `useInventory.ts` (`stocktakeRows`, `stocktakeDiffs`, `stocktakeTotals`, `stocktakeCsv`, `exportStocktakeCsv`) tested in `src/test/stocktake.test.ts`. `applyStocktake` deliberately ignores the view's filter and applies every entry in `counts`, so changing the filter mid-count never drops input.
