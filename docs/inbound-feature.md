@@ -56,6 +56,11 @@ interface InboundPlan {
 
 入荷予定日を過ぎても残数がある行には「遅延」バッジを付け、行を `row-expiring` で色付けします。
 
+両モーダルは入力欄が多いので、`modal modal-wide modal-panel` + `.modal-body` の構成で
+**見出しと `.modal-actions` を固定し、本文だけをスクロール**させています（`max-height: calc(100vh - 48px)`）。
+入力欄は `.form-grid` で2列、横いっぱいにしたい項目だけ `.form-span-2`（560px 以下では1列に戻ります）。
+新しくモーダルを足すときも、入力欄が5つを超えるならこの構成に合わせてください。
+
 ---
 
 ## 入荷のルール
