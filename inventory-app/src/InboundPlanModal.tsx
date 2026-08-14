@@ -84,67 +84,73 @@ export function InboundPlanModal({ plan, products, warehouses, onSave, onClose }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="modal modal-wide modal-panel" onClick={e => e.stopPropagation()}>
         <h2>{plan ? '入荷予定を編集' : '入荷予定を追加'}</h2>
         {products.length === 0 ? (
           <>
-            <p className="lot-empty">商品が登録されていません。先に商品マスタで商品を登録してください。</p>
+            <div className="modal-body">
+              <p className="lot-empty">商品が登録されていません。先に商品マスタで商品を登録してください。</p>
+            </div>
             <div className="modal-actions">
               <button type="button" className="btn-secondary" onClick={onClose}>閉じる</button>
             </div>
           </>
         ) : (
         <form onSubmit={handleSubmit}>
-          <label htmlFor="ip-product">
-            商品
-            <select id="ip-product" value={form.productId} onChange={e => setForm(f => ({ ...f, productId: e.target.value }))}>
-              {products.map(p => (
-                <option key={p.id} value={p.id}>{p.name}（{p.sku}）</option>
-              ))}
-            </select>
-          </label>
-          <label htmlFor="ip-date">
-            入荷予定日
-            <input id="ip-date" type="date" required value={form.expectedDate} onChange={e => setForm(f => ({ ...f, expectedDate: e.target.value }))} />
-          </label>
-          <label htmlFor="ip-qty">
-            予定数量
-            <NumberInput id="ip-qty" min={1} required value={form.quantity} onValueChange={v => setForm(f => ({ ...f, quantity: v }))} />
-          </label>
-          <label htmlFor="ip-warehouse">
-            入荷先倉庫
-            <select id="ip-warehouse" value={form.warehouseId} onChange={e => setForm(f => ({ ...f, warehouseId: e.target.value }))}>
-              {warehouses.map(w => (
-                <option key={w.id} value={w.id}>{w.name}</option>
-              ))}
-            </select>
-          </label>
-          <label htmlFor="ip-expiry">
-            賞味期限 <span className="label-hint">（任意 — 入力するとロットNoを自動生成）</span>
-            <input id="ip-expiry" type="date" value={form.expiryDate} onChange={e => handleExpiryChange(e.target.value)} />
-          </label>
-          <label htmlFor="ip-lot-no">
-            ロットNo <span className="label-hint">（半角数字8桁）</span>
-            <input
-              id="ip-lot-no"
-              required
-              value={form.lotNo}
-              onChange={e => handleLotNoChange(e.target.value)}
-              placeholder="例: 20261231"
-              inputMode="numeric"
-              maxLength={8}
-            />
-            {lotError && <span className="field-error">{lotError}</span>}
-          </label>
-          <label htmlFor="ip-supplier">
-            仕入先 <span className="label-hint">（任意）</span>
-            <input id="ip-supplier" value={form.supplier} onChange={e => setForm(f => ({ ...f, supplier: e.target.value }))} placeholder="例: 山田乳業" />
-          </label>
-          <label htmlFor="ip-note">
-            備考 <span className="label-hint">（任意）</span>
-            <input id="ip-note" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
-          </label>
-          {receivedNote && <p className="fefo-note">{receivedNote}</p>}
+          <div className="modal-body">
+            <div className="form-grid">
+              <label className="form-span-2" htmlFor="ip-product">
+                商品
+                <select id="ip-product" value={form.productId} onChange={e => setForm(f => ({ ...f, productId: e.target.value }))}>
+                  {products.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}（{p.sku}）</option>
+                  ))}
+                </select>
+              </label>
+              <label htmlFor="ip-date">
+                入荷予定日
+                <input id="ip-date" type="date" required value={form.expectedDate} onChange={e => setForm(f => ({ ...f, expectedDate: e.target.value }))} />
+              </label>
+              <label htmlFor="ip-qty">
+                予定数量
+                <NumberInput id="ip-qty" min={1} required value={form.quantity} onValueChange={v => setForm(f => ({ ...f, quantity: v }))} />
+              </label>
+              <label htmlFor="ip-warehouse">
+                入荷先倉庫
+                <select id="ip-warehouse" value={form.warehouseId} onChange={e => setForm(f => ({ ...f, warehouseId: e.target.value }))}>
+                  {warehouses.map(w => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label htmlFor="ip-expiry">
+                賞味期限 <span className="label-hint">（任意 — ロットNoを自動生成）</span>
+                <input id="ip-expiry" type="date" value={form.expiryDate} onChange={e => handleExpiryChange(e.target.value)} />
+              </label>
+              <label htmlFor="ip-lot-no">
+                ロットNo <span className="label-hint">（半角数字8桁）</span>
+                <input
+                  id="ip-lot-no"
+                  required
+                  value={form.lotNo}
+                  onChange={e => handleLotNoChange(e.target.value)}
+                  placeholder="例: 20261231"
+                  inputMode="numeric"
+                  maxLength={8}
+                />
+                {lotError && <span className="field-error">{lotError}</span>}
+              </label>
+              <label htmlFor="ip-supplier">
+                仕入先 <span className="label-hint">（任意）</span>
+                <input id="ip-supplier" value={form.supplier} onChange={e => setForm(f => ({ ...f, supplier: e.target.value }))} placeholder="例: 山田乳業" />
+              </label>
+              <label className="form-span-2" htmlFor="ip-note">
+                備考 <span className="label-hint">（任意）</span>
+                <input id="ip-note" value={form.note} onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
+              </label>
+            </div>
+            {receivedNote && <p className="fefo-note">{receivedNote}</p>}
+          </div>
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
             <button type="submit" className="btn-primary" disabled={form.quantity <= 0}>保存</button>
