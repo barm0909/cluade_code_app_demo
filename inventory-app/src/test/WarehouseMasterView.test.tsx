@@ -24,6 +24,7 @@ const MOCK_PRODUCTS: Product[] = [
 const defaultProps = {
   warehouses: MOCK_WAREHOUSES,
   products: MOCK_PRODUCTS,
+  inboundPlans: [],
   onAdd: vi.fn(),
   onUpdate: vi.fn(),
   onDelete: vi.fn(),

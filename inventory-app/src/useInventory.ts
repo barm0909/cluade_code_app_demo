@@ -64,6 +64,25 @@ export interface StockTransaction {
   toWarehouseId?: string;
 }
 
+// 入荷予定 (発注済み・入荷待ちの在庫)。実際の在庫はまだ持たず、入荷して初めてロットになる。
+// 分割入荷に対応するため予定数量とは別に入荷済数量を持ち、状態はそこから導出する
+// (canceledAt だけは操作の結果として保存する)。
+export interface InboundPlan {
+  id: string;
+  productId: string;
+  expectedDate: string; // 入荷予定日 YYYY-MM-DD
+  quantity: number; // 予定数量
+  receivedQuantity: number; // 入荷済数量 (分割入荷の累計)
+  warehouseId: string; // 入荷先倉庫
+  lotNo: string; // 予定ロットNo (入荷時の既定値)
+  expiryDate?: string; // 予定賞味期限
+  supplier: string; // 仕入先 (自由入力)
+  note: string;
+  canceledAt?: string; // キャンセル日時 (ISO)。未設定なら有効な予定
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type SortField = 'name' | 'sku' | 'janCode' | 'category' | 'price' | 'costPrice';
 export type SortOrder = 'asc' | 'desc';
 
@@ -165,6 +184,7 @@ interface ServerState {
   warehouses: Warehouse[];
   categories: Category[];
   ledger: StockTransaction[];
+  inboundPlans?: InboundPlan[]; // 入荷予定を持たない旧サーバーからのレスポンスも読めるよう任意扱い
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -177,7 +197,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -239,6 +259,25 @@ const SAMPLE_DATA: Product[] = [
       { id: 'l6', lotNo: d(14).replace(/-/g, ''), expiryDate: d(14), quantity: 4, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
+  },
+];
+
+// 入荷予定のサンプル (seed.sql と同期)。1件は分割入荷の途中、1件は入荷予定日を過ぎた遅延の状態にしてある
+const SAMPLE_INBOUND_PLANS: InboundPlan[] = [
+  {
+    id: 'ip1', productId: '1', expectedDate: d(2), quantity: 24, receivedQuantity: 0,
+    warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: d(12).replace(/-/g, ''), expiryDate: d(12),
+    supplier: '山田乳業', note: '定期便', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'ip2', productId: '2', expectedDate: d(-1), quantity: 20, receivedQuantity: 8,
+    warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: d(4).replace(/-/g, ''), expiryDate: d(4),
+    supplier: '朝日ベーカリー', note: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'ip3', productId: '3', expectedDate: d(5), quantity: 1000, receivedQuantity: 0,
+    warehouseId: 'wh-hold', lotNo: '20260401', supplier: '大阪印刷', note: '検品後に販売倉庫へ移動',
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
 ];
 
@@ -309,6 +348,10 @@ function saveLedger(txns: StockTransaction[]) {
   persist('ledger', txns);
 }
 
+function saveInboundPlans(plans: InboundPlan[]) {
+  persist('inbound-plans', plans);
+}
+
 // ---- CSV エクスポートの種類 ----
 // 画面に CSV エクスポートボタンが4つあり、どれも中身が違う。ボタンの表示名・ツールチップ・
 // 出力ファイル名をここ1箇所で決めることで、「どのボタンから何のファイルが出るのか」を
@@ -318,6 +361,7 @@ export const CSV_EXPORTS = {
   ledger: { label: '入出庫帳票', description: '絞り込み後の入出庫履歴' },
   stocktake: { label: '棚卸表', description: '帳簿在庫と実数カウントの一覧' },
   reorder: { label: '要発注リスト', description: '発注点を下回っている商品' },
+  inbound: { label: '入荷予定', description: '絞り込み後の入荷予定' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -590,6 +634,182 @@ export function planFefoShipment(product: Product, quantity: number, options: Fe
 }
 
 // ---------------------------------------------------------------------------
+// 入荷予定 (発注済み・入荷待ち)
+// 予定はそれ自体では在庫を持たない。「入荷」して初めてロットが増え、帳票に 入荷 が1件残る。
+// 状態 (未入荷/一部入荷/入荷済) は予定数量と入荷済数量から導出するので、
+// 入荷の記録と状態表示がずれることがない。
+// ---------------------------------------------------------------------------
+
+export type InboundPlanStatus = '未入荷' | '一部入荷' | '入荷済' | 'キャンセル';
+
+export const INBOUND_PLAN_STATUSES: InboundPlanStatus[] = ['未入荷', '一部入荷', '入荷済', 'キャンセル'];
+
+export function inboundPlanStatus(plan: InboundPlan): InboundPlanStatus {
+  if (plan.canceledAt) return 'キャンセル';
+  if (plan.receivedQuantity <= 0) return '未入荷';
+  if (plan.receivedQuantity < plan.quantity) return '一部入荷';
+  return '入荷済';
+}
+
+/** まだ入荷していない数量。キャンセル済み・入荷済みは 0 */
+export function remainingInbound(plan: InboundPlan): number {
+  if (plan.canceledAt) return 0;
+  return Math.max(0, plan.quantity - plan.receivedQuantity);
+}
+
+/** 入荷予定日を過ぎたまま残数がある予定 (= 遅延) かどうか */
+export function isOverdueInboundPlan(plan: InboundPlan, today = new Date().toISOString().slice(0, 10)): boolean {
+  return remainingInbound(plan) > 0 && plan.expectedDate < today;
+}
+
+export interface InboundPlanFilter {
+  keyword: string; // 商品名・SKU・ロットNo・仕入先の部分一致
+  status: InboundPlanStatus | '';
+  warehouseId: string;
+  from: string; // 入荷予定日 YYYY-MM-DD (この日を含む)
+  to: string;
+}
+
+export const EMPTY_INBOUND_PLAN_FILTER: InboundPlanFilter = { keyword: '', status: '', warehouseId: '', from: '', to: '' };
+
+/** 入荷予定表の1行。商品名など表示に要る情報を平坦に持たせる (帳票と同じ方針) */
+export interface InboundPlanRow {
+  plan: InboundPlan;
+  productName: string;
+  productSku: string;
+  status: InboundPlanStatus;
+  remaining: number;
+  overdue: boolean;
+}
+
+/**
+ * 絞り込み済みの入荷予定を、入荷予定日の早い順 (同日は登録順) に返す。
+ * 商品マスタから消えた商品を指す予定は表示できないので除外する。
+ */
+export function inboundPlanRows(
+  plans: InboundPlan[],
+  products: Product[],
+  filter: InboundPlanFilter = EMPTY_INBOUND_PLAN_FILTER,
+): InboundPlanRow[] {
+  const q = filter.keyword.trim().toLowerCase();
+  const productById = new Map(products.map(p => [p.id, p]));
+  const rows: InboundPlanRow[] = [];
+  for (const plan of plans) {
+    const product = productById.get(plan.productId);
+    if (!product) continue;
+    const status = inboundPlanStatus(plan);
+    if (filter.status && status !== filter.status) continue;
+    if (filter.warehouseId && plan.warehouseId !== filter.warehouseId) continue;
+    if (filter.from && plan.expectedDate < filter.from) continue;
+    if (filter.to && plan.expectedDate > filter.to) continue;
+    if (q && !(
+      product.name.toLowerCase().includes(q)
+      || product.sku.toLowerCase().includes(q)
+      || plan.lotNo.toLowerCase().includes(q)
+      || plan.supplier.toLowerCase().includes(q)
+    )) continue;
+    rows.push({
+      plan,
+      productName: product.name,
+      productSku: product.sku,
+      status,
+      remaining: remainingInbound(plan),
+      overdue: isOverdueInboundPlan(plan),
+    });
+  }
+  return rows.sort((a, b) =>
+    a.plan.expectedDate.localeCompare(b.plan.expectedDate) || a.plan.createdAt.localeCompare(b.plan.createdAt));
+}
+
+export interface InboundPlanTotals {
+  count: number;
+  planned: number; // 予定数量の合計 (キャンセルを除く)
+  received: number; // 入荷済数量の合計
+  remaining: number; // 残数の合計
+  overdue: number; // 遅延している予定の件数
+  canceled: number;
+}
+
+export function inboundPlanTotals(rows: InboundPlanRow[]): InboundPlanTotals {
+  const totals: InboundPlanTotals = { count: rows.length, planned: 0, received: 0, remaining: 0, overdue: 0, canceled: 0 };
+  for (const r of rows) {
+    if (r.status === 'キャンセル') { totals.canceled++; continue; }
+    totals.planned += r.plan.quantity;
+    totals.received += r.plan.receivedQuantity;
+    totals.remaining += r.remaining;
+    if (r.overdue) totals.overdue++;
+  }
+  return totals;
+}
+
+export function inboundPlanCsv(rows: InboundPlanRow[], warehouses: Warehouse[]): string {
+  const whName = (id: string) => warehouses.find(w => w.id === id)?.name ?? id;
+  const header = '入荷予定日,商品名,SKU,ロットNo,賞味期限,入荷先倉庫,仕入先,予定数量,入荷済,残数,状態,備考';
+  const body = rows.map(r => [
+    r.plan.expectedDate,
+    r.productName,
+    r.productSku,
+    r.plan.lotNo,
+    r.plan.expiryDate ?? '',
+    whName(r.plan.warehouseId),
+    r.plan.supplier,
+    r.plan.quantity,
+    r.plan.receivedQuantity,
+    r.remaining,
+    r.status,
+    r.plan.note,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportInboundPlanCsv(rows: InboundPlanRow[], warehouses: Warehouse[]) {
+  downloadCsv(csvFileName('inbound'), inboundPlanCsv(rows, warehouses));
+}
+
+/** 入荷時の入力。未指定の項目は予定の内容をそのまま使う */
+export interface ReceiveInput {
+  quantity: number;
+  lotNo?: string;
+  expiryDate?: string;
+  warehouseId?: string;
+  note?: string;
+}
+
+/** 入荷で増えるロットの中身 (予定 + 入力の合成結果) */
+export interface ReceiptTarget {
+  quantity: number;
+  lotNo: string;
+  expiryDate?: string;
+  warehouseId: string;
+  /** 加算先の既存ロット。なければ新しいロットを作る */
+  existingLot?: Lot;
+}
+
+/**
+ * 入荷で在庫がどう増えるかを求める。状態は変更しない (モーダルのプレビューと
+ * receiveInboundPlan が同じ結果を共有するための純粋関数)。
+ * 数量は残数を超えないよう丸める (過入荷は受け付けない)。
+ * ロットNo・倉庫・賞味期限がすべて同じロットが既にあれば、新規作成せずそこへ加算する。
+ */
+export function planReceipt(plan: InboundPlan, product: Product | undefined, input: ReceiveInput): ReceiptTarget {
+  const lotNo = (input.lotNo ?? plan.lotNo).trim() || generateLotNo(input.expiryDate ?? plan.expiryDate);
+  const expiryDate = input.expiryDate ?? plan.expiryDate;
+  const warehouseId = input.warehouseId ?? plan.warehouseId;
+  const quantity = Math.min(Math.max(0, Math.floor(input.quantity)), remainingInbound(plan));
+  const existingLot = product?.lots.find(l =>
+    l.lotNo === lotNo && l.warehouseId === warehouseId && (l.expiryDate ?? '') === (expiryDate ?? ''));
+  return { quantity, lotNo, expiryDate, warehouseId, existingLot };
+}
+
+/** 入荷の結果 (呼び出し側が通知に使う) */
+export interface ReceiptResult extends ReceiptTarget {
+  /** 入荷後の残数 */
+  remaining: number;
+  /** 既存ロットへ加算したか (false なら新しいロットを作った) */
+  merged: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // ダッシュボード
 // 既存の products / categories / warehouses を集計するだけで、専用の永続データは持たない。
 // ---------------------------------------------------------------------------
@@ -795,12 +1015,16 @@ export function exportLowStockCsv(rows: LowStockRow[], categories: Category[]) {
   downloadCsv(csvFileName('reorder'), lowStockCsv(rows, categories));
 }
 
+/** 入荷予定の入力値 (id・入荷実績・日時は画面から編集しない) */
+export type InboundPlanInput = Omit<InboundPlan, 'id' | 'receivedQuantity' | 'canceledAt' | 'createdAt' | 'updatedAt'>;
+
 export function useInventory() {
   // API から取得できるまで (またはできない環境では) サンプルデータで動作する
   const [products, setProducts] = useState<Product[]>(SAMPLE_DATA);
   const [ledger, setLedger] = useState<StockTransaction[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>(DEFAULT_WAREHOUSES);
   const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
+  const [inboundPlans, setInboundPlans] = useState<InboundPlan[]>(SAMPLE_INBOUND_PLANS);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
@@ -812,6 +1036,7 @@ export function useInventory() {
       setProducts(migrated.products);
       setCategories(migrated.categories);
       setWarehouses(state.warehouses.length > 0 ? state.warehouses : DEFAULT_WAREHOUSES);
+      setInboundPlans(state.inboundPlans ?? []);
       const { txns, changed } = migrateLedger(state.ledger);
       setLedger(txns);
       if (changed) saveLedger(txns);
@@ -854,6 +1079,12 @@ export function useInventory() {
   const deleteProduct = useCallback((id: string) => {
     const product = products.find(p => p.id === id);
     setProducts(prev => { const next = prev.filter(p => p.id !== id); save(next); return next; });
+    // 商品のない入荷予定は入荷しようがないので一緒に消す (帳票に残った入荷実績はそのまま)
+    setInboundPlans(prev => {
+      if (!prev.some(p => p.productId === id)) return prev;
+      const next = prev.filter(p => p.productId !== id);
+      saveInboundPlans(next); return next;
+    });
     // 商品を消すと在庫も一緒に消えるので、残っていたロットの分を 調整出庫 として帳票に残す
     if (product) {
       addTransactions(product.lots.filter(l => l.quantity > 0).map(l => ({
@@ -1007,6 +1238,103 @@ export function useInventory() {
     return plan;
   }, [addTransactions, products]);
 
+  // ---- 入荷予定 ----
+  // 予定の作成・編集・キャンセルは在庫を動かさないので帳票には記録しない。
+  // 在庫が動くのは receiveInboundPlan (入荷) のときだけ。
+
+  const addInboundPlan = useCallback((data: InboundPlanInput) => {
+    setInboundPlans(prev => {
+      const now = new Date().toISOString();
+      const next = [...prev, { ...data, id: crypto.randomUUID(), receivedQuantity: 0, createdAt: now, updatedAt: now }];
+      saveInboundPlans(next); return next;
+    });
+  }, []);
+
+  // 入荷実績 (receivedQuantity) は編集対象外。キャンセル済みの予定は編集しない
+  const updateInboundPlan = useCallback((id: string, data: InboundPlanInput) => {
+    setInboundPlans(prev => {
+      if (!prev.some(p => p.id === id && !p.canceledAt)) return prev;
+      const next = prev.map(p => p.id === id ? { ...p, ...data, updatedAt: new Date().toISOString() } : p);
+      saveInboundPlans(next); return next;
+    });
+  }, []);
+
+  // キャンセルは予定を消さずに残す (入荷済みの分は在庫・帳票にそのまま残るため)
+  const cancelInboundPlan = useCallback((id: string) => {
+    setInboundPlans(prev => {
+      if (!prev.some(p => p.id === id && !p.canceledAt)) return prev;
+      const now = new Date().toISOString();
+      const next = prev.map(p => p.id === id ? { ...p, canceledAt: now, updatedAt: now } : p);
+      saveInboundPlans(next); return next;
+    });
+  }, []);
+
+  const deleteInboundPlan = useCallback((id: string) => {
+    setInboundPlans(prev => {
+      const next = prev.filter(p => p.id !== id);
+      saveInboundPlans(next); return next;
+    });
+  }, []);
+
+  /**
+   * 入荷予定にもとづく入荷。予定のロットへ在庫を積み、帳票に 入荷 を1件記録する。
+   * 引当先の決定は planReceipt (純粋関数) に任せ、ここでは在庫・予定・帳票の更新だけを行う。
+   * 数量は残数を超えない範囲に丸められ、0 になる場合は何もしない (null を返す)。
+   */
+  const receiveInboundPlan = useCallback((id: string, input: ReceiveInput): ReceiptResult | null => {
+    const plan = inboundPlans.find(p => p.id === id);
+    if (!plan || plan.canceledAt) return null;
+    const product = products.find(p => p.id === plan.productId);
+    if (!product) return null;
+
+    const target = planReceipt(plan, product, input);
+    if (target.quantity <= 0) return null;
+
+    setProducts(prev => {
+      const now = new Date().toISOString();
+      const next = prev.map(p => {
+        if (p.id !== product.id) return p;
+        const lots = target.existingLot
+          ? p.lots.map(l => l.id === target.existingLot!.id ? { ...l, quantity: l.quantity + target.quantity } : l)
+          : [...p.lots, {
+              id: crypto.randomUUID(),
+              lotNo: target.lotNo,
+              ...(target.expiryDate ? { expiryDate: target.expiryDate } : {}),
+              quantity: target.quantity,
+              warehouseId: target.warehouseId,
+            }];
+        return { ...p, lots, updatedAt: now };
+      });
+      save(next);
+      return next;
+    });
+
+    setInboundPlans(prev => {
+      const next = prev.map(p => p.id === id
+        ? { ...p, receivedQuantity: p.receivedQuantity + target.quantity, updatedAt: new Date().toISOString() }
+        : p);
+      saveInboundPlans(next);
+      return next;
+    });
+
+    addTransaction({
+      type: '入荷',
+      productId: product.id,
+      productName: product.name,
+      productSku: product.sku,
+      lotNo: target.lotNo,
+      quantity: target.quantity,
+      note: input.note?.trim() || (plan.supplier ? `入荷予定（${plan.supplier}）` : '入荷予定'),
+      toWarehouseId: target.warehouseId,
+    });
+
+    return {
+      ...target,
+      remaining: remainingInbound(plan) - target.quantity,
+      merged: !!target.existingLot,
+    };
+  }, [addTransaction, inboundPlans, products]);
+
   const exportExcel = useCallback(() => {
     const wsData: (string | number)[][] = [['SKU', 'ロットNo', '在庫数']];
     for (const p of products) {
@@ -1126,14 +1454,16 @@ export function useInventory() {
     });
   }, []);
 
+  // ロットだけでなく、入荷先に指定されている入荷予定 (未入荷・一部入荷) が残っていても削除しない
   const deleteWarehouse = useCallback((id: string) => {
-    const inUse = products.some(p => p.lots.some(l => l.warehouseId === id));
+    const inUse = products.some(p => p.lots.some(l => l.warehouseId === id))
+      || inboundPlans.some(p => p.warehouseId === id && remainingInbound(p) > 0);
     if (inUse) return;
     setWarehouses(prev => {
       const next = prev.filter(w => w.id !== id);
       saveWarehouses(next); return next;
     });
-  }, [products]);
+  }, [inboundPlans, products]);
 
   const addCategory = useCallback((name: string) => {
     const trimmed = name.trim();
@@ -1244,7 +1574,11 @@ export function useInventory() {
     update(fresh);
     setLedger([]);
     saveLedger([]);
+    // 入荷予定は商品を参照するので、商品を入れ替えたあとに戻す
+    const freshPlans: InboundPlan[] = JSON.parse(JSON.stringify(SAMPLE_INBOUND_PLANS));
+    setInboundPlans(freshPlans);
+    saveInboundPlans(freshPlans);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan };
 }
