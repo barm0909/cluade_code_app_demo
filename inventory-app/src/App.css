@@ -309,7 +309,19 @@ tr:hover td { background: #fafbff; }
   padding: 3px 10px; font-size: 0.78rem; border-radius: 6px; cursor: pointer;
   border: 1.5px solid #2e7d32; background: #e8f5e9; color: #2e7d32; font-weight: 600;
 }
-.btn-receive:hover { background: #2e7d32; color: white; }
+.btn-receive:hover:not(:disabled) { background: #2e7d32; color: white; }
+.btn-receive:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 入荷予定 */
+.status-pending { background: #eef1f5; color: #556; }
+.status-partial { background: #fff4e0; color: #b26a00; }
+.status-done { background: #e8f5e9; color: #2e7d32; }
+.status-canceled { background: #f2f2f2; color: #999; text-decoration: line-through; }
+.inbound-overdue {
+  margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+  background: #fce8e8; color: #c62828; font-size: 0.7rem; font-weight: 700;
+}
+.receive-preview { font-size: 0.85rem; line-height: 1.9; margin: 0; }
 
 /* FEFO出庫モーダル */
 .modal-wide { width: 560px; }

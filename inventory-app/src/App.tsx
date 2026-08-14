@@ -5,6 +5,7 @@ import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { ShipFefoModal } from './ShipFefoModal';
 import { DashboardView } from './DashboardView';
+import { InboundPlanView } from './InboundPlanView';
 import { LedgerView } from './LedgerView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
@@ -151,7 +152,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -164,7 +165,7 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'master' | 'stocktake' | 'ledger'>('inventory');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger'>('inventory');
   const { confirm, confirmDialog } = useConfirm();
   const { notify, notifyDialog } = useNotify();
 
@@ -281,6 +282,7 @@ export default function App() {
       <div className="tabs">
         <button className={activeTab === 'dashboard' ? 'tab active' : 'tab'} onClick={() => setActiveTab('dashboard')}>ダッシュボード</button>
         <button className={activeTab === 'inventory' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inventory')}>在庫一覧</button>
+        <button className={activeTab === 'inbound' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inbound')}>入荷予定</button>
         <button className={activeTab === 'master' ? 'tab active' : 'tab'} onClick={() => setActiveTab('master')}>商品マスタ</button>
         <button className={activeTab === 'stocktake' ? 'tab active' : 'tab'} onClick={() => setActiveTab('stocktake')}>棚卸</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
@@ -288,6 +290,17 @@ export default function App() {
 
       {activeTab === 'dashboard' ? (
         <DashboardView products={products} categories={categories} warehouses={warehouses} />
+      ) : activeTab === 'inbound' ? (
+        <InboundPlanView
+          inboundPlans={inboundPlans}
+          products={products}
+          warehouses={warehouses}
+          onAdd={addInboundPlan}
+          onUpdate={updateInboundPlan}
+          onCancel={cancelInboundPlan}
+          onDelete={deleteInboundPlan}
+          onReceive={receiveInboundPlan}
+        />
       ) : activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
       ) : activeTab === 'stocktake' ? (
@@ -295,7 +308,7 @@ export default function App() {
       ) : activeTab === 'master' ? (<>
         <ProductMasterView products={products} categories={categories} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
-        <WarehouseMasterView warehouses={warehouses} products={products} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
+        <WarehouseMasterView warehouses={warehouses} products={products} inboundPlans={inboundPlans} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
       </>) : (<>
 
       <div className="controls">

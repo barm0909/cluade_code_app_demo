@@ -2,11 +2,12 @@
 // ローカル開発 (wrangler dev) では .wrangler/state のローカルD1、デプロイ後はリモートD1 に同じコードで接続される
 //
 // API 設計はフロント (useInventory.ts) の「スライス単位で全量保存」に合わせている:
-//   GET /api/state       → { products, warehouses, categories, ledger } をまとめて返す
-//   PUT /api/products    → products + lots テーブルを全置換
-//   PUT /api/warehouses  → warehouses テーブルを全置換
-//   PUT /api/categories  → categories テーブルを全置換
-//   PUT /api/ledger      → stock_transactions テーブルを全置換
+//   GET /api/state        → { products, warehouses, categories, ledger, inboundPlans } をまとめて返す
+//   PUT /api/products     → products + lots テーブルを全置換
+//   PUT /api/warehouses   → warehouses テーブルを全置換
+//   PUT /api/categories   → categories テーブルを全置換
+//   PUT /api/ledger       → stock_transactions テーブルを全置換
+//   PUT /api/inbound-plans → inbound_plans テーブルを全置換
 
 export interface Env {
   DB: D1Database;
@@ -61,6 +62,22 @@ interface StockTransaction {
   toWarehouseId?: string;
 }
 
+interface InboundPlan {
+  id: string;
+  productId: string;
+  expectedDate: string;
+  quantity: number;
+  receivedQuantity: number;
+  warehouseId: string;
+  lotNo: string;
+  expiryDate?: string;
+  supplier: string;
+  note: string;
+  canceledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ProductRow {
   id: string;
   name: string;
@@ -82,6 +99,22 @@ interface LotRow {
   warehouse_id: string;
 }
 
+interface InboundPlanRow {
+  id: string;
+  product_id: string;
+  expected_date: string;
+  quantity: number;
+  received_quantity: number;
+  warehouse_id: string;
+  lot_no: string;
+  expiry_date: string | null;
+  supplier: string;
+  note: string;
+  canceled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface TransactionRow {
   id: string;
   date: string;
@@ -97,12 +130,13 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
     db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id FROM stock_transactions ORDER BY date DESC'),
+    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, note, canceled_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
   ]);
 
   const lotsByProduct = new Map<string, Lot[]>();
@@ -150,7 +184,23 @@ async function readState(db: D1Database) {
     ...(r.to_warehouse_id != null ? { toWarehouseId: r.to_warehouse_id } : {}),
   }));
 
-  return { products, warehouses, categories, ledger };
+  const inboundPlans: InboundPlan[] = (plansRes.results as unknown as InboundPlanRow[]).map(r => ({
+    id: r.id,
+    productId: r.product_id,
+    expectedDate: r.expected_date,
+    quantity: r.quantity,
+    receivedQuantity: r.received_quantity,
+    warehouseId: r.warehouse_id,
+    lotNo: r.lot_no,
+    ...(r.expiry_date != null ? { expiryDate: r.expiry_date } : {}),
+    supplier: r.supplier,
+    note: r.note,
+    ...(r.canceled_at != null ? { canceledAt: r.canceled_at } : {}),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+
+  return { products, warehouses, categories, ledger, inboundPlans };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -209,6 +259,17 @@ async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
   await db.batch(stmts);
 }
 
+async function replaceInboundPlans(db: D1Database, plans: InboundPlan[]) {
+  const stmts = [db.prepare('DELETE FROM inbound_plans')];
+  const insert = db.prepare(
+    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const p of plans) {
+    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, p.supplier, p.note, p.canceledAt ?? null, p.createdAt, p.updatedAt));
+  }
+  await db.batch(stmts);
+}
+
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   try {
     if (request.method === 'GET' && url.pathname === '/api/state') {
@@ -227,6 +288,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/ledger':
           await replaceLedger(env.DB, await request.json<StockTransaction[]>());
+          return Response.json({ ok: true });
+        case '/api/inbound-plans':
+          await replaceInboundPlans(env.DB, await request.json<InboundPlan[]>());
           return Response.json({ ok: true });
       }
     }

@@ -1,10 +1,12 @@
 import { useState } from 'react';
-import type { Warehouse, Product } from './useInventory';
+import type { InboundPlan, Warehouse, Product } from './useInventory';
+import { remainingInbound } from './useInventory';
 import { useConfirm } from './useConfirm';
 
 interface Props {
   warehouses: Warehouse[];
   products: Product[];
+  inboundPlans: InboundPlan[];
   onAdd: (name: string, color: string) => void;
   onUpdate: (id: string, name: string, color: string) => void;
   onDelete: (id: string) => void;
@@ -12,7 +14,7 @@ interface Props {
 
 const DEFAULT_NEW_COLOR = '#4f6ef7';
 
-export function WarehouseMasterView({ warehouses, products, onAdd, onUpdate, onDelete }: Props) {
+export function WarehouseMasterView({ warehouses, products, inboundPlans, onAdd, onUpdate, onDelete }: Props) {
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState(DEFAULT_NEW_COLOR);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -22,6 +24,9 @@ export function WarehouseMasterView({ warehouses, products, onAdd, onUpdate, onD
 
   // 使用ロット数 = この倉庫を参照しているロットの数 (0 のときだけ削除可)
   const usageCount = (id: string) => products.reduce((s, p) => s + p.lots.filter(l => l.warehouseId === id).length, 0);
+  // 入荷待ちの予定が入荷先に指定している倉庫も削除できない (入荷先が消えてしまうため)
+  const pendingInboundCount = (id: string) =>
+    inboundPlans.filter(p => p.warehouseId === id && remainingInbound(p) > 0).length;
 
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,6 +78,7 @@ export function WarehouseMasterView({ warehouses, products, onAdd, onUpdate, onD
           <tbody>
             {warehouses.map(w => {
               const count = usageCount(w.id);
+              const pending = pendingInboundCount(w.id);
               return editingId === w.id ? (
                 <tr key={w.id} className="master-editing-row">
                   <td><input className="master-input" aria-label="倉庫名" required value={editName} onChange={e => setEditName(e.target.value)} /></td>
@@ -100,8 +106,10 @@ export function WarehouseMasterView({ warehouses, products, onAdd, onUpdate, onD
                       <button className="btn-edit" onClick={() => startEdit(w)}>編集</button>
                       <button
                         className="btn-delete"
-                        disabled={count > 0}
-                        title={count > 0 ? 'ロットが使用中の倉庫は削除できません' : undefined}
+                        disabled={count > 0 || pending > 0}
+                        title={count > 0
+                          ? 'ロットが使用中の倉庫は削除できません'
+                          : pending > 0 ? '入荷待ちの入荷予定がある倉庫は削除できません' : undefined}
                         onClick={async () => {
                           const ok = await confirm({ message: `倉庫「${w.name}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
                           if (ok) onDelete(w.id);
