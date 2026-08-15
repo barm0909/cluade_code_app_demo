@@ -13,7 +13,7 @@ import {
   EMPTY_INBOUND_PLAN_FILTER,
   DEFAULT_WAREHOUSE_ID,
 } from '../useInventory';
-import type { InboundPlan, InboundPlanInput, Lot, Product, Warehouse } from '../useInventory';
+import type { InboundPlan, InboundPlanInput, Lot, Product, Supplier, Warehouse } from '../useInventory';
 import { stubApi } from './mockApi';
 
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -32,7 +32,7 @@ const plan = (over: Partial<InboundPlan> & { id: string }): InboundPlan => ({
   receivedQuantity: 0,
   warehouseId: DEFAULT_WAREHOUSE_ID,
   lotNo: '20260101',
-  supplier: '山田商店',
+  supplierId: 'sup-yamada',
   note: '',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
@@ -49,6 +49,12 @@ const WAREHOUSES: Warehouse[] = [
   { id: DEFAULT_WAREHOUSE_ID, name: '販売倉庫', color: '#4caf50' },
   { id: 'wh-hold', name: '保留倉庫', color: '#ff9800' },
 ];
+
+const supplier = (id: string, name: string): Supplier => ({
+  id, name, code: '', contact: '', phone: '', email: '', address: '', leadTimeDays: 0, note: '', active: true,
+});
+
+const SUPPLIERS: Supplier[] = [supplier('sup-yamada', '山田商店'), supplier('sup-asahi', '朝日ベーカリー')];
 
 // ────────────────────────────────────────────────────────────
 // 状態の導出 (純粋関数)
@@ -115,13 +121,13 @@ describe('inboundPlanRows', () => {
     expect(rows).toEqual([]);
   });
 
-  it('キーワードは商品名・SKU・ロットNo・仕入先に効く', () => {
+  it('キーワードは商品名・SKU・ロットNo・仕入先名に効く', () => {
     const plans = [
-      plan({ id: '1', productId: 'p1', supplier: '山田乳業' }),
-      plan({ id: '2', productId: 'p2', supplier: '朝日ベーカリー', lotNo: '20991231' }),
+      plan({ id: '1', productId: 'p1', supplierId: 'sup-yamada' }),
+      plan({ id: '2', productId: 'p2', supplierId: 'sup-asahi', lotNo: '20991231' }),
     ];
     const ids = (keyword: string) =>
-      inboundPlanRows(plans, products, { ...EMPTY_INBOUND_PLAN_FILTER, keyword }).map(r => r.plan.id);
+      inboundPlanRows(plans, products, { ...EMPTY_INBOUND_PLAN_FILTER, keyword }, SUPPLIERS).map(r => r.plan.id);
 
     expect(ids('食パン')).toEqual(['2']);
     expect(ids('ML-001')).toEqual(['1']);
@@ -129,18 +135,29 @@ describe('inboundPlanRows', () => {
     expect(ids('朝日')).toEqual(['2']);
   });
 
-  it('状態・倉庫・予定日で絞り込める', () => {
+  it('仕入先名はマスタから解決され、マスタにない仕入先は空欄になる', () => {
+    const rows = inboundPlanRows([
+      plan({ id: '1', supplierId: 'sup-yamada' }),
+      plan({ id: '2', supplierId: '' }),
+      plan({ id: '3', supplierId: 'sup-deleted' }),
+    ], products, EMPTY_INBOUND_PLAN_FILTER, SUPPLIERS);
+
+    expect(rows.map(r => r.supplierName)).toEqual(['山田商店', '', '']);
+  });
+
+  it('状態・倉庫・仕入先・予定日で絞り込める', () => {
     const plans = [
       plan({ id: 'pending', expectedDate: d(1) }),
-      plan({ id: 'partial', expectedDate: d(3), receivedQuantity: 5, warehouseId: 'wh-hold' }),
+      plan({ id: 'partial', expectedDate: d(3), receivedQuantity: 5, warehouseId: 'wh-hold', supplierId: 'sup-asahi' }),
       plan({ id: 'canceled', expectedDate: d(5), canceledAt: 'x' }),
     ];
     const ids = (filter: Partial<typeof EMPTY_INBOUND_PLAN_FILTER>) =>
-      inboundPlanRows(plans, products, { ...EMPTY_INBOUND_PLAN_FILTER, ...filter }).map(r => r.plan.id);
+      inboundPlanRows(plans, products, { ...EMPTY_INBOUND_PLAN_FILTER, ...filter }, SUPPLIERS).map(r => r.plan.id);
 
     expect(ids({ status: '一部入荷' })).toEqual(['partial']);
     expect(ids({ status: 'キャンセル' })).toEqual(['canceled']);
     expect(ids({ warehouseId: 'wh-hold' })).toEqual(['partial']);
+    expect(ids({ supplierId: 'sup-asahi' })).toEqual(['partial']);
     expect(ids({ from: d(3) })).toEqual(['partial', 'canceled']);
     expect(ids({ to: d(3) })).toEqual(['pending', 'partial']);
   });
@@ -163,7 +180,7 @@ describe('inboundPlanTotals', () => {
 
 describe('inboundPlanCsv', () => {
   it('ヘッダーと1予定1行を出力する', () => {
-    const rows = inboundPlanRows([plan({ id: '1', expectedDate: '2026-03-01', quantity: 10, receivedQuantity: 4, expiryDate: '2026-04-01', note: 'メモ' })], [product()]);
+    const rows = inboundPlanRows([plan({ id: '1', expectedDate: '2026-03-01', quantity: 10, receivedQuantity: 4, expiryDate: '2026-04-01', note: 'メモ' })], [product()], EMPTY_INBOUND_PLAN_FILTER, SUPPLIERS);
     const lines = inboundPlanCsv(rows, WAREHOUSES).split('\n');
 
     expect(lines[0]).toBe('入荷予定日,商品名,SKU,ロットNo,賞味期限,入荷先倉庫,仕入先,予定数量,入荷済,残数,状態,備考');
@@ -216,7 +233,7 @@ const INPUT: InboundPlanInput = {
   warehouseId: DEFAULT_WAREHOUSE_ID,
   lotNo: '20260401',
   expiryDate: '2026-04-01',
-  supplier: '山田乳業',
+  supplierId: 'sup-yamada', // DEFAULT_SUPPLIERS の山田乳業
   note: '定期便',
 };
 
@@ -239,10 +256,10 @@ describe('useInventory — 入荷予定の作成・編集', () => {
     const target = result.current.inboundPlans.at(-1)!;
     act(() => { result.current.receiveInboundPlan(target.id, { quantity: 5 }); });
 
-    act(() => { result.current.updateInboundPlan(target.id, { ...INPUT, quantity: 20, supplier: '別の仕入先' }); });
+    act(() => { result.current.updateInboundPlan(target.id, { ...INPUT, quantity: 20, supplierId: 'sup-asahi' }); });
 
     const updated = result.current.inboundPlans.find(p => p.id === target.id)!;
-    expect(updated).toMatchObject({ quantity: 20, supplier: '別の仕入先', receivedQuantity: 5 });
+    expect(updated).toMatchObject({ quantity: 20, supplierId: 'sup-asahi', receivedQuantity: 5 });
   });
 
   it('cancelInboundPlan でキャンセルになり、以後は編集できない', () => {
@@ -253,8 +270,8 @@ describe('useInventory — 入荷予定の作成・編集', () => {
     act(() => { result.current.cancelInboundPlan(target.id); });
     expect(inboundPlanStatus(result.current.inboundPlans.find(p => p.id === target.id)!)).toBe('キャンセル');
 
-    act(() => { result.current.updateInboundPlan(target.id, { ...INPUT, supplier: '変更' }); });
-    expect(result.current.inboundPlans.find(p => p.id === target.id)!.supplier).toBe('山田乳業');
+    act(() => { result.current.updateInboundPlan(target.id, { ...INPUT, supplierId: 'sup-asahi' }); });
+    expect(result.current.inboundPlans.find(p => p.id === target.id)!.supplierId).toBe('sup-yamada');
   });
 
   it('deleteInboundPlan で予定が消える', () => {

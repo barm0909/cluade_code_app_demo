@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { InboundPlanView } from '../InboundPlanView';
-import type { InboundPlan, Product, Warehouse } from '../useInventory';
+import type { InboundPlan, Product, Supplier, Warehouse } from '../useInventory';
 
 const d = (offset: number) => {
   const dt = new Date();
@@ -15,6 +15,11 @@ const WAREHOUSES: Warehouse[] = [
   { id: 'wh-hold', name: '保留倉庫', color: '#ff9800' },
 ];
 
+const SUPPLIERS: Supplier[] = [
+  { id: 'sup-yamada', name: '山田乳業', code: 'S-001', contact: '', phone: '', email: '', address: '', leadTimeDays: 2, note: '', active: true },
+  { id: 'sup-asahi', name: '朝日ベーカリー', code: 'S-002', contact: '', phone: '', email: '', address: '', leadTimeDays: 1, note: '', active: true },
+];
+
 const PRODUCTS: Product[] = [
   { id: 'p1', name: '牛乳', sku: 'ML-001', categoryId: 'cat-dairy', lots: [], minQuantity: 0, price: 198, costPrice: 130, updatedAt: new Date().toISOString() },
   { id: 'p2', name: '食パン', sku: 'BR-001', categoryId: 'cat-bread', lots: [], minQuantity: 0, price: 150, costPrice: 90, updatedAt: new Date().toISOString() },
@@ -23,12 +28,12 @@ const PRODUCTS: Product[] = [
 const PLANS: InboundPlan[] = [
   {
     id: 'ip1', productId: 'p1', expectedDate: d(2), quantity: 24, receivedQuantity: 0,
-    warehouseId: 'wh-sales', lotNo: '20260401', expiryDate: d(12), supplier: '山田乳業', note: '',
+    warehouseId: 'wh-sales', lotNo: '20260401', expiryDate: d(12), supplierId: 'sup-yamada', note: '',
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   },
   {
     id: 'ip2', productId: 'p2', expectedDate: d(-1), quantity: 20, receivedQuantity: 8,
-    warehouseId: 'wh-hold', lotNo: '20260501', supplier: '朝日ベーカリー', note: '',
+    warehouseId: 'wh-hold', lotNo: '20260501', supplierId: 'sup-asahi', note: '',
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   },
 ];
@@ -37,6 +42,7 @@ const defaultProps = {
   inboundPlans: PLANS,
   products: PRODUCTS,
   warehouses: WAREHOUSES,
+  suppliers: SUPPLIERS,
   onAdd: vi.fn(),
   onUpdate: vi.fn(),
   onCancel: vi.fn(),
@@ -136,6 +142,51 @@ describe('InboundPlanView — 作成・取消', () => {
     expect(defaultProps.onAdd).toHaveBeenCalledWith(expect.objectContaining({
       productId: 'p2', quantity: 30, lotNo: '20261231',
     }));
+  });
+
+  it('仕入先はマスタから選べ、選ぶと予定日が標準リードタイムに合わせて動く', async () => {
+    const user = userEvent.setup();
+    render(<InboundPlanView {...defaultProps} />);
+
+    await user.click(screen.getByText('+ 入荷予定を追加'));
+    // 既定は「未設定」= 今日
+    expect(screen.getByLabelText('入荷予定日')).toHaveValue(d(0));
+
+    // 山田乳業 (リードタイム2日) を選ぶと今日+2日になる
+    await user.selectOptions(screen.getByLabelText(/仕入先マスタから選択/), 'sup-yamada');
+    expect(screen.getByLabelText('入荷予定日')).toHaveValue(d(2));
+
+    const qty = screen.getByLabelText('予定数量');
+    await user.clear(qty);
+    await user.type(qty, '10');
+    await user.type(screen.getByPlaceholderText('例: 20261231'), '20261231');
+    await user.click(screen.getByText('保存'));
+
+    expect(defaultProps.onAdd).toHaveBeenCalledWith(expect.objectContaining({ supplierId: 'sup-yamada' }));
+  });
+
+  it('自分で入れ直した入荷予定日は仕入先を変えても上書きされない', async () => {
+    const user = userEvent.setup();
+    render(<InboundPlanView {...defaultProps} />);
+
+    await user.click(screen.getByText('+ 入荷予定を追加'));
+    const dateInput = screen.getByLabelText('入荷予定日');
+    await user.clear(dateInput);
+    await user.type(dateInput, '2026-12-31');
+    await user.selectOptions(screen.getByLabelText(/仕入先マスタから選択/), 'sup-yamada');
+
+    expect(dateInput).toHaveValue('2026-12-31');
+  });
+
+  it('仕入先で絞り込める', async () => {
+    const user = userEvent.setup();
+    render(<InboundPlanView {...defaultProps} />);
+
+    await user.selectOptions(screen.getByLabelText('仕入先'), 'sup-yamada');
+
+    const rows = planRows();
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]).getByText('牛乳')).toBeInTheDocument();
   });
 
   it('取消は確認ダイアログのあとに onCancel を呼ぶ', async () => {

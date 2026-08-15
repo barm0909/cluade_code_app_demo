@@ -7,6 +7,7 @@ import {
   exportInboundPlanCsv,
   inboundPlanRows,
   inboundPlanTotals,
+  supplierName,
 } from './useInventory';
 import type {
   InboundPlan,
@@ -16,6 +17,7 @@ import type {
   Product,
   ReceiveInput,
   ReceiptResult,
+  Supplier,
   Warehouse,
 } from './useInventory';
 import { InboundPlanModal } from './InboundPlanModal';
@@ -27,6 +29,7 @@ interface Props {
   inboundPlans: InboundPlan[];
   products: Product[];
   warehouses: Warehouse[];
+  suppliers: Supplier[];
   onAdd: (data: InboundPlanInput) => void;
   onUpdate: (id: string, data: InboundPlanInput) => void;
   onCancel: (id: string) => void;
@@ -46,7 +49,7 @@ const STATUS_CLASS: Record<InboundPlanStatus, string> = {
  * 絞り込み・集計・CSV はすべて useInventory.ts の純粋関数 (inboundPlanRows / inboundPlanTotals /
  * inboundPlanCsv) に任せ、この画面は表示と操作の受け渡しだけを持つ。
  */
-export function InboundPlanView({ inboundPlans, products, warehouses, onAdd, onUpdate, onCancel, onDelete, onReceive }: Props) {
+export function InboundPlanView({ inboundPlans, products, warehouses, suppliers, onAdd, onUpdate, onCancel, onDelete, onReceive }: Props) {
   const [filter, setFilter] = useState<InboundPlanFilter>(EMPTY_INBOUND_PLAN_FILTER);
   // 編集対象は id で持ち、常に最新の予定を引き直す (入荷して残数が変わっても表示がずれないように)
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
@@ -57,7 +60,10 @@ export function InboundPlanView({ inboundPlans, products, warehouses, onAdd, onU
   const set = <K extends keyof InboundPlanFilter>(key: K, value: InboundPlanFilter[K]) =>
     setFilter(prev => ({ ...prev, [key]: value }));
 
-  const rows = useMemo(() => inboundPlanRows(inboundPlans, products, filter), [inboundPlans, products, filter]);
+  const rows = useMemo(
+    () => inboundPlanRows(inboundPlans, products, filter, suppliers),
+    [inboundPlans, products, filter, suppliers],
+  );
   const totals = useMemo(() => inboundPlanTotals(rows), [rows]);
   const isFiltered = (Object.keys(EMPTY_INBOUND_PLAN_FILTER) as (keyof InboundPlanFilter)[])
     .some(k => filter[k] !== EMPTY_INBOUND_PLAN_FILTER[k]);
@@ -99,6 +105,10 @@ export function InboundPlanView({ inboundPlans, products, warehouses, onAdd, onU
         <select aria-label="入荷先倉庫" value={filter.warehouseId} onChange={e => set('warehouseId', e.target.value)}>
           <option value="">全倉庫</option>
           {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
+        <select aria-label="仕入先" value={filter.supplierId} onChange={e => set('supplierId', e.target.value)}>
+          <option value="">全仕入先</option>
+          {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         {isFiltered && (
           <button className="btn-ghost-light" onClick={() => setFilter(EMPTY_INBOUND_PLAN_FILTER)}>条件クリア</button>
@@ -161,7 +171,7 @@ export function InboundPlanView({ inboundPlans, products, warehouses, onAdd, onU
                 <td className="mono">{r.plan.lotNo}</td>
                 <td><ExpiryBadge expiryDate={r.plan.expiryDate} /></td>
                 <td><WarehouseDot warehouse={warehouses.find(w => w.id === r.plan.warehouseId)} /></td>
-                <td>{r.plan.supplier || '—'}</td>
+                <td>{r.supplierName || '—'}</td>
                 <td style={{ textAlign: 'right' }}>{r.plan.quantity}</td>
                 <td style={{ textAlign: 'right' }}>{r.plan.receivedQuantity}</td>
                 <td style={{ textAlign: 'right', fontWeight: 600 }}>{r.remaining}</td>
@@ -218,6 +228,7 @@ export function InboundPlanView({ inboundPlans, products, warehouses, onAdd, onU
           plan={editingPlan}
           products={products}
           warehouses={warehouses}
+          suppliers={suppliers}
           onSave={data => editingId === 'new' ? onAdd(data) : onUpdate(editingId, data)}
           onClose={() => setEditingId(null)}
         />
@@ -227,6 +238,7 @@ export function InboundPlanView({ inboundPlans, products, warehouses, onAdd, onU
           plan={receivingPlan}
           product={receivingProduct}
           warehouses={warehouses}
+          supplierName={supplierName(suppliers, receivingPlan.supplierId)}
           onReceive={input => handleReceive(receivingPlan, input)}
           onClose={() => setReceivingId(null)}
         />

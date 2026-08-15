@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { Product, Warehouse, Category, StockTransaction, InboundPlan } from '../useInventory';
+import type { Product, Warehouse, Category, StockTransaction, InboundPlan, Supplier } from '../useInventory';
 
 // Worker API (/api/*) を模倣する fetch モック。
 // 戻り値の server オブジェクトが「D1 の中身」に相当し、テストから直接読み書きできる。
@@ -10,10 +10,11 @@ export interface FakeServer {
   categories: Category[];
   ledger: StockTransaction[];
   inboundPlans: InboundPlan[];
+  suppliers: Supplier[];
 }
 
 export function stubApi(initial?: Partial<FakeServer>): FakeServer {
-  const server: FakeServer = { products: [], warehouses: [], categories: [], ledger: [], inboundPlans: [], ...initial };
+  const server: FakeServer = { products: [], warehouses: [], categories: [], ledger: [], inboundPlans: [], suppliers: [], ...initial };
 
   vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: { method?: string; body?: string }) => {
     const url = String(input);
@@ -29,6 +30,7 @@ export function stubApi(initial?: Partial<FakeServer>): FakeServer {
       if (url.endsWith('/api/categories')) { server.categories = body; return { ok: true, json: async () => ({ ok: true }) }; }
       if (url.endsWith('/api/ledger')) { server.ledger = body; return { ok: true, json: async () => ({ ok: true }) }; }
       if (url.endsWith('/api/inbound-plans')) { server.inboundPlans = body; return { ok: true, json: async () => ({ ok: true }) }; }
+      if (url.endsWith('/api/suppliers')) { server.suppliers = body; return { ok: true, json: async () => ({ ok: true }) }; }
     }
     return { ok: false, json: async () => ({ error: 'not found' }) };
   }));

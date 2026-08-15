@@ -24,7 +24,7 @@ interface InboundPlan {
   warehouseId: string;       // 入荷先倉庫
   lotNo: string;             // 予定ロットNo (入荷時の既定値)
   expiryDate?: string;       // 予定賞味期限
-  supplier: string;
+  supplierId: string;        // 仕入先マスタの id ('' なら未設定)
   note: string;
   canceledAt?: string;       // キャンセル日時。未設定なら有効
   createdAt: string;
@@ -37,6 +37,10 @@ interface InboundPlan {
 入荷の記録と状態表示がずれることがありません。キャンセルだけは操作の結果なので
 `canceledAt` として保存します。
 
+仕入先は **id 参照**です（`supplierId`）。仕入先マスタ導入前の自由入力（`supplier: string`）は
+読み込み時に `migrateInboundPlans` がマスタへ対応付けます。詳細は
+[supplier-feature.md](supplier-feature.md) を参照してください。
+
 `product_id` には外部キーを張っていません。`PUT /api/products` が products を
 全削除→再挿入する方式のため、`ON DELETE CASCADE` を付けると商品保存のたびに
 予定が消えてしまうからです。商品削除時の予定削除はフロント側（`deleteProduct`）が行います。
@@ -47,10 +51,12 @@ interface InboundPlan {
 
 タブ構成は `ダッシュボード / 在庫一覧 / **入荷予定** / 商品マスタ / 棚卸 / 入出庫帳票`。
 
-- `InboundPlanView.tsx` — 一覧・絞り込み（キーワード / 予定日範囲 / 状態 / 倉庫）・集計・CSV。
+- `InboundPlanView.tsx` — 一覧・絞り込み（キーワード / 予定日範囲 / 状態 / 倉庫 / 仕入先）・集計・CSV。
   絞り込みと集計は純粋関数 `inboundPlanRows` / `inboundPlanTotals` に任せている
   （`LedgerView` / `StocktakeView` / `DashboardView` と同じ構成）
-- `InboundPlanModal.tsx` — 予定の作成・編集。ロットNoは賞味期限から自動生成（`LotModal` と同じ挙動）
+- `InboundPlanModal.tsx` — 予定の作成・編集。ロットNoは賞味期限から自動生成（`LotModal` と同じ挙動）。
+  仕入先は仕入先マスタからのセレクトで、新規作成時に選ぶと入荷予定日が標準リードタイムに追従する
+  （自分で日付を入れ直したあとは追従しない）
 - `ReceiveInboundModal.tsx` — 入荷。予定の内容を初期値にしつつ、実際に届いたものに合わせて
   数量・倉庫・ロットNo・賞味期限・備考を上書きできる
 
@@ -81,7 +87,7 @@ interface InboundPlan {
 在庫が動くのは「入荷」のときだけです。予定の作成・編集・取消・削除は帳票に記録しません。
 
 入荷1回につき `入荷` を1件記録します（`toWarehouseId` は入荷先倉庫、`note` は入力した備考、
-未入力なら `入荷予定（仕入先）`）。
+未入力なら `入荷予定（仕入先名）`。仕入先名は**入荷した時点の**マスタから解決する）。
 
 ```
 2026/08/14 17:10  入荷  食パン  BR-001  20260818  +12  販売倉庫  入荷予定（朝日ベーカリー）
@@ -94,7 +100,7 @@ interface InboundPlan {
 | 関数 | 役割 |
 |------|------|
 | `inboundPlanStatus(plan)` / `remainingInbound(plan)` / `isOverdueInboundPlan(plan, today?)` | 状態・残数・遅延の導出 |
-| `inboundPlanRows(plans, products, filter?)` | 絞り込み＋商品情報の解決。予定日昇順（同日は登録順）。商品マスタにない予定は除外 |
+| `inboundPlanRows(plans, products, filter?, suppliers?)` | 絞り込み＋商品・仕入先名の解決。予定日昇順（同日は登録順）。商品マスタにない予定は除外 |
 | `inboundPlanTotals(rows)` | 件数・予定・入荷済・残・遅延件数（キャンセルは数量集計から除外） |
 | `inboundPlanCsv(rows, warehouses)` / `exportInboundPlanCsv` | CSV（`CSV_EXPORTS.inbound`、`入荷予定_YYYY-MM-DD.csv`） |
 | `planReceipt(plan, product, input)` | 入荷でどのロットがどう増えるかを返す。状態は変更しない |
@@ -106,6 +112,7 @@ interface InboundPlan {
 - `deleteProduct` — その商品の入荷予定も削除する（入荷済みの在庫・帳票は残る）
 - `deleteWarehouse` — ロットに加えて**入荷待ちの予定が入荷先にしている倉庫**も削除できない
   （`WarehouseMasterView` 側でもボタンを無効化）
+- `deleteSupplier` — **入荷予定から参照されている仕入先は削除できない**（`SupplierMasterView` 側でもボタンを無効化）
 - `resetToSample` — `SAMPLE_INBOUND_PLANS`（`seed.sql` と同期）に戻す
 
 テストは純粋関数とミューテーターが `src/test/inboundPlan.test.ts`、画面が
