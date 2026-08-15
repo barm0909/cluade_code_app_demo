@@ -152,7 +152,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -289,7 +289,7 @@ export default function App() {
       </div>
 
       {activeTab === 'dashboard' ? (
-        <DashboardView products={products} categories={categories} warehouses={warehouses} />
+        <DashboardView products={products} categories={categories} warehouses={warehouses} ledger={ledger} onDispose={disposeLots} />
       ) : activeTab === 'inbound' ? (
         <InboundPlanView
           inboundPlans={inboundPlans}

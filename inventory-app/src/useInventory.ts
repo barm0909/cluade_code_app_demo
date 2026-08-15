@@ -353,7 +353,7 @@ function saveInboundPlans(plans: InboundPlan[]) {
 }
 
 // ---- CSV エクスポートの種類 ----
-// 画面に CSV エクスポートボタンが4つあり、どれも中身が違う。ボタンの表示名・ツールチップ・
+// 画面に CSV エクスポートボタンが複数あり、どれも中身が違う。ボタンの表示名・ツールチップ・
 // 出力ファイル名をここ1箇所で決めることで、「どのボタンから何のファイルが出るのか」を
 // 画面上でもダウンロードフォルダでも見分けられるようにする。
 export const CSV_EXPORTS = {
@@ -362,6 +362,7 @@ export const CSV_EXPORTS = {
   stocktake: { label: '棚卸表', description: '帳簿在庫と実数カウントの一覧' },
   reorder: { label: '要発注リスト', description: '発注点を下回っている商品' },
   inbound: { label: '入荷予定', description: '絞り込み後の入荷予定' },
+  disposal: { label: '廃棄ロス', description: '期間内の商品別の廃棄実績' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -1015,6 +1016,165 @@ export function exportLowStockCsv(rows: LowStockRow[], categories: Category[]) {
   downloadCsv(csvFileName('reorder'), lowStockCsv(rows, categories));
 }
 
+// ---------------------------------------------------------------------------
+// 廃棄 (期限切れロスの処分)
+// 期限切れロットは1ロットずつ 出庫→廃棄 するしかなかったので、ダッシュボードの期限アラートから
+// まとめて処分できるようにする。廃棄そのものは既存の 廃棄 区分の出庫なので、専用の永続データは
+// 持たず、実績は帳票 (ledger) から集計する。
+// ---------------------------------------------------------------------------
+
+/** 一括廃棄の既定の備考。帳票でこの操作による廃棄だと分かるようにする */
+export const DISPOSAL_NOTE = '一括廃棄';
+
+/** 廃棄する1ロット。廃棄は「そのロットを処分しきる」操作なので数量はロットの全在庫 */
+export interface DisposalTarget {
+  productId: string;
+  productName: string;
+  productSku: string;
+  lotId: string;
+  lotNo: string;
+  expiryDate?: string;
+  warehouseId: string;
+  quantity: number;
+  costPrice: number;
+  costValue: number; // quantity × costPrice
+  expired: boolean; // 実行時点で期限切れか (期限内のロットを選んだときの注意喚起に使う)
+}
+
+export interface DisposalPlan {
+  targets: DisposalTarget[];
+  quantity: number; // 廃棄する数量の合計
+  costValue: number; // 廃棄ロス金額 (原価ベース) の合計
+  expiredCount: number;
+  notExpiredCount: number; // まだ期限の来ていないロットの件数
+}
+
+/**
+ * 選んだロットを全量廃棄したときに何がいくつ減るかを求める。状態は一切変更しない
+ * (確認ダイアログのプレビューと disposeLots が同じ結果を共有するための純粋関数)。
+ * 在庫の残っていないロットと、見つからない lotId は黙って除外する。
+ */
+export function planDisposal(products: Product[], lotIds: Iterable<string>): DisposalPlan {
+  const wanted = new Set(lotIds);
+  const targets: DisposalTarget[] = [];
+  for (const p of products) {
+    for (const l of p.lots) {
+      if (!wanted.has(l.id) || l.quantity <= 0) continue;
+      targets.push({
+        productId: p.id,
+        productName: p.name,
+        productSku: p.sku,
+        lotId: l.id,
+        lotNo: l.lotNo,
+        expiryDate: l.expiryDate,
+        warehouseId: l.warehouseId,
+        quantity: l.quantity,
+        costPrice: p.costPrice,
+        costValue: l.quantity * p.costPrice,
+        expired: isExpired(l),
+      });
+    }
+  }
+  // 期限アラートの並び (期限の早い順) に合わせる。期限なしは最後
+  targets.sort((a, b) => {
+    if (a.expiryDate !== b.expiryDate) {
+      if (!a.expiryDate) return 1;
+      if (!b.expiryDate) return -1;
+      return a.expiryDate.localeCompare(b.expiryDate);
+    }
+    return a.productName.localeCompare(b.productName);
+  });
+
+  const plan: DisposalPlan = { targets, quantity: 0, costValue: 0, expiredCount: 0, notExpiredCount: 0 };
+  for (const t of targets) {
+    plan.quantity += t.quantity;
+    plan.costValue += t.costValue;
+    if (t.expired) plan.expiredCount++;
+    else plan.notExpiredCount++;
+  }
+  return plan;
+}
+
+/** 廃棄ロスの集計期間。全期間は開始日なし */
+export const DISPOSAL_PERIODS = ['今月', '今年', '全期間'] as const;
+export type DisposalPeriod = typeof DISPOSAL_PERIODS[number];
+
+/**
+ * 集計期間の開始日 (ローカル日付 YYYY-MM-DD)。全期間は空文字 = 絞らない。
+ * 帳票の絞り込みと同じくローカル日付で比べるので、画面の日時表示と食い違わない。
+ */
+export function disposalPeriodStart(period: DisposalPeriod, today = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (period === '今月') return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-01`;
+  if (period === '今年') return `${today.getFullYear()}-01-01`;
+  return '';
+}
+
+/** 帳票から廃棄の記録だけを取り出す。from は開始日 (この日を含む)、空文字なら全期間 */
+export function disposalTransactions(ledger: StockTransaction[], from = ''): StockTransaction[] {
+  return ledger.filter(t => t.type === '廃棄' && (!from || localDateKey(t.date) >= from));
+}
+
+/** 廃棄ロスの商品別集計の1行 */
+export interface DisposalRow {
+  productId: string;
+  productName: string;
+  productSku: string;
+  count: number; // 廃棄の記録件数
+  quantity: number;
+  costValue: number; // 廃棄ロス金額 (原価ベース)
+}
+
+/**
+ * 廃棄の記録を商品ごとにまとめ、ロス金額の大きい順に返す。
+ * 帳票は原価を持たないので金額は商品マスタの「現在の原価」を掛けた概算で、
+ * 削除された商品 (マスタにない) は原価0として数量だけを数える。
+ */
+export function disposalRows(txns: StockTransaction[], products: Product[]): DisposalRow[] {
+  const costById = new Map(products.map(p => [p.id, p.costPrice]));
+  const byProduct = new Map<string, DisposalRow>();
+  for (const t of txns) {
+    const row = byProduct.get(t.productId) ?? {
+      productId: t.productId,
+      productName: t.productName,
+      productSku: t.productSku,
+      count: 0,
+      quantity: 0,
+      costValue: 0,
+    };
+    row.count++;
+    row.quantity += t.quantity;
+    row.costValue += t.quantity * (costById.get(t.productId) ?? 0);
+    byProduct.set(t.productId, row);
+  }
+  return [...byProduct.values()].sort((a, b) =>
+    b.costValue - a.costValue || b.quantity - a.quantity || a.productName.localeCompare(b.productName));
+}
+
+export interface DisposalTotals {
+  count: number;
+  quantity: number;
+  costValue: number;
+}
+
+export function disposalTotals(rows: DisposalRow[]): DisposalTotals {
+  return rows.reduce<DisposalTotals>((totals, r) => ({
+    count: totals.count + r.count,
+    quantity: totals.quantity + r.quantity,
+    costValue: totals.costValue + r.costValue,
+  }), { count: 0, quantity: 0, costValue: 0 });
+}
+
+export function disposalCsv(rows: DisposalRow[]): string {
+  const header = '商品名,SKU,廃棄件数,廃棄数量,廃棄金額（原価）';
+  const body = rows.map(r => [r.productName, r.productSku, r.count, r.quantity, r.costValue].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportDisposalCsv(rows: DisposalRow[]) {
+  downloadCsv(csvFileName('disposal'), disposalCsv(rows));
+}
+
 /** 入荷予定の入力値 (id・入荷実績・日時は画面から編集しない) */
 export type InboundPlanInput = Omit<InboundPlan, 'id' | 'receivedQuantity' | 'canceledAt' | 'createdAt' | 'updatedAt'>;
 
@@ -1233,6 +1393,42 @@ export function useInventory() {
       quantity: a.quantity,
       note: options.note ?? 'FEFO出庫',
       fromWarehouseId: a.warehouseId,
+    })));
+
+    return plan;
+  }, [addTransactions, products]);
+
+  /**
+   * 選んだロットをまとめて廃棄する。引当先の決定は planDisposal (純粋関数) に任せ、
+   * ここでは在庫の反映と帳票への記録だけを行う。ロットごとに 廃棄 を1件記録する。
+   *
+   * 廃棄したロットは在庫0にするのではなく取り除く。中身が無くなったロットを残すと
+   * 画面上部の「期限切れロットあり」バナー (在庫0のロットも数える) が消えないためで、
+   * 何をいくつ廃棄したかは帳票に残る。
+   */
+  const disposeLots = useCallback((lotIds: string[], note: string = DISPOSAL_NOTE): DisposalPlan => {
+    const plan = planDisposal(products, lotIds);
+    if (plan.targets.length === 0) return plan;
+
+    const disposed = new Set(plan.targets.map(t => t.lotId));
+    setProducts(prev => {
+      const now = new Date().toISOString();
+      const next = prev.map(p => p.lots.some(l => disposed.has(l.id))
+        ? { ...p, updatedAt: now, lots: p.lots.filter(l => !disposed.has(l.id)) }
+        : p);
+      save(next);
+      return next;
+    });
+
+    addTransactions(plan.targets.map(t => ({
+      type: '廃棄' as TransactionType,
+      productId: t.productId,
+      productName: t.productName,
+      productSku: t.productSku,
+      lotNo: t.lotNo,
+      quantity: t.quantity,
+      note,
+      fromWarehouseId: t.warehouseId,
     })));
 
     return plan;
@@ -1580,5 +1776,5 @@ export function useInventory() {
     saveInboundPlans(freshPlans);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan };
 }
