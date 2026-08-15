@@ -2,12 +2,13 @@
 // ローカル開発 (wrangler dev) では .wrangler/state のローカルD1、デプロイ後はリモートD1 に同じコードで接続される
 //
 // API 設計はフロント (useInventory.ts) の「スライス単位で全量保存」に合わせている:
-//   GET /api/state        → { products, warehouses, categories, ledger, inboundPlans } をまとめて返す
+//   GET /api/state        → { products, warehouses, categories, ledger, inboundPlans, suppliers } をまとめて返す
 //   PUT /api/products     → products + lots テーブルを全置換
 //   PUT /api/warehouses   → warehouses テーブルを全置換
 //   PUT /api/categories   → categories テーブルを全置換
 //   PUT /api/ledger       → stock_transactions テーブルを全置換
 //   PUT /api/inbound-plans → inbound_plans テーブルを全置換
+//   PUT /api/suppliers    → suppliers テーブルを全置換
 
 export interface Env {
   DB: D1Database;
@@ -25,6 +26,19 @@ interface Warehouse {
 interface Category {
   id: string;
   name: string;
+}
+
+interface Supplier {
+  id: string;
+  name: string;
+  code: string;
+  contact: string;
+  phone: string;
+  email: string;
+  address: string;
+  leadTimeDays: number;
+  note: string;
+  active: boolean;
 }
 
 interface Lot {
@@ -71,7 +85,8 @@ interface InboundPlan {
   warehouseId: string;
   lotNo: string;
   expiryDate?: string;
-  supplier: string;
+  supplierId: string;
+  supplier?: string; // 仕入先マスタ導入前の自由入力 (フロントが supplierId へ移行する)
   note: string;
   canceledAt?: string;
   createdAt: string;
@@ -109,10 +124,24 @@ interface InboundPlanRow {
   lot_no: string;
   expiry_date: string | null;
   supplier: string;
+  supplier_id: string | null;
   note: string;
   canceled_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface SupplierRow {
+  id: string;
+  name: string;
+  code: string;
+  contact: string;
+  phone: string;
+  email: string;
+  address: string;
+  lead_time_days: number;
+  note: string;
+  active: number;
 }
 
 interface TransactionRow {
@@ -130,13 +159,14 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
     db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id FROM stock_transactions ORDER BY date DESC'),
-    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, note, canceled_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
+    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, note, canceled_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
+    db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
   ]);
 
   const lotsByProduct = new Map<string, Lot[]>();
@@ -193,14 +223,30 @@ async function readState(db: D1Database) {
     warehouseId: r.warehouse_id,
     lotNo: r.lot_no,
     ...(r.expiry_date != null ? { expiryDate: r.expiry_date } : {}),
-    supplier: r.supplier,
+    supplierId: r.supplier_id ?? '',
+    // 仕入先マスタ導入前の行 (supplier_id が NULL) は自由入力の名前を渡し、
+    // フロントの migrateInboundPlans にマスタへ対応付けてもらう
+    ...(r.supplier_id == null && r.supplier ? { supplier: r.supplier } : {}),
     note: r.note,
     ...(r.canceled_at != null ? { canceledAt: r.canceled_at } : {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
 
-  return { products, warehouses, categories, ledger, inboundPlans };
+  const suppliers: Supplier[] = (suppliersRes.results as unknown as SupplierRow[]).map(r => ({
+    id: r.id,
+    name: r.name,
+    code: r.code,
+    contact: r.contact,
+    phone: r.phone,
+    email: r.email,
+    address: r.address,
+    leadTimeDays: r.lead_time_days,
+    note: r.note,
+    active: r.active !== 0,
+  }));
+
+  return { products, warehouses, categories, ledger, inboundPlans, suppliers };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -259,13 +305,28 @@ async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
   await db.batch(stmts);
 }
 
+// 旧 supplier 列 (自由入力) は列自体を残しつつ空文字で保存する。
+// 保存されるのはフロントが仕入先マスタへ移行し終えた状態なので、名前は suppliers 側にある
 async function replaceInboundPlans(db: D1Database, plans: InboundPlan[]) {
   const stmts = [db.prepare('DELETE FROM inbound_plans')];
   const insert = db.prepare(
-    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const p of plans) {
-    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, p.supplier, p.note, p.canceledAt ?? null, p.createdAt, p.updatedAt));
+    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.note, p.canceledAt ?? null, p.createdAt, p.updatedAt));
+  }
+  await db.batch(stmts);
+}
+
+// suppliers を全置換。inbound_plans が supplier_id で参照するが外部キーは張っていないので
+// (products / warehouses と同じ理由)、そのまま削除→再挿入できる
+async function replaceSuppliers(db: D1Database, suppliers: Supplier[]) {
+  const stmts = [db.prepare('DELETE FROM suppliers')];
+  const insert = db.prepare(
+    'INSERT INTO suppliers (id, name, code, contact, phone, email, address, lead_time_days, note, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const s of suppliers) {
+    stmts.push(insert.bind(s.id, s.name, s.code, s.contact, s.phone, s.email, s.address, s.leadTimeDays, s.note, s.active ? 1 : 0));
   }
   await db.batch(stmts);
 }
@@ -291,6 +352,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/inbound-plans':
           await replaceInboundPlans(env.DB, await request.json<InboundPlan[]>());
+          return Response.json({ ok: true });
+        case '/api/suppliers':
+          await replaceSuppliers(env.DB, await request.json<Supplier[]>());
           return Response.json({ ok: true });
       }
     }

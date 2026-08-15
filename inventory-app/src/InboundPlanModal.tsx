@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import type { InboundPlan, InboundPlanInput, Product, Warehouse } from './useInventory';
-import { generateLotNo, DEFAULT_WAREHOUSE_ID } from './useInventory';
+import type { InboundPlan, InboundPlanInput, Product, Supplier, Warehouse } from './useInventory';
+import { generateLotNo, expectedDateFromLeadTime, selectableSuppliers, DEFAULT_WAREHOUSE_ID } from './useInventory';
 import { NumberInput } from './NumberInput';
 
 interface Props {
   plan: InboundPlan | null; // null = 新規作成
   products: Product[];
   warehouses: Warehouse[];
+  suppliers: Supplier[];
   onSave: (data: InboundPlanInput) => void;
   onClose: () => void;
 }
@@ -21,7 +22,7 @@ const makeEmpty = (products: Product[], warehouses: Warehouse[]) => ({
   warehouseId: warehouses.some(w => w.id === DEFAULT_WAREHOUSE_ID) ? DEFAULT_WAREHOUSE_ID : (warehouses[0]?.id ?? ''),
   lotNo: '',
   expiryDate: '',
-  supplier: '',
+  supplierId: '',
   note: '',
 });
 
@@ -29,7 +30,7 @@ const makeEmpty = (products: Product[], warehouses: Warehouse[]) => ({
  * 入荷予定の作成・編集フォーム。ここで決めた内容 (ロットNo・賞味期限・倉庫) は
  * 入荷モーダルの初期値になるので、入荷時に上書きもできる「予定値」として扱う。
  */
-export function InboundPlanModal({ plan, products, warehouses, onSave, onClose }: Props) {
+export function InboundPlanModal({ plan, products, warehouses, suppliers, onSave, onClose }: Props) {
   const [form, setForm] = useState(() => makeEmpty(products, warehouses));
   const [lotError, setLotError] = useState('');
 
@@ -42,12 +43,27 @@ export function InboundPlanModal({ plan, products, warehouses, onSave, onClose }
           warehouseId: plan.warehouseId,
           lotNo: plan.lotNo,
           expiryDate: plan.expiryDate ?? '',
-          supplier: plan.supplier,
+          supplierId: plan.supplierId,
           note: plan.note,
         }
       : makeEmpty(products, warehouses));
     setLotError('');
   }, [plan, products, warehouses]);
+
+  // 新規登録で仕入先を選んだときだけ、入荷予定日をその仕入先の標準リードタイムに合わせる。
+  // 編集中や、予定日を自分で動かしたあと (今日+前の仕入先のリードタイム から変わっている) は触らない
+  const handleSupplierChange = (supplierId: string) => {
+    setForm(f => {
+      const previous = suppliers.find(s => s.id === f.supplierId);
+      const selected = suppliers.find(s => s.id === supplierId);
+      const keepsDefault = f.expectedDate === expectedDateFromLeadTime(previous);
+      return {
+        ...f,
+        supplierId,
+        expectedDate: !plan && keepsDefault ? expectedDateFromLeadTime(selected) : f.expectedDate,
+      };
+    });
+  };
 
   // ロットNoが未入力か、前の賞味期限から自動生成したままのときだけ追従させる (手入力は尊重する)
   const handleExpiryChange = (val: string) => {
@@ -141,8 +157,13 @@ export function InboundPlanModal({ plan, products, warehouses, onSave, onClose }
                 {lotError && <span className="field-error">{lotError}</span>}
               </label>
               <label htmlFor="ip-supplier">
-                仕入先 <span className="label-hint">（任意）</span>
-                <input id="ip-supplier" value={form.supplier} onChange={e => setForm(f => ({ ...f, supplier: e.target.value }))} placeholder="例: 山田乳業" />
+                仕入先 <span className="label-hint">（任意 — 仕入先マスタから選択）</span>
+                <select id="ip-supplier" value={form.supplierId} onChange={e => handleSupplierChange(e.target.value)}>
+                  <option value="">未設定</option>
+                  {selectableSuppliers(suppliers, form.supplierId).map(s => (
+                    <option key={s.id} value={s.id}>{s.name}{s.active ? '' : '（取引停止）'}</option>
+                  ))}
+                </select>
               </label>
               <label className="form-span-2" htmlFor="ip-note">
                 備考 <span className="label-hint">（任意）</span>

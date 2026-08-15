@@ -8,6 +8,8 @@ interface Props {
   plan: InboundPlan;
   product: Product;
   warehouses: Warehouse[];
+  /** 仕入先マスタから解決した名前 (未設定なら空文字)。予定は id しか持たないので呼び出し側で解決する */
+  supplierName?: string;
   onReceive: (input: ReceiveInput) => void;
   onClose: () => void;
 }
@@ -19,7 +21,7 @@ const LOT_PATTERN = /^\d{8}$/;
  * 実際に届いたものが違えばここで直せる。プレビューは receiveInboundPlan と同じ planReceipt を
  * 呼んでいるので、「確定したら別のロットに入った」ということは起こらない。
  */
-export function ReceiveInboundModal({ plan, product, warehouses, onReceive, onClose }: Props) {
+export function ReceiveInboundModal({ plan, product, warehouses, supplierName = '', onReceive, onClose }: Props) {
   const remaining = remainingInbound(plan);
   const [qty, setQty] = useState(remaining);
   const [lotNo, setLotNo] = useState(plan.lotNo);
@@ -61,7 +63,7 @@ export function ReceiveInboundModal({ plan, product, warehouses, onReceive, onCl
             <p className="move-lot-info">
               <strong>{product.name}</strong>（{product.sku}）<br />
               入荷予定日 {plan.expectedDate}
-              {plan.supplier && <> / 仕入先 {plan.supplier}</>}<br />
+              {supplierName && <> / 仕入先 {supplierName}</>}<br />
               予定 {plan.quantity} ／ 入荷済 {plan.receivedQuantity} ／ <strong>残 {remaining}</strong>
             </p>
             <div className="form-grid">

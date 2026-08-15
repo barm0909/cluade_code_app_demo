@@ -11,6 +11,7 @@ import { LotTraceView } from './LotTraceView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
+import { SupplierMasterView } from './SupplierMasterView';
 import { StocktakeView } from './StocktakeView';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
@@ -153,7 +154,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -299,6 +300,7 @@ export default function App() {
           inboundPlans={inboundPlans}
           products={products}
           warehouses={warehouses}
+          suppliers={suppliers}
           onAdd={addInboundPlan}
           onUpdate={updateInboundPlan}
           onCancel={cancelInboundPlan}
@@ -321,6 +323,7 @@ export default function App() {
         <ProductMasterView products={products} categories={categories} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
         <WarehouseMasterView warehouses={warehouses} products={products} inboundPlans={inboundPlans} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
+        <SupplierMasterView suppliers={suppliers} inboundPlans={inboundPlans} onAdd={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} />
       </>) : (<>
 
       <div className="controls">

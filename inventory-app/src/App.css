@@ -93,6 +93,21 @@ select:focus { outline: none; border-color: #4f6ef7; }
   display: inline-block; width: 20px; height: 20px; border-radius: 6px;
   border: 1px solid rgba(0,0,0,0.15); vertical-align: middle;
 }
+.supplier-master { margin-top: 32px; }
+.supplier-controls { flex-wrap: wrap; align-items: center; }
+.supplier-inactive-check {
+  display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: #555; white-space: nowrap;
+}
+.supplier-inactive-check input { cursor: pointer; }
+/* 取引停止の仕入先は一覧に残るが、取引中と見分けが付くよう淡く表示する */
+.supplier-inactive td { color: #999; }
+.supplier-inactive td strong { font-weight: 600; }
+.supplier-note { color: #999; font-size: 0.78rem; margin-top: 2px; }
+/* 列が多いので、名前・バッジ・操作ボタンは折り返さず、狭い画面では横スクロールさせる */
+.supplier-table { overflow-x: auto; }
+.supplier-master td, .supplier-master th { white-space: nowrap; }
+.supplier-master .supplier-contact, .supplier-master .supplier-note { white-space: normal; }
+
 .btn-delete:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .table-wrapper { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }

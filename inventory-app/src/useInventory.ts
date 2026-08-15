@@ -14,6 +14,25 @@ export interface Category {
   name: string;
 }
 
+// 仕入先 (発注先) マスタ。入荷予定が id で参照するので、改名しても過去の予定の紐づけは切れない。
+// 取引が終わった仕入先は削除せず active=false にすることで、過去の入荷予定を残したまま
+// 新規登録の選択肢から外せる。
+export interface Supplier {
+  id: string;
+  name: string; // 仕入先名 (必須・重複不可)
+  code: string; // 仕入先コード (任意・重複不可)。基幹システムの取引先コードなどを想定
+  contact: string; // 担当者名
+  phone: string;
+  email: string;
+  address: string;
+  leadTimeDays: number; // 標準リードタイム (発注から入荷までの日数)。入荷予定日の既定値に使う
+  note: string;
+  active: boolean; // 取引中か (false = 取引停止)
+}
+
+/** 仕入先の入力値 (id は採番するので含まない) */
+export type SupplierInput = Omit<Supplier, 'id'>;
+
 export interface Lot {
   id: string;
   lotNo: string;
@@ -76,7 +95,9 @@ export interface InboundPlan {
   warehouseId: string; // 入荷先倉庫
   lotNo: string; // 予定ロットNo (入荷時の既定値)
   expiryDate?: string; // 予定賞味期限
-  supplier: string; // 仕入先 (自由入力)
+  supplierId: string; // 仕入先マスタの id。空文字は「仕入先未設定」
+  /** @deprecated 仕入先マスタ導入前の自由入力。読み込み時に migrateInboundPlans が supplierId へ移す */
+  supplier?: string;
   note: string;
   canceledAt?: string; // キャンセル日時 (ISO)。未設定なら有効な予定
   createdAt: string;
@@ -185,6 +206,7 @@ interface ServerState {
   categories: Category[];
   ledger: StockTransaction[];
   inboundPlans?: InboundPlan[]; // 入荷予定を持たない旧サーバーからのレスポンスも読めるよう任意扱い
+  suppliers?: Supplier[]; // 仕入先マスタも同様 (未導入のサーバーからは返ってこない)
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -197,7 +219,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -221,6 +243,24 @@ const DEFAULT_CATEGORIES: Category[] = [
   { id: 'cat-dairy', name: '乳製品' },
   { id: 'cat-bread', name: 'パン' },
   { id: 'cat-label', name: 'ラベル' },
+];
+
+// 仕入先のサンプル (seed.sql と同期)。SAMPLE_INBOUND_PLANS が id で参照している
+const DEFAULT_SUPPLIERS: Supplier[] = [
+  {
+    id: 'sup-yamada', name: '山田乳業', code: 'S-001', contact: '山田 太郎',
+    phone: '03-1234-5678', email: 'order@yamada-dairy.example.jp', address: '東京都千代田区1-1-1',
+    leadTimeDays: 2, note: '定期便（火・金）', active: true,
+  },
+  {
+    id: 'sup-asahi', name: '朝日ベーカリー', code: 'S-002', contact: '朝日 花子',
+    phone: '06-2345-6789', email: 'contact@asahi-bakery.example.jp', address: '大阪府大阪市北区2-2-2',
+    leadTimeDays: 1, note: '', active: true,
+  },
+  {
+    id: 'sup-osaka-print', name: '大阪印刷', code: 'S-003', contact: '', phone: '06-3456-7890',
+    email: '', address: '大阪府堺市3-3-3', leadTimeDays: 7, note: 'ラベル・資材', active: true,
+  },
 ];
 
 const d = (offset: number) => {
@@ -267,16 +307,16 @@ const SAMPLE_INBOUND_PLANS: InboundPlan[] = [
   {
     id: 'ip1', productId: '1', expectedDate: d(2), quantity: 24, receivedQuantity: 0,
     warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: d(12).replace(/-/g, ''), expiryDate: d(12),
-    supplier: '山田乳業', note: '定期便', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    supplierId: 'sup-yamada', note: '定期便', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
   {
     id: 'ip2', productId: '2', expectedDate: d(-1), quantity: 20, receivedQuantity: 8,
     warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: d(4).replace(/-/g, ''), expiryDate: d(4),
-    supplier: '朝日ベーカリー', note: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    supplierId: 'sup-asahi', note: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
   {
     id: 'ip3', productId: '3', expectedDate: d(5), quantity: 1000, receivedQuantity: 0,
-    warehouseId: 'wh-hold', lotNo: '20260401', supplier: '大阪印刷', note: '検品後に販売倉庫へ移動',
+    warehouseId: 'wh-hold', lotNo: '20260401', supplierId: 'sup-osaka-print', note: '検品後に販売倉庫へ移動',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
 ];
@@ -306,6 +346,34 @@ function migrateProducts(products: Product[], categories: Category[]): { product
     };
   });
   return { products: migrated, categories: cats };
+}
+
+/**
+ * 旧データの後方互換: 仕入先マスタ導入前の入荷予定は仕入先を自由入力の文字列で持っている。
+ * 同名の仕入先があればその id へ、なければ仕入先を作って対応付ける
+ * (カテゴリの migrateProducts と同じ方針)。空欄の予定は「仕入先未設定」のまま残す。
+ */
+function migrateInboundPlans(plans: InboundPlan[], suppliers: Supplier[]): { plans: InboundPlan[]; suppliers: Supplier[] } {
+  const sups = [...suppliers];
+  const idByName = new Map(sups.map(s => [s.name, s.id]));
+  const migrated = plans.map(plan => {
+    const { supplier, ...rest } = plan;
+    if (rest.supplierId) return rest;
+    const legacyName = (supplier ?? '').trim();
+    if (!legacyName) return { ...rest, supplierId: '' };
+    let id = idByName.get(legacyName);
+    if (!id) {
+      id = crypto.randomUUID();
+      sups.push({ ...EMPTY_SUPPLIER, id, name: legacyName });
+      idByName.set(legacyName, id);
+    }
+    return { ...rest, supplierId: id };
+  });
+  return { plans: migrated, suppliers: sups };
+}
+
+function saveSuppliers(suppliers: Supplier[]) {
+  persist('suppliers', suppliers);
 }
 
 function saveWarehouses(warehouses: Warehouse[]) {
@@ -364,6 +432,7 @@ export const CSV_EXPORTS = {
   inbound: { label: '入荷予定', description: '絞り込み後の入荷予定' },
   disposal: { label: '廃棄ロス', description: '期間内の商品別の廃棄実績' },
   trace: { label: 'ロット追跡', description: '選択したロットの入荷から出庫までの履歴' },
+  supplier: { label: '仕入先一覧', description: '仕入先マスタと入荷予定の状況' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -636,6 +705,147 @@ export function planFefoShipment(product: Product, quantity: number, options: Fe
 }
 
 // ---------------------------------------------------------------------------
+// 仕入先マスタ
+// 入荷予定は仕入先を名前ではなく id で参照する (カテゴリ・倉庫と同じ)。改名しても
+// 過去の予定の紐づけは切れず、画面の表示だけが一斉に変わる。
+// 取引の終わった仕入先は削除ではなく active=false にして、履歴を残したまま
+// 新規の入荷予定の選択肢から外す。
+// ---------------------------------------------------------------------------
+
+/** 新規登録フォームの初期値。取引中 (active) で始める */
+export const EMPTY_SUPPLIER: SupplierInput = {
+  name: '', code: '', contact: '', phone: '', email: '', address: '', leadTimeDays: 0, note: '', active: true,
+};
+
+/** 前後の空白を落とし、リードタイムを 0 以上の整数に丸める */
+export function normalizeSupplierInput(input: SupplierInput): SupplierInput {
+  return {
+    name: input.name.trim(),
+    code: input.code.trim(),
+    contact: input.contact.trim(),
+    phone: input.phone.trim(),
+    email: input.email.trim(),
+    address: input.address.trim(),
+    leadTimeDays: Math.max(0, Math.floor(input.leadTimeDays || 0)),
+    note: input.note.trim(),
+    active: input.active,
+  };
+}
+
+/**
+ * 入力チェック。問題がなければ空文字を返す。
+ * 画面 (SupplierMasterView) と登録処理 (addSupplier / updateSupplier) が同じ判定を共有するので、
+ * 画面に出るエラーと実際に弾かれる条件がずれない。selfId は編集中の仕入先 (自分自身は重複扱いしない)。
+ */
+export function supplierValidationError(input: SupplierInput, suppliers: Supplier[], selfId?: string): string {
+  const s = normalizeSupplierInput(input);
+  if (!s.name) return '仕入先名は必須です';
+  const others = suppliers.filter(x => x.id !== selfId);
+  if (others.some(x => x.name === s.name)) return '同じ名前の仕入先がすでにあります';
+  if (s.code && others.some(x => x.code === s.code)) return '同じ仕入先コードがすでにあります';
+  if (s.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.email)) return 'メールアドレスの形式が正しくありません';
+  return '';
+}
+
+/** 表示用の仕入先名。マスタにない (削除された) id は空文字 */
+export function supplierName(suppliers: Supplier[], id: string): string {
+  return suppliers.find(s => s.id === id)?.name ?? '';
+}
+
+/**
+ * 入荷予定のフォームに出す選択肢。取引停止の仕入先は隠すが、
+ * 編集中の予定がすでにその仕入先を指しているときだけは残す (勝手に付け替わらないように)。
+ */
+export function selectableSuppliers(suppliers: Supplier[], currentId = ''): Supplier[] {
+  return suppliers.filter(s => s.active || s.id === currentId);
+}
+
+/** 仕入先を選んだときの入荷予定日の既定値 (今日 + 標準リードタイム) */
+export function expectedDateFromLeadTime(supplier: Supplier | undefined, from = new Date()): string {
+  const dt = new Date(from);
+  dt.setDate(dt.getDate() + (supplier?.leadTimeDays ?? 0));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
+
+/** 仕入先ごとの入荷予定の状況 (削除可否の判定と一覧表示に使う) */
+export interface SupplierUsage {
+  planCount: number; // 紐づく入荷予定の件数 (キャンセル・入荷済みを含む)
+  pendingCount: number; // 入荷待ちの件数 (残数あり)
+  pendingQuantity: number; // 入荷待ちの数量合計
+  overdueCount: number; // 入荷予定日を過ぎた件数
+}
+
+const EMPTY_SUPPLIER_USAGE: SupplierUsage = { planCount: 0, pendingCount: 0, pendingQuantity: 0, overdueCount: 0 };
+
+/** supplierId → 入荷予定の状況。仕入先未設定 ('') の分もキー '' に集計する */
+export function supplierUsage(plans: InboundPlan[]): Map<string, SupplierUsage> {
+  const byId = new Map<string, SupplierUsage>();
+  for (const plan of plans) {
+    const usage = byId.get(plan.supplierId) ?? { ...EMPTY_SUPPLIER_USAGE };
+    usage.planCount++;
+    const remaining = remainingInbound(plan);
+    if (remaining > 0) {
+      usage.pendingCount++;
+      usage.pendingQuantity += remaining;
+      if (isOverdueInboundPlan(plan)) usage.overdueCount++;
+    }
+    byId.set(plan.supplierId, usage);
+  }
+  return byId;
+}
+
+/** 仕入先マスタの1行 = 1仕入先 + その仕入先の入荷予定の状況 */
+export interface SupplierRow {
+  supplier: Supplier;
+  usage: SupplierUsage;
+}
+
+/**
+ * 絞り込み済みの仕入先一覧。キーワードは仕入先名・コード・担当者・電話・メールの部分一致。
+ * 並びは 取引中が先 → 仕入先名。includeInactive=false なら取引停止を除く。
+ */
+export function supplierRows(
+  suppliers: Supplier[],
+  plans: InboundPlan[],
+  keyword = '',
+  includeInactive = true,
+): SupplierRow[] {
+  const q = keyword.trim().toLowerCase();
+  const usageById = supplierUsage(plans);
+  return suppliers
+    .filter(s => includeInactive || s.active)
+    .filter(s => !q || [s.name, s.code, s.contact, s.phone, s.email].some(v => v.toLowerCase().includes(q)))
+    .map(s => ({ supplier: s, usage: usageById.get(s.id) ?? { ...EMPTY_SUPPLIER_USAGE } }))
+    .sort((a, b) =>
+      Number(b.supplier.active) - Number(a.supplier.active) || a.supplier.name.localeCompare(b.supplier.name));
+}
+
+export function supplierCsv(rows: SupplierRow[]): string {
+  const header = '仕入先名,仕入先コード,担当者,電話番号,メールアドレス,住所,リードタイム（日）,取引状態,入荷予定件数,入荷待ち件数,入荷待ち数量,遅延件数,備考';
+  const body = rows.map(r => [
+    r.supplier.name,
+    r.supplier.code,
+    r.supplier.contact,
+    r.supplier.phone,
+    r.supplier.email,
+    r.supplier.address,
+    r.supplier.leadTimeDays,
+    r.supplier.active ? '取引中' : '取引停止',
+    r.usage.planCount,
+    r.usage.pendingCount,
+    r.usage.pendingQuantity,
+    r.usage.overdueCount,
+    r.supplier.note,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportSupplierCsv(rows: SupplierRow[]) {
+  downloadCsv(csvFileName('supplier'), supplierCsv(rows));
+}
+
+// ---------------------------------------------------------------------------
 // 入荷予定 (発注済み・入荷待ち)
 // 予定はそれ自体では在庫を持たない。「入荷」して初めてロットが増え、帳票に 入荷 が1件残る。
 // 状態 (未入荷/一部入荷/入荷済) は予定数量と入荷済数量から導出するので、
@@ -665,20 +875,23 @@ export function isOverdueInboundPlan(plan: InboundPlan, today = new Date().toISO
 }
 
 export interface InboundPlanFilter {
-  keyword: string; // 商品名・SKU・ロットNo・仕入先の部分一致
+  keyword: string; // 商品名・SKU・ロットNo・仕入先名の部分一致
   status: InboundPlanStatus | '';
   warehouseId: string;
+  supplierId: string;
   from: string; // 入荷予定日 YYYY-MM-DD (この日を含む)
   to: string;
 }
 
-export const EMPTY_INBOUND_PLAN_FILTER: InboundPlanFilter = { keyword: '', status: '', warehouseId: '', from: '', to: '' };
+export const EMPTY_INBOUND_PLAN_FILTER: InboundPlanFilter = { keyword: '', status: '', warehouseId: '', supplierId: '', from: '', to: '' };
 
 /** 入荷予定表の1行。商品名など表示に要る情報を平坦に持たせる (帳票と同じ方針) */
 export interface InboundPlanRow {
   plan: InboundPlan;
   productName: string;
   productSku: string;
+  /** 仕入先マスタから解決した名前。未設定・マスタにない id なら空文字 */
+  supplierName: string;
   status: InboundPlanStatus;
   remaining: number;
   overdue: boolean;
@@ -687,14 +900,17 @@ export interface InboundPlanRow {
 /**
  * 絞り込み済みの入荷予定を、入荷予定日の早い順 (同日は登録順) に返す。
  * 商品マスタから消えた商品を指す予定は表示できないので除外する。
+ * 仕入先は id 参照なので、表示・キーワード検索に使う名前はマスタから解決する。
  */
 export function inboundPlanRows(
   plans: InboundPlan[],
   products: Product[],
   filter: InboundPlanFilter = EMPTY_INBOUND_PLAN_FILTER,
+  suppliers: Supplier[] = [],
 ): InboundPlanRow[] {
   const q = filter.keyword.trim().toLowerCase();
   const productById = new Map(products.map(p => [p.id, p]));
+  const supplierNameById = new Map(suppliers.map(s => [s.id, s.name]));
   const rows: InboundPlanRow[] = [];
   for (const plan of plans) {
     const product = productById.get(plan.productId);
@@ -702,18 +918,21 @@ export function inboundPlanRows(
     const status = inboundPlanStatus(plan);
     if (filter.status && status !== filter.status) continue;
     if (filter.warehouseId && plan.warehouseId !== filter.warehouseId) continue;
+    if (filter.supplierId && plan.supplierId !== filter.supplierId) continue;
     if (filter.from && plan.expectedDate < filter.from) continue;
     if (filter.to && plan.expectedDate > filter.to) continue;
+    const name = supplierNameById.get(plan.supplierId) ?? '';
     if (q && !(
       product.name.toLowerCase().includes(q)
       || product.sku.toLowerCase().includes(q)
       || plan.lotNo.toLowerCase().includes(q)
-      || plan.supplier.toLowerCase().includes(q)
+      || name.toLowerCase().includes(q)
     )) continue;
     rows.push({
       plan,
       productName: product.name,
       productSku: product.sku,
+      supplierName: name,
       status,
       remaining: remainingInbound(plan),
       overdue: isOverdueInboundPlan(plan),
@@ -754,7 +973,7 @@ export function inboundPlanCsv(rows: InboundPlanRow[], warehouses: Warehouse[]):
     r.plan.lotNo,
     r.plan.expiryDate ?? '',
     whName(r.plan.warehouseId),
-    r.plan.supplier,
+    r.supplierName,
     r.plan.quantity,
     r.plan.receivedQuantity,
     r.remaining,
@@ -1438,6 +1657,7 @@ export function useInventory() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>(DEFAULT_WAREHOUSES);
   const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
   const [inboundPlans, setInboundPlans] = useState<InboundPlan[]>(SAMPLE_INBOUND_PLANS);
+  const [suppliers, setSuppliers] = useState<Supplier[]>(DEFAULT_SUPPLIERS);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
@@ -1449,7 +1669,14 @@ export function useInventory() {
       setProducts(migrated.products);
       setCategories(migrated.categories);
       setWarehouses(state.warehouses.length > 0 ? state.warehouses : DEFAULT_WAREHOUSES);
-      setInboundPlans(state.inboundPlans ?? []);
+      // 仕入先マスタ導入前の予定は仕入先が自由入力の文字列なので、マスタへ移してから保存し直す
+      const migratedPlans = migrateInboundPlans(state.inboundPlans ?? [], state.suppliers ?? []);
+      setInboundPlans(migratedPlans.plans);
+      setSuppliers(migratedPlans.suppliers);
+      if (migratedPlans.suppliers.length !== (state.suppliers?.length ?? 0)) {
+        saveSuppliers(migratedPlans.suppliers);
+        saveInboundPlans(migratedPlans.plans);
+      }
       const { txns, changed } = migrateLedger(state.ledger);
       setLedger(txns);
       if (changed) saveLedger(txns);
@@ -1766,6 +1993,8 @@ export function useInventory() {
       return next;
     });
 
+    // 仕入先は id 参照なので、帳票に残す名前はこの時点のマスタから解決する
+    const supplier = supplierName(suppliers, plan.supplierId);
     addTransaction({
       type: '入荷',
       productId: product.id,
@@ -1773,7 +2002,7 @@ export function useInventory() {
       productSku: product.sku,
       lotNo: target.lotNo,
       quantity: target.quantity,
-      note: input.note?.trim() || (plan.supplier ? `入荷予定（${plan.supplier}）` : '入荷予定'),
+      note: input.note?.trim() || (supplier ? `入荷予定（${supplier}）` : '入荷予定'),
       toWarehouseId: target.warehouseId,
     });
 
@@ -1782,7 +2011,7 @@ export function useInventory() {
       remaining: remainingInbound(plan) - target.quantity,
       merged: !!target.existingLot,
     };
-  }, [addTransaction, inboundPlans, products]);
+  }, [addTransaction, inboundPlans, products, suppliers]);
 
   const exportExcel = useCallback(() => {
     const wsData: (string | number)[][] = [['SKU', 'ロットNo', '在庫数']];
@@ -1944,6 +2173,37 @@ export function useInventory() {
     });
   }, [products]);
 
+  // ---- 仕入先マスタ ----
+  // 入荷予定が id で参照するだけなので在庫は動かない (帳票にも記録しない)。
+  // 画面と同じ supplierValidationError で弾くので、画面に出るエラーと実際の拒否条件がずれない。
+
+  const addSupplier = useCallback((input: SupplierInput) => {
+    setSuppliers(prev => {
+      if (supplierValidationError(input, prev)) return prev;
+      const next = [...prev, { ...normalizeSupplierInput(input), id: crypto.randomUUID() }];
+      saveSuppliers(next); return next;
+    });
+  }, []);
+
+  const updateSupplier = useCallback((id: string, input: SupplierInput) => {
+    setSuppliers(prev => {
+      if (!prev.some(s => s.id === id)) return prev;
+      if (supplierValidationError(input, prev, id)) return prev;
+      const next = prev.map(s => s.id === id ? { ...normalizeSupplierInput(input), id } : s);
+      saveSuppliers(next); return next;
+    });
+  }, []);
+
+  // 入荷予定から参照されている仕入先は削除しない (予定の仕入先が消えてしまうため)。
+  // 取引が終わっただけなら削除ではなく active=false にしてもらう
+  const deleteSupplier = useCallback((id: string) => {
+    if (inboundPlans.some(p => p.supplierId === id)) return;
+    setSuppliers(prev => {
+      const next = prev.filter(s => s.id !== id);
+      saveSuppliers(next); return next;
+    });
+  }, [inboundPlans]);
+
   const moveLot = useCallback((productId: string, lotId: string, targetWarehouseId: string, quantity: number) => {
     const product = products.find(p => p.id === productId);
     const lot = product?.lots.find(l => l.id === lotId);
@@ -2020,14 +2280,16 @@ export function useInventory() {
     saveWarehouses(DEFAULT_WAREHOUSES);
     setCategories(DEFAULT_CATEGORIES);
     saveCategories(DEFAULT_CATEGORIES);
+    setSuppliers(DEFAULT_SUPPLIERS);
+    saveSuppliers(DEFAULT_SUPPLIERS);
     update(fresh);
     setLedger([]);
     saveLedger([]);
-    // 入荷予定は商品を参照するので、商品を入れ替えたあとに戻す
+    // 入荷予定は商品と仕入先を参照するので、どちらも入れ替えたあとに戻す
     const freshPlans: InboundPlan[] = JSON.parse(JSON.stringify(SAMPLE_INBOUND_PLANS));
     setInboundPlans(freshPlans);
     saveInboundPlans(freshPlans);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier };
 }
