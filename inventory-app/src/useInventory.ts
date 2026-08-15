@@ -363,6 +363,7 @@ export const CSV_EXPORTS = {
   reorder: { label: '要発注リスト', description: '発注点を下回っている商品' },
   inbound: { label: '入荷予定', description: '絞り込み後の入荷予定' },
   disposal: { label: '廃棄ロス', description: '期間内の商品別の廃棄実績' },
+  trace: { label: 'ロット追跡', description: '選択したロットの入荷から出庫までの履歴' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -1173,6 +1174,258 @@ export function disposalCsv(rows: DisposalRow[]): string {
 
 export function exportDisposalCsv(rows: DisposalRow[]) {
   downloadCsv(csvFileName('disposal'), disposalCsv(rows));
+}
+
+// ---------------------------------------------------------------------------
+// ロットトレーサビリティ (ロット追跡)
+// リコール時に要るのは「このロットが、いつ入って、どこを経由して、いつ出たか」。
+// 必要な記録は帳票 (ledger) にすべて残っているので専用の永続データは持たず、集計だけで組み立てる。
+//
+// ロットNo は賞味期限から自動生成される (generateLotNo) ため、期限が同じなら別商品でも同じ番号に
+// なりうる。追跡は必ず「商品 + ロットNo」の組 (LotTraceKey) で行い、他商品の記録を巻き込まない。
+// ---------------------------------------------------------------------------
+
+/** 追跡対象のロット。ロットNo は商品をまたいで重複しうるので商品とセットで扱う */
+export interface LotTraceKey {
+  productId: string;
+  lotNo: string;
+}
+
+export function isSameLotTraceKey(a?: LotTraceKey | null, b?: LotTraceKey | null): boolean {
+  return !!a && !!b && a.productId === b.productId && a.lotNo === b.lotNo;
+}
+
+/**
+ * 帳票を古い順 (時系列) に並べ直す。
+ *
+ * ledger は新しい記録を先頭に積むので基本は逆順にすればよいが、1回の操作でまとめて記録した分
+ * (FEFO出庫の引当ごとの記録、ロット編集の 移動+数量調整 など) だけは日時が同一のまま
+ * 「記録した順」で並んでいる。同じ日時が続く塊はそのままに、塊の並びだけを逆にすることで
+ * 本来の時系列に戻す。最後に日時で安定ソートし、並びの崩れた入力にも耐えるようにする。
+ */
+export function chronologicalLedger(txns: StockTransaction[]): StockTransaction[] {
+  const groups: StockTransaction[][] = [];
+  for (const t of txns) {
+    const last = groups.at(-1);
+    if (last && last[0].date === t.date) last.push(t);
+    else groups.push([t]);
+  }
+  return groups.reverse().flat().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+}
+
+/** タイムラインの1件 */
+export interface LotTraceEvent {
+  txn: StockTransaction;
+  direction: 'in' | 'out' | 'move';
+  /** この記録の直後のロット残数 (入庫の累計 − 出庫の累計)。移動では増減しない */
+  balance: number;
+}
+
+/** 入庫・出庫の区分別内訳 */
+export interface LotTraceBreakdown {
+  type: TransactionType;
+  count: number;
+  quantity: number;
+}
+
+export interface LotTrace extends LotTraceKey {
+  /** 商品名・SKU は帳票に残った「最後に記録した時点」のもの。記録がなければ空文字 */
+  productName: string;
+  productSku: string;
+  /** 古い順 (入荷 → 移動 → 出庫) に並べたタイムライン */
+  events: LotTraceEvent[];
+  inbound: number; // 入庫の合計
+  outbound: number; // 出庫の合計 (= 既に出た数量)
+  balance: number; // 入庫 − 出庫 = 帳票から見た残数
+  inboundBreakdown: LotTraceBreakdown[];
+  outboundBreakdown: LotTraceBreakdown[];
+  moveCount: number; // 移動の記録件数
+  firstDate: string; // 最初に動いた日時 (ISO)。記録がなければ空文字
+  lastDate: string; // 最後に動いた日時 (ISO)。同上
+  /** 経由した倉庫を初めて現れた順に並べたもの */
+  warehouseIds: string[];
+}
+
+export interface LotTraceOptions {
+  /** 指定するとその商品の記録だけを追う (同じロットNoを持つ別商品を除く) */
+  productId?: string;
+}
+
+const TYPE_ORDER = new Map(ALL_TRANSACTION_TYPES.map((t, i) => [t, i]));
+
+function traceBreakdown(txns: StockTransaction[]): LotTraceBreakdown[] {
+  const byType = new Map<TransactionType, LotTraceBreakdown>();
+  for (const t of txns) {
+    const row = byType.get(t.type) ?? { type: t.type, count: 0, quantity: 0 };
+    row.count++;
+    row.quantity += t.quantity;
+    byType.set(t.type, row);
+  }
+  return [...byType.values()].sort((a, b) =>
+    b.quantity - a.quantity || (TYPE_ORDER.get(a.type) ?? 0) - (TYPE_ORDER.get(b.type) ?? 0));
+}
+
+/**
+ * 1ロットの入出庫履歴を時系列に組み立てる。状態は一切参照・変更しない純粋関数。
+ * 記録が1件もない場合も空の追跡結果を返す (在庫にはあるが帳票に記録のないロット
+ * — サンプルデータの初期在庫など — を「記録なし」として表示できるように)。
+ */
+export function traceLot(ledger: StockTransaction[], lotNo: string, options: LotTraceOptions = {}): LotTrace {
+  const matched = chronologicalLedger(
+    ledger.filter(t => t.lotNo === lotNo && (!options.productId || t.productId === options.productId)),
+  );
+  const latest = matched.at(-1);
+
+  const events: LotTraceEvent[] = [];
+  const warehouseIds: string[] = [];
+  const seenWarehouses = new Set<string>();
+  const visit = (id?: string) => {
+    if (!id || seenWarehouses.has(id)) return;
+    seenWarehouses.add(id);
+    warehouseIds.push(id);
+  };
+
+  let balance = 0;
+  for (const txn of matched) {
+    const direction = transactionDirection(txn.type);
+    if (direction === 'in') balance += txn.quantity;
+    else if (direction === 'out') balance -= txn.quantity;
+    // 移動は「移動元 → 移動先」の順に経路へ積む
+    visit(txn.fromWarehouseId);
+    visit(txn.toWarehouseId);
+    events.push({ txn, direction, balance });
+  }
+
+  const inboundTxns = matched.filter(t => transactionDirection(t.type) === 'in');
+  const outboundTxns = matched.filter(t => transactionDirection(t.type) === 'out');
+
+  return {
+    productId: options.productId ?? latest?.productId ?? '',
+    lotNo,
+    productName: latest?.productName ?? '',
+    productSku: latest?.productSku ?? '',
+    events,
+    inbound: inboundTxns.reduce((s, t) => s + t.quantity, 0),
+    outbound: outboundTxns.reduce((s, t) => s + t.quantity, 0),
+    balance,
+    inboundBreakdown: traceBreakdown(inboundTxns),
+    outboundBreakdown: traceBreakdown(outboundTxns),
+    moveCount: matched.filter(t => t.type === '移動').length,
+    firstDate: matched[0]?.date ?? '',
+    lastDate: latest?.date ?? '',
+    warehouseIds,
+  };
+}
+
+/** いま在庫に残っている分の1行。部分移動で同じロットNoが複数の倉庫に分かれることがある */
+export interface LotStockRow {
+  lotId: string;
+  warehouseId: string;
+  quantity: number;
+  expiryDate?: string;
+}
+
+/**
+ * 追跡対象のロットが、いまどの倉庫にいくつ残っているか (在庫数の多い順)。
+ * 出しきって空になったロット (FEFO出庫や部分移動の残り) は「残っている在庫」ではないので除く。
+ */
+export function lotStockRows(products: Product[], key: LotTraceKey): LotStockRow[] {
+  const product = products.find(p => p.id === key.productId);
+  if (!product) return [];
+  return product.lots
+    .filter(l => l.lotNo === key.lotNo && l.quantity > 0)
+    .map(l => ({ lotId: l.id, warehouseId: l.warehouseId, quantity: l.quantity, expiryDate: l.expiryDate }))
+    .sort((a, b) => b.quantity - a.quantity || a.warehouseId.localeCompare(b.warehouseId));
+}
+
+/** 追跡対象のロットの現在庫合計 */
+export function lotStockQuantity(products: Product[], key: LotTraceKey): number {
+  return lotStockRows(products, key).reduce((s, r) => s + r.quantity, 0);
+}
+
+/** 追跡できるロットの候補 */
+export interface LotTraceCandidate extends LotTraceKey {
+  productName: string;
+  productSku: string;
+  expiryDate?: string;
+  stockQuantity: number; // 現在の在庫数。出しきった・廃棄したロットは 0
+  eventCount: number; // 帳票に残っている記録件数
+  lastDate: string; // 最後に動いた日時 (ISO)。記録がなければ空文字
+}
+
+/**
+ * 追跡できるロットの一覧。キーワード (商品名・SKU・ロットNo の部分一致) で絞り込む。
+ * 在庫から消えたロットも帳票に記録が残っていれば候補に出す
+ * (リコールの連絡は出しきった後に来るので、現在庫だけを候補にすると追跡できない)。
+ * 並びは「最後に動いた日時の新しい順」→ 商品名 → ロットNo。
+ */
+export function lotTraceCandidates(products: Product[], ledger: StockTransaction[], keyword = ''): LotTraceCandidate[] {
+  const q = keyword.trim().toLowerCase();
+  const keyOf = (productId: string, lotNo: string) => `${productId} ${lotNo}`;
+  const byKey = new Map<string, LotTraceCandidate>();
+
+  for (const p of products) {
+    for (const l of p.lots) {
+      const key = keyOf(p.id, l.lotNo);
+      const row = byKey.get(key) ?? {
+        productId: p.id, lotNo: l.lotNo, productName: p.name, productSku: p.sku,
+        expiryDate: l.expiryDate, stockQuantity: 0, eventCount: 0, lastDate: '',
+      };
+      // 同じロットNoが複数倉庫に分かれている (部分移動の結果) 場合は1行にまとめる
+      row.stockQuantity += l.quantity;
+      row.expiryDate = row.expiryDate ?? l.expiryDate;
+      byKey.set(key, row);
+    }
+  }
+
+  const productById = new Map(products.map(p => [p.id, p]));
+  for (const t of ledger) {
+    const key = keyOf(t.productId, t.lotNo);
+    const product = productById.get(t.productId);
+    const row = byKey.get(key) ?? {
+      productId: t.productId, lotNo: t.lotNo,
+      // 商品マスタから消えていれば、帳票に残った当時の名前で追跡できるようにする
+      productName: product?.name ?? t.productName,
+      productSku: product?.sku ?? t.productSku,
+      stockQuantity: 0, eventCount: 0, lastDate: '',
+    };
+    row.eventCount++;
+    if (t.date > row.lastDate) row.lastDate = t.date;
+    byKey.set(key, row);
+  }
+
+  return [...byKey.values()]
+    .filter(r => !q
+      || r.lotNo.toLowerCase().includes(q)
+      || r.productName.toLowerCase().includes(q)
+      || r.productSku.toLowerCase().includes(q))
+    .sort((a, b) =>
+      b.lastDate.localeCompare(a.lastDate)
+      || a.productName.localeCompare(b.productName)
+      || a.lotNo.localeCompare(b.lotNo));
+}
+
+/** 追跡結果の CSV。回収報告の資料にそのまま添えられるよう、残数の推移も列に持たせる */
+export function lotTraceCsv(trace: LotTrace, warehouses: Warehouse[]): string {
+  const whName = (id?: string) => id ? (warehouses.find(w => w.id === id)?.name ?? id) : '';
+  const header = '日時,区分,商品名,SKU,ロットNo,数量,移動元倉庫,移動先倉庫,残数,備考';
+  const rows = trace.events.map(e => [
+    formatLedgerDateTime(e.txn.date),
+    e.txn.type,
+    e.txn.productName,
+    e.txn.productSku,
+    e.txn.lotNo,
+    signedQuantity(e.txn),
+    whName(e.txn.fromWarehouseId),
+    whName(e.txn.toWarehouseId),
+    e.balance,
+    e.txn.note,
+  ].map(csvCell).join(','));
+  return [header, ...rows].join('\n');
+}
+
+export function exportLotTraceCsv(trace: LotTrace, warehouses: Warehouse[]) {
+  downloadCsv(csvFileName('trace'), lotTraceCsv(trace, warehouses));
 }
 
 /** 入荷予定の入力値 (id・入荷実績・日時は画面から編集しない) */
