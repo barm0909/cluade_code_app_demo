@@ -419,3 +419,67 @@ tr:hover td { background: #fafbff; }
 .share-bar-label {
   position: absolute; left: 8px; font-size: 0.75rem; font-weight: 600; color: #445;
 }
+
+/* ロット追跡 */
+.btn-trace {
+  padding: 3px 10px; font-size: 0.78rem; border-radius: 6px; cursor: pointer;
+  border: 1.5px solid #0097a7; background: #e0f7fa; color: #00838f; font-weight: 600;
+}
+.btn-trace:hover { background: #0097a7; color: white; }
+.trace-hint { color: #aaa; font-weight: 400; }
+/* 在庫の残っていないロット (追跡はできる) は控えめに表示する */
+.trace-gone td { color: #888; }
+.trace-head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.trace-title {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  margin: 0; font-size: 1.05rem; color: #1a1a2e;
+}
+.trace-title-sku { color: #888; font-weight: 400; }
+.trace-title-lot {
+  padding: 2px 10px; border-radius: 12px;
+  background: #e0f7fa; color: #00838f; font-size: 0.85rem; font-weight: 700;
+}
+.trace-head .btn-add-lot { margin-left: auto; }
+.trace-head .btn-add-lot:disabled { background: #ccc; cursor: not-allowed; }
+.trace-route { color: #666; }
+
+/* 履歴カード。左の縦線と丸で時系列に見せる */
+.trace-timeline { list-style: none; margin: 0; padding: 0 0 0 18px; position: relative; }
+.trace-timeline::before {
+  content: ''; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 2px; background: #e3e8f4;
+}
+.trace-event { position: relative; margin-bottom: 10px; }
+.trace-event:last-child { margin-bottom: 0; }
+.trace-dot {
+  position: absolute; left: -18px; top: 16px; width: 12px; height: 12px;
+  border-radius: 50%; border: 2px solid white; background: #9aa4bf;
+}
+.trace-in .trace-dot { background: #2e7d32; }
+.trace-out .trace-dot { background: #c62828; }
+.trace-move .trace-dot { background: #7c4dff; }
+.trace-card {
+  background: white; border-radius: 10px; padding: 10px 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08); border-left: 3px solid #9aa4bf;
+}
+.trace-in .trace-card { border-left-color: #2e7d32; }
+.trace-out .trace-card { border-left-color: #c62828; }
+.trace-move .trace-card { border-left-color: #7c4dff; }
+.trace-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.trace-date { color: #888; font-size: 0.8rem; }
+.trace-qty { font-weight: 700; font-size: 0.95rem; }
+.trace-balance {
+  margin-left: auto; font-size: 0.8rem; font-weight: 600; color: #556;
+  background: #f2f5fb; border-radius: 10px; padding: 2px 10px;
+}
+.trace-card-body {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px;
+}
+.trace-warehouses { display: inline-flex; align-items: center; gap: 6px; }
+.trace-arrow { color: #aaa; font-size: 0.85rem; }
+.trace-note { color: #888; font-size: 0.82rem; }
+
+@media (max-width: 720px) {
+  .trace-balance { margin-left: 0; }
+}

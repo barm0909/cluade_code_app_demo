@@ -1,12 +1,13 @@
 import { Fragment, useState, useMemo } from 'react';
 import { useInventory, daysUntilExpiry, totalQuantity, csvExportHint, csvExportLabel, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
-import type { Product, Lot, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
+import type { Product, Lot, LotTraceKey, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { ShipFefoModal } from './ShipFefoModal';
 import { DashboardView } from './DashboardView';
 import { InboundPlanView } from './InboundPlanView';
 import { LedgerView } from './LedgerView';
+import { LotTraceView } from './LotTraceView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
@@ -165,7 +166,9 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger'>('inventory');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger' | 'trace'>('inventory');
+  // ロット追跡タブで追跡中のロット。在庫一覧の「追跡」ボタンからも指定される
+  const [traceTarget, setTraceTarget] = useState<LotTraceKey | null>(null);
   const { confirm, confirmDialog } = useConfirm();
   const { notify, notifyDialog } = useNotify();
 
@@ -286,6 +289,7 @@ export default function App() {
         <button className={activeTab === 'master' ? 'tab active' : 'tab'} onClick={() => setActiveTab('master')}>商品マスタ</button>
         <button className={activeTab === 'stocktake' ? 'tab active' : 'tab'} onClick={() => setActiveTab('stocktake')}>棚卸</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
+        <button className={activeTab === 'trace' ? 'tab active' : 'tab'} onClick={() => setActiveTab('trace')}>ロット追跡</button>
       </div>
 
       {activeTab === 'dashboard' ? (
@@ -303,6 +307,14 @@ export default function App() {
         />
       ) : activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
+      ) : activeTab === 'trace' ? (
+        <LotTraceView
+          products={products}
+          warehouses={warehouses}
+          ledger={ledger}
+          target={traceTarget}
+          onTargetChange={setTraceTarget}
+        />
       ) : activeTab === 'stocktake' ? (
         <StocktakeView products={products} categories={categories} warehouses={warehouses} onApply={applyStocktake} />
       ) : activeTab === 'master' ? (<>
@@ -408,6 +420,14 @@ export default function App() {
                                           <button className="btn-receive" onClick={() => setIoLot({ product: p, lot: l, direction: 'in' })}>入庫</button>
                                           <button className="btn-ship" onClick={() => setIoLot({ product: p, lot: l, direction: 'out' })} disabled={l.quantity === 0}>出庫</button>
                                           <button className="btn-move" onClick={() => setMovingLot({ product: p, lot: l })}>移動</button>
+                                          <button
+                                            className="btn-trace"
+                                            onClick={() => {
+                                              setTraceTarget({ productId: p.id, lotNo: l.lotNo });
+                                              setActiveTab('trace');
+                                            }}
+                                            title="このロットの入荷から出庫までの履歴を表示します"
+                                          >追跡</button>
                                           <button className="btn-edit" onClick={() => setEditingLot({ productId: p.id, lot: l })}>編集</button>
                                           <button className="btn-delete" onClick={async () => {
                                             const ok = await confirm({ message: `ロット「${l.lotNo}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
