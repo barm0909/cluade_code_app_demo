@@ -1,9 +1,10 @@
 # ダッシュボード機能
 
-在庫の全体像と「いま手を打つべきもの」（要発注・期限）を1画面にまとめたタブです。
+在庫の全体像と「いま手を打つべきもの」（要発注・期限・廃棄ロス）を1画面にまとめたタブです。
+期限切れロットの一括廃棄だけは、このタブから在庫を動かせます。
 
-専用のデータは持たず、既存の `products` / `categories` / `warehouses` を集計しているだけなので、
-DBマイグレーションや Worker API の追加は不要です。
+専用のデータは持たず、既存の `products` / `categories` / `warehouses` / `ledger` を集計しているだけなので、
+DBマイグレーションや Worker API の追加は不要です（廃棄も既存の `廃棄` 区分の出庫として帳票に積むだけです）。
 
 ---
 
@@ -22,6 +23,7 @@ DBマイグレーションや Worker API の追加は不要です。
 | 要発注 | 在庫数が発注点（`minQuantity`）以下の商品数。サブ表示に欠品（在庫0）の数 |
 | 期限切れロット | 期限を過ぎたロット数（在庫が残っているもののみ） |
 | 期限間近ロット | 表示範囲（既定7日）以内に期限を迎えるロット数 |
+| 今月の廃棄ロス | 今月の `廃棄` 区分の合計金額（原価ベース）。サブ表示に件数 / 数量 |
 
 「欠品」は「要発注」の内数です（在庫0は発注点以下でもあるため両方に数えられます）。
 
@@ -50,7 +52,25 @@ DBマイグレーションや Worker API の追加は不要です。
 （`badges.tsx` の `ExpiryBadge` は8日以降を日付表示に切り替えるため、ここでは専用の
 `DaysLeftBadge` を使っています）。
 
-### 4. 倉庫別在庫 / カテゴリ別在庫
+各行のチェックボックスで選んだロットは、見出し右の「選択したロットを廃棄（N件）」でまとめて廃棄できます。
+「期限切れを選択（N件）」は期限切れの行だけを一括で選ぶショートカットです。
+
+- 廃棄は**ロットの全量**が対象（部分廃棄は在庫一覧のロット行の「出庫」→区分「廃棄」）
+- 廃棄したロットは在庫0で残さず**取り除く**。在庫0のロットを残すと `App.tsx` の共通アラートバナー
+  （在庫0のロットも数える）が消えないため。何を廃棄したかは帳票に残る
+- 選択は「いま表示されている行」との積で扱うので、表示範囲を狭めて隠れた行や廃棄済みの行が
+  選択に残り続けることはない
+- 確認ダイアログのプレビューは `planDisposal`（純粋関数）で、実行する `disposeLots` と同じ計算を共有する
+
+### 4. 廃棄ロス（商品別）
+
+`ledger` の `廃棄` 区分を商品ごとに集計し、ロス金額の降順で表示します。集計期間は 今月 / 今年 / 全期間。
+
+帳票は原価を持たないため、金額は**商品マスタの現在の原価**を掛けた概算です
+（マスタから消えた商品は原価0として数量だけ数えます）。この割り切りは
+在庫金額の集計が同じく現在の原価を使っているのと揃えたものです。
+
+### 5. 倉庫別在庫 / カテゴリ別在庫
 
 倉庫ごと・カテゴリごとの商品数、在庫数、在庫金額（原価）と構成比バーを表示します。
 構成比は原価ベースの在庫金額の割合で、ロットのない倉庫・商品のないカテゴリも0件の行として残ります。
@@ -70,10 +90,19 @@ DBマイグレーションや Worker API の追加は不要です。
 | `warehouseSummaries(products, warehouses)` | 倉庫別サマリ（構成比つき） |
 | `categorySummaries(products, categories)` | カテゴリ別サマリ（構成比つき） |
 | `lowStockCsv` / `exportLowStockCsv` | 要発注リストのCSV |
+| `planDisposal(products, lotIds)` | 廃棄プレビュー（数量・ロス金額・期限切れ件数） |
+| `disposalPeriodStart(period, today?)` | 集計期間の開始日（今月/今年/全期間） |
+| `disposalTransactions(ledger, from?)` | 帳票から `廃棄` だけを期間で絞る |
+| `disposalRows(txns, products)` / `disposalTotals(rows)` | 商品別の廃棄ロス集計 |
+| `disposalCsv` / `exportDisposalCsv` | 廃棄ロスのCSV |
 
-定数 `EXPIRY_SOON_DAYS`（既定しきい値7日）と `DASHBOARD_EXPIRY_OPTIONS`（`[7, 14, 30]`）も
-同ファイルに定義しています。
+在庫を変更するのは `useInventory` の `disposeLots(lotIds, note?)` だけで、`App.tsx` が
+`onDispose` として `DashboardView` に渡します（`DashboardView` 自体は状態を持ちません）。
 
-テストは純粋関数が `src/test/dashboard.test.ts`、表示が `src/test/DashboardView.test.tsx` です。
+定数 `EXPIRY_SOON_DAYS`（既定しきい値7日）、`DASHBOARD_EXPIRY_OPTIONS`（`[7, 14, 30]`）、
+`DISPOSAL_PERIODS`（`['今月', '今年', '全期間']`）、`DISPOSAL_NOTE`（`'一括廃棄'`）も同ファイルに定義しています。
+
+テストは純粋関数が `src/test/dashboard.test.ts` と `src/test/disposal.test.ts`、
+ミューテータが `src/test/useInventory.test.ts`、表示が `src/test/DashboardView.test.tsx` です。
 期限まわりのテストは `daysUntilExpiry` が実時刻を参照するため、固定日付ではなく
 「今日からN日後」で組み立てています。

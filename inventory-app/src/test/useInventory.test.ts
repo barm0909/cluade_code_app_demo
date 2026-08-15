@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useInventory, type StockTransaction } from '../useInventory';
+import { DEFAULT_WAREHOUSE_ID, useInventory, type StockTransaction } from '../useInventory';
 import { stubApi } from './mockApi';
 
 // fetch モックなし = API に到達できない環境として、メモリ内のサンプルデータで動作する。
@@ -376,6 +376,70 @@ describe('useInventory — ledger（入出庫記録）', () => {
     expect(result.current.ledger.find(t => t.id === 't4')).toBeUndefined();
     expect(types).toContainEqual(['t5', '移動']);
     expect(result.current.ledger).toHaveLength(4);
+  });
+});
+
+describe('useInventory — disposeLots（一括廃棄）', () => {
+  // 廃棄用に商品1件とロット2件 (10個 / 5個) を用意する
+  const setup = () => {
+    const hook = renderHook(() => useInventory());
+    act(() => {
+      hook.result.current.addProduct({ name: '廃棄テスト', sku: 'DSP-001', categoryId: 'cat-food', minQuantity: 1, price: 300, costPrice: 200 });
+    });
+    const productId = hook.result.current.products.find(p => p.sku === 'DSP-001')!.id;
+    act(() => { hook.result.current.addLot(productId, { lotNo: '20260101', quantity: 10 }); });
+    act(() => { hook.result.current.addLot(productId, { lotNo: '20260102', quantity: 5 }); });
+    const lots = hook.result.current.products.find(p => p.id === productId)!.lots;
+    return { result: hook.result, productId, lots };
+  };
+
+  it('選んだロットを取り除き、廃棄として帳票に記録する', () => {
+    const { result, productId, lots } = setup();
+
+    let plan!: ReturnType<typeof result.current.disposeLots>;
+    act(() => { plan = result.current.disposeLots([lots[0].id]); });
+
+    // ロットは在庫0で残さず取り除く (画面上部の期限切れバナーが消えないため)
+    const after = result.current.products.find(p => p.id === productId)!;
+    expect(after.lots.map(l => l.id)).toEqual([lots[1].id]);
+
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.quantity).toBe(10);
+    expect(plan.costValue).toBe(10 * 200);
+
+    expect(result.current.ledger[0]).toMatchObject({
+      type: '廃棄', productId, lotNo: '20260101', quantity: 10, note: '一括廃棄',
+      fromWarehouseId: DEFAULT_WAREHOUSE_ID,
+    });
+  });
+
+  it('複数ロットをまとめて廃棄すると、ロットの数だけ記録される', () => {
+    const { result, productId, lots } = setup();
+    const before = result.current.ledger.length;
+
+    act(() => { result.current.disposeLots(lots.map(l => l.id)); });
+
+    expect(result.current.products.find(p => p.id === productId)!.lots).toHaveLength(0);
+    expect(result.current.ledger.length).toBe(before + 2);
+    expect(result.current.ledger.slice(0, 2).every(t => t.type === '廃棄')).toBe(true);
+  });
+
+  it('備考を指定するとその内容で記録される', () => {
+    const { result, lots } = setup();
+
+    act(() => { result.current.disposeLots([lots[0].id], '期限切れ廃棄'); });
+
+    expect(result.current.ledger[0].note).toBe('期限切れ廃棄');
+  });
+
+  it('対象がなければ在庫も帳票も変えない', () => {
+    const { result, productId } = setup();
+    const before = result.current.ledger.length;
+
+    act(() => { result.current.disposeLots(['存在しないID']); });
+
+    expect(result.current.products.find(p => p.id === productId)!.lots).toHaveLength(2);
+    expect(result.current.ledger.length).toBe(before);
   });
 });
 

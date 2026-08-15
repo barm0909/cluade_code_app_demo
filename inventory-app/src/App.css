@@ -402,6 +402,13 @@ tr:hover td { background: #fafbff; }
   padding: 5px 8px; border: 1px solid #ddd; border-radius: 6px;
   font-size: 0.85rem; background: white; color: #333;
 }
+.dashboard-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dashboard-actions .btn-danger { padding: 7px 14px; font-size: 0.85rem; }
+.dashboard-actions .btn-danger:disabled { background: #ccc; cursor: not-allowed; }
+.dashboard-actions .btn-ghost-light:disabled { opacity: 0.4; cursor: not-allowed; }
+/* 廃棄するロットの選択列。行の他の中身と幅を取り合わないよう固定幅にする */
+.check-cell { width: 36px; text-align: center; }
+.check-cell input { cursor: pointer; }
 .dashboard-columns { display: flex; gap: 16px; flex-wrap: wrap; }
 .dashboard-half { flex: 1 1 420px; min-width: 0; }
 .share-bar {
