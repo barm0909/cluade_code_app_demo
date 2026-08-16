@@ -6,24 +6,26 @@ import { NumberInput } from './NumberInput';
 interface Props {
   lot: Lot | null;
   warehouses: Warehouse[];
+  /** このロットの原価入力欄の既定値 (呼び出し側が商品の現在原価を渡す) */
+  defaultUnitPrice: number;
   onSave: (data: Omit<Lot, 'id'>) => void;
   onClose: () => void;
 }
 
-const makeEmpty = () => ({ lotNo: '', expiryDate: '', quantity: 0, warehouseId: DEFAULT_WAREHOUSE_ID });
+const makeEmpty = (defaultUnitPrice: number) => ({ lotNo: '', expiryDate: '', quantity: 0, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: defaultUnitPrice });
 const LOT_PATTERN = /^\d{8}$/;
 
-export function LotModal({ lot, warehouses, onSave, onClose }: Props) {
-  const [form, setForm] = useState(makeEmpty());
+export function LotModal({ lot, warehouses, defaultUnitPrice, onSave, onClose }: Props) {
+  const [form, setForm] = useState(() => makeEmpty(defaultUnitPrice));
   const [lotError, setLotError] = useState('');
 
   useEffect(() => {
     setForm(lot
-      ? { lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? '', quantity: lot.quantity, warehouseId: lot.warehouseId ?? DEFAULT_WAREHOUSE_ID }
-      : makeEmpty()
+      ? { lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? '', quantity: lot.quantity, warehouseId: lot.warehouseId ?? DEFAULT_WAREHOUSE_ID, unitPrice: lot.unitPrice ?? defaultUnitPrice }
+      : makeEmpty(defaultUnitPrice)
     );
     setLotError('');
-  }, [lot]);
+  }, [lot, defaultUnitPrice]);
 
   const handleExpiryChange = (val: string) => {
     setForm(f => ({
@@ -48,8 +50,11 @@ export function LotModal({ lot, warehouses, onSave, onClose }: Props) {
       setLotError('半角数字8桁で入力してください');
       return;
     }
-    const { expiryDate, ...rest } = form;
-    onSave({ ...rest, ...(expiryDate ? { expiryDate } : {}) });
+    const { expiryDate, unitPrice, ...rest } = form;
+    // 原価欄が既定値のまま (かつ元のロットも原価を持っていなかった) なら送らない。
+    // そうしないと、数量だけ直したつもりでもそのロットの原価がこの瞬間の商品原価に固定されてしまう。
+    const keepsDefault = (lot?.unitPrice ?? null) == null && unitPrice === defaultUnitPrice;
+    onSave({ ...rest, ...(expiryDate ? { expiryDate } : {}), ...(keepsDefault ? {} : { unitPrice }) });
     onClose();
   };
 
@@ -76,6 +81,10 @@ export function LotModal({ lot, warehouses, onSave, onClose }: Props) {
             {lotError && <span className="field-error">{lotError}</span>}
           </label>
           <label htmlFor="lot-qty">在庫数 <NumberInput id="lot-qty" min={0} required value={form.quantity} onValueChange={v => setForm(f => ({ ...f, quantity: v }))} /></label>
+          <label htmlFor="lot-cost">
+            原価（仕入単価） (円) <span className="label-hint">（既定値：商品の現在の原価）</span>
+            <NumberInput id="lot-cost" min={0} value={form.unitPrice} onValueChange={v => setForm(f => ({ ...f, unitPrice: v }))} />
+          </label>
           <label htmlFor="lot-warehouse">
             倉庫
             <select id="lot-warehouse" value={form.warehouseId} onChange={e => setForm(f => ({ ...f, warehouseId: e.target.value }))}>

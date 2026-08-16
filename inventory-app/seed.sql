@@ -26,17 +26,24 @@ INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price,
   ('3', '値札ラベル(赤)', 'LB-R01', NULL,            'cat-label', 100, 5,   2,   datetime('now')),
   ('4', 'チーズ',         'CS-001', '4901987654322', 'cat-dairy', 4,   350, 220, datetime('now'));
 
-INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id) VALUES
-  ('l1', '1', replace(date('now', '+3 days'),  '-', ''), date('now', '+3 days'),  10,  'wh-sales'),
-  ('l2', '1', replace(date('now', '+7 days'),  '-', ''), date('now', '+7 days'),  10,  'wh-sales'),
-  ('l3', '2', replace(date('now', '+1 days'),  '-', ''), date('now', '+1 days'),  3,   'wh-sales'),
-  ('l4', '3', '20260101',                                NULL,                    500, 'wh-sales'),
-  ('l5', '4', replace(date('now', '-2 days'),  '-', ''), date('now', '-2 days'),  2,   'wh-hold'),
-  ('l6', '4', replace(date('now', '+14 days'), '-', ''), date('now', '+14 days'), 4,   'wh-sales');
+-- l1/l2 (牛乳) は原価履歴のサンプル (118→120) と揃えて実原価を持たせてある。
+-- それ以外は unit_price を NULL のままにし、商品の現在原価にフォールバックする挙動を示す。
+INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price) VALUES
+  ('l1', '1', replace(date('now', '+3 days'),  '-', ''), date('now', '+3 days'),  10,  'wh-sales', 118),
+  ('l2', '1', replace(date('now', '+7 days'),  '-', ''), date('now', '+7 days'),  10,  'wh-sales', 120),
+  ('l3', '2', replace(date('now', '+1 days'),  '-', ''), date('now', '+1 days'),  3,   'wh-sales', NULL),
+  ('l4', '3', '20260101',                                NULL,                    500, 'wh-sales', NULL),
+  ('l5', '4', replace(date('now', '-2 days'),  '-', ''), date('now', '-2 days'),  2,   'wh-hold',  NULL),
+  ('l6', '4', replace(date('now', '+14 days'), '-', ''), date('now', '+14 days'), 4,   'wh-sales', NULL);
 
 -- 入荷予定: ip2 は分割入荷の途中かつ予定日超過 (遅延)、ip3 は賞味期限なしの資材
 -- 仕入先は supplier_id で suppliers を参照する (旧 supplier 列は移行済みなので空文字)
-INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, note, canceled_at, created_at, updated_at) VALUES
-  ('ip1', '1', date('now', '+2 days'), 24,   0, 'wh-sales', replace(date('now', '+12 days'), '-', ''), date('now', '+12 days'), '', 'sup-yamada',      '定期便',                  NULL, datetime('now'), datetime('now')),
-  ('ip2', '2', date('now', '-1 days'), 20,   8, 'wh-sales', replace(date('now', '+4 days'),  '-', ''), date('now', '+4 days'),  '', 'sup-asahi',       '',                        NULL, datetime('now'), datetime('now')),
-  ('ip3', '3', date('now', '+5 days'), 1000, 0, 'wh-hold',  '20260401',                                NULL,                    '', 'sup-osaka-print', '検品後に販売倉庫へ移動',  NULL, datetime('now'), datetime('now'));
+INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, created_at, updated_at) VALUES
+  ('ip1', '1', date('now', '+2 days'), 24,   0, 'wh-sales', replace(date('now', '+12 days'), '-', ''), date('now', '+12 days'), '', 'sup-yamada',      120, '定期便',                  NULL, datetime('now'), datetime('now')),
+  ('ip2', '2', date('now', '-1 days'), 20,   8, 'wh-sales', replace(date('now', '+4 days'),  '-', ''), date('now', '+4 days'),  '', 'sup-asahi',       98,  '',                        NULL, datetime('now'), datetime('now')),
+  ('ip3', '3', date('now', '+5 days'), 1000, 0, 'wh-hold',  '20260401',                                NULL,                    '', 'sup-osaka-print', 8,   '検品後に販売倉庫へ移動',  NULL, datetime('now'), datetime('now'));
+
+-- 原価履歴のサンプル: 牛乳を山田乳業から2回入荷した過去の記録 (原価履歴タブで値上がりが見えるように)
+INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id) VALUES
+  ('tx-cost-1', datetime('now', '-30 days'), '入荷', '1', '牛乳', 'ML-001', replace(date('now', '-30 days'), '-', ''), 10, '入荷予定（山田乳業）', NULL, 'wh-sales', 118, 'sup-yamada'),
+  ('tx-cost-2', datetime('now', '-10 days'), '入荷', '1', '牛乳', 'ML-001', replace(date('now', '-10 days'), '-', ''), 10, '入荷予定（山田乳業）', NULL, 'wh-sales', 120, 'sup-yamada');

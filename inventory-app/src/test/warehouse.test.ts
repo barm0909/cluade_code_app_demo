@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useInventory, totalQuantityByWarehouse, DEFAULT_WAREHOUSE_ID } from '../useInventory';
+import { useInventory, totalQuantityByWarehouse, lotUnitCost, DEFAULT_WAREHOUSE_ID } from '../useInventory';
 import { stubApi } from './mockApi';
 
 // fetch モックなし = API に到達できない環境として、メモリ内のデフォルト倉庫で動作する。
@@ -174,6 +174,28 @@ describe('useInventory — moveLot', () => {
     expect(newLot.lotNo).toBe(lot.lotNo);
   });
 
+  it('部分移動で作られる新ロットは元ロットの原価を引き継ぐ', () => {
+    const { result } = renderHook(() => useInventory());
+    const salesWh = result.current.warehouses.find(w => w.name === '販売倉庫')!;
+    const holdWh = result.current.warehouses.find(w => w.name === '保留倉庫')!;
+    act(() => {
+      result.current.addProduct({ name: 'move cost test', sku: 'MVC-001', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
+    });
+    const product = result.current.products.find(p => p.sku === 'MVC-001')!;
+    act(() => {
+      result.current.addLot(product.id, { lotNo: '20261231', quantity: 10, warehouseId: salesWh.id, unitPrice: 80 });
+    });
+    const lot = result.current.products.find(p => p.id === product.id)!.lots[0];
+
+    act(() => { result.current.moveLot(product.id, lot.id, holdWh.id, 4); });
+
+    const updatedProduct = result.current.products.find(p => p.id === product.id)!;
+    const srcLot = updatedProduct.lots.find(l => l.id === lot.id)!;
+    const newLot = updatedProduct.lots.find(l => l.id !== lot.id)!;
+    expect(srcLot.unitPrice).toBe(80);
+    expect(newLot.unitPrice).toBe(80);
+  });
+
   it('moveLot で移動トランザクションが1件記録される', () => {
     const { result, salesWh, holdWh } = setupProduct();
     const product = result.current.products.find(p => p.sku === 'MV-001')!;
@@ -237,5 +259,21 @@ describe('totalQuantityByWarehouse', () => {
     const product = result.current.products.find(p => p.sku === 'EW-001')!;
 
     expect(totalQuantityByWarehouse(product, 'nonexistent-id')).toBe(0);
+  });
+});
+
+describe('lotUnitCost', () => {
+  const product: Parameters<typeof lotUnitCost>[1] = {
+    id: 'p1', name: 'テスト商品', sku: 'T-001', categoryId: 'cat-food', minQuantity: 0, price: 200, costPrice: 100, lots: [], updatedAt: '',
+  };
+
+  it('ロットが原価を持っていればそれを返す', () => {
+    const lot = { id: 'l1', lotNo: '20260101', quantity: 5, warehouseId: 'wh-sales', unitPrice: 80 };
+    expect(lotUnitCost(lot, product)).toBe(80);
+  });
+
+  it('ロットが原価を持っていなければ商品の現在原価にフォールバックする', () => {
+    const lot = { id: 'l1', lotNo: '20260101', quantity: 5, warehouseId: 'wh-sales' };
+    expect(lotUnitCost(lot, product)).toBe(100);
   });
 });

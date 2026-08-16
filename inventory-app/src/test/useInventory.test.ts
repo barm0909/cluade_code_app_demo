@@ -409,7 +409,7 @@ describe('useInventory — disposeLots（一括廃棄）', () => {
 
     expect(result.current.ledger[0]).toMatchObject({
       type: '廃棄', productId, lotNo: '20260101', quantity: 10, note: '一括廃棄',
-      fromWarehouseId: DEFAULT_WAREHOUSE_ID,
+      fromWarehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 200,
     });
   });
 

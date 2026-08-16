@@ -47,6 +47,7 @@ interface Lot {
   expiryDate?: string;
   quantity: number;
   warehouseId: string;
+  unitPrice?: number;
 }
 
 interface Product {
@@ -74,6 +75,8 @@ interface StockTransaction {
   note: string;
   fromWarehouseId?: string;
   toWarehouseId?: string;
+  unitPrice?: number;
+  supplierId?: string;
 }
 
 interface InboundPlan {
@@ -87,6 +90,7 @@ interface InboundPlan {
   expiryDate?: string;
   supplierId: string;
   supplier?: string; // 仕入先マスタ導入前の自由入力 (フロントが supplierId へ移行する)
+  unitPrice: number;
   note: string;
   canceledAt?: string;
   createdAt: string;
@@ -112,6 +116,7 @@ interface LotRow {
   expiry_date: string | null;
   quantity: number;
   warehouse_id: string;
+  unit_price: number | null;
 }
 
 interface InboundPlanRow {
@@ -125,6 +130,7 @@ interface InboundPlanRow {
   expiry_date: string | null;
   supplier: string;
   supplier_id: string | null;
+  unit_price: number;
   note: string;
   canceled_at: string | null;
   created_at: string;
@@ -156,16 +162,18 @@ interface TransactionRow {
   note: string;
   from_warehouse_id: string | null;
   to_warehouse_id: string | null;
+  unit_price: number | null;
+  supplier_id: string | null;
 }
 
 async function readState(db: D1Database) {
   const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at FROM products'),
-    db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id FROM lots'),
+    db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
-    db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id FROM stock_transactions ORDER BY date DESC'),
-    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, note, canceled_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
+    db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id FROM stock_transactions ORDER BY date DESC'),
+    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
   ]);
 
@@ -177,6 +185,7 @@ async function readState(db: D1Database) {
       quantity: r.quantity,
       warehouseId: r.warehouse_id,
       ...(r.expiry_date != null ? { expiryDate: r.expiry_date } : {}),
+      ...(r.unit_price != null ? { unitPrice: r.unit_price } : {}),
     };
     const list = lotsByProduct.get(r.product_id);
     if (list) list.push(lot);
@@ -212,6 +221,8 @@ async function readState(db: D1Database) {
     note: r.note,
     ...(r.from_warehouse_id != null ? { fromWarehouseId: r.from_warehouse_id } : {}),
     ...(r.to_warehouse_id != null ? { toWarehouseId: r.to_warehouse_id } : {}),
+    ...(r.unit_price != null ? { unitPrice: r.unit_price } : {}),
+    ...(r.supplier_id != null ? { supplierId: r.supplier_id } : {}),
   }));
 
   const inboundPlans: InboundPlan[] = (plansRes.results as unknown as InboundPlanRow[]).map(r => ({
@@ -227,6 +238,7 @@ async function readState(db: D1Database) {
     // 仕入先マスタ導入前の行 (supplier_id が NULL) は自由入力の名前を渡し、
     // フロントの migrateInboundPlans にマスタへ対応付けてもらう
     ...(r.supplier_id == null && r.supplier ? { supplier: r.supplier } : {}),
+    unitPrice: r.unit_price,
     note: r.note,
     ...(r.canceled_at != null ? { canceledAt: r.canceled_at } : {}),
     createdAt: r.created_at,
@@ -257,14 +269,14 @@ async function replaceProducts(db: D1Database, products: Product[]) {
     'INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertLot = db.prepare(
-    'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
   for (const p of products) {
     stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.janCode || null, p.categoryId, p.minQuantity, p.price, p.costPrice, p.updatedAt));
   }
   for (const p of products) {
     for (const l of p.lots) {
-      stmts.push(insertLot.bind(l.id, p.id, l.lotNo, l.expiryDate ?? null, l.quantity, l.warehouseId));
+      stmts.push(insertLot.bind(l.id, p.id, l.lotNo, l.expiryDate ?? null, l.quantity, l.warehouseId, l.unitPrice ?? null));
     }
   }
   await db.batch(stmts);
@@ -297,10 +309,10 @@ async function replaceCategories(db: D1Database, categories: Category[]) {
 async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
   const stmts = [db.prepare('DELETE FROM stock_transactions')];
   const insert = db.prepare(
-    'INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const t of ledger) {
-    stmts.push(insert.bind(t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null));
+    stmts.push(insert.bind(t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null, t.unitPrice ?? null, t.supplierId ?? null));
   }
   await db.batch(stmts);
 }
@@ -310,10 +322,10 @@ async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
 async function replaceInboundPlans(db: D1Database, plans: InboundPlan[]) {
   const stmts = [db.prepare('DELETE FROM inbound_plans')];
   const insert = db.prepare(
-    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const p of plans) {
-    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.note, p.canceledAt ?? null, p.createdAt, p.updatedAt));
+    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.unitPrice ?? 0, p.note, p.canceledAt ?? null, p.createdAt, p.updatedAt));
   }
   await db.batch(stmts);
 }

@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { InboundPlan, Product, ReceiveInput, Warehouse } from './useInventory';
-import { planReceipt, remainingInbound } from './useInventory';
+import { planReceipt, remainingInbound, mergedLotUnitPrice } from './useInventory';
 import { WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
 
@@ -35,6 +35,10 @@ export function ReceiveInboundModal({ plan, product, warehouses, supplierName = 
     [qty, lotNo, expiryDate, warehouseId, note],
   );
   const target = useMemo(() => planReceipt(plan, product, input), [plan, product, input]);
+  const resultingUnitPrice = useMemo(
+    () => mergedLotUnitPrice(target.existingLot, product, target.quantity, plan.unitPrice),
+    [target.existingLot, product, target.quantity, plan.unitPrice],
+  );
 
   const valid = qty > 0 && qty <= remaining && LOT_PATTERN.test(lotNo);
 
@@ -63,7 +67,8 @@ export function ReceiveInboundModal({ plan, product, warehouses, supplierName = 
             <p className="move-lot-info">
               <strong>{product.name}</strong>（{product.sku}）<br />
               入荷予定日 {plan.expectedDate}
-              {supplierName && <> / 仕入先 {supplierName}</>}<br />
+              {supplierName && <> / 仕入先 {supplierName}</>}
+              {plan.unitPrice > 0 && <> / 仕入単価 ¥{plan.unitPrice.toLocaleString()}</>}<br />
               予定 {plan.quantity} ／ 入荷済 {plan.receivedQuantity} ／ <strong>残 {remaining}</strong>
             </p>
             <div className="form-grid">
@@ -110,6 +115,13 @@ export function ReceiveInboundModal({ plan, product, warehouses, supplierName = 
                   {target.existingLot
                     ? <>既存ロット <span className="mono">{target.lotNo}</span>（<WarehouseDot warehouse={warehouses.find(w => w.id === target.warehouseId)} />）に加算します：{target.existingLot.quantity} → <strong>{target.existingLot.quantity + target.quantity}</strong></>
                     : <>新しいロット <span className="mono">{target.lotNo}</span>（<WarehouseDot warehouse={warehouses.find(w => w.id === target.warehouseId)} />）を作成します：<strong>{target.quantity}</strong></>}
+                  {resultingUnitPrice != null && (
+                    <>
+                      <br />
+                      入荷後のロットの原価：<strong>¥{resultingUnitPrice.toLocaleString()}</strong>
+                      {target.existingLot && <span className="label-hint">（既存分との加重平均）</span>}
+                    </>
+                  )}
                   <br />
                   入荷後の残数：<strong>{remaining - target.quantity}</strong>
                   {remaining - target.quantity === 0 && <>（この予定は入荷済になります）</>}

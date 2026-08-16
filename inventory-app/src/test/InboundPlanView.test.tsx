@@ -28,12 +28,12 @@ const PRODUCTS: Product[] = [
 const PLANS: InboundPlan[] = [
   {
     id: 'ip1', productId: 'p1', expectedDate: d(2), quantity: 24, receivedQuantity: 0,
-    warehouseId: 'wh-sales', lotNo: '20260401', expiryDate: d(12), supplierId: 'sup-yamada', note: '',
+    warehouseId: 'wh-sales', lotNo: '20260401', expiryDate: d(12), supplierId: 'sup-yamada', unitPrice: 120, note: '',
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   },
   {
     id: 'ip2', productId: 'p2', expectedDate: d(-1), quantity: 20, receivedQuantity: 8,
-    warehouseId: 'wh-hold', lotNo: '20260501', supplierId: 'sup-asahi', note: '',
+    warehouseId: 'wh-hold', lotNo: '20260501', supplierId: 'sup-asahi', unitPrice: 0, note: '',
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   },
 ];

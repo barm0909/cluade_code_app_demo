@@ -30,7 +30,7 @@ const SUPPLIERS: Supplier[] = [
 const PLANS: InboundPlan[] = [
   {
     id: 'ip1', productId: 'p1', expectedDate: d(-1), quantity: 24, receivedQuantity: 4,
-    warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: '20260401', supplierId: 'sup-yamada', note: '',
+    warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: '20260401', supplierId: 'sup-yamada', unitPrice: 120, note: '',
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   },
 ];

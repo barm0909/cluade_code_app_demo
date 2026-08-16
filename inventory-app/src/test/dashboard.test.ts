@@ -56,6 +56,11 @@ const PRODUCTS: Product[] = [
   },
 ];
 
+// l2 (牛乳, 数量10, wh-sales) にだけ実原価を持たせた変種。商品の costPrice (130) と異なる値にして
+// 集計がロット単位で切り替わっていることを確認するために使う
+const withL2UnitPrice = (unitPrice: number): Product[] => PRODUCTS.map(p =>
+  p.id === 'p1' ? { ...p, lots: p.lots.map(l => l.id === 'l2' ? { ...l, unitPrice } : l) } : p);
+
 // ────────────────────────────────────────────────────────────
 // dashboardTotals — サマリカードの集計
 // ────────────────────────────────────────────────────────────
@@ -98,6 +103,11 @@ describe('dashboardTotals', () => {
       productCount: 0, lotCount: 0, quantity: 0, costValue: 0, retailValue: 0,
       expiredLots: 0, expiringLots: 0, lowStock: 0, outOfStock: 0,
     });
+  });
+
+  it('ロットが実原価を持っていれば、商品の原価ではなくそちらを使う', () => {
+    const t = dashboardTotals(withL2UnitPrice(150));
+    expect(t.costValue).toBe(4 * 130 + 10 * 150 + 3 * 90); // l1はフォールバック、l2だけ150円
   });
 });
 
@@ -151,6 +161,11 @@ describe('expiringLotRows', () => {
     const rows = expiringLotRows(PRODUCTS, 3650);
     expect(rows.map(r => r.lotId)).not.toContain('l4'); // 期限なし・在庫0
   });
+
+  it('ロットの実原価があればそれを使って在庫金額を計算する', () => {
+    const rows = expiringLotRows(withL2UnitPrice(150));
+    expect(rows.find(r => r.lotId === 'l2')).toMatchObject({ costValue: 10 * 150 });
+  });
 });
 
 // ────────────────────────────────────────────────────────────
@@ -181,6 +196,12 @@ describe('warehouseSummaries', () => {
     const rows = warehouseSummaries([PRODUCTS[2]], WAREHOUSES);
     expect(rows.every(r => r.share === 0)).toBe(true);
   });
+
+  it('同じ商品でもロットごとに実原価が違えば倉庫の在庫金額に反映される', () => {
+    const rows = warehouseSummaries(withL2UnitPrice(150), WAREHOUSES);
+    const sales = rows.find(r => r.id === 'wh-sales')!;
+    expect(sales.costValue).toBe(10 * 150 + 3 * 90); // l2(150) + l3(フォールバック90)
+  });
 });
 
 describe('categorySummaries', () => {
@@ -189,6 +210,11 @@ describe('categorySummaries', () => {
     expect(rows.map(r => r.name)).toEqual(['乳製品', 'パン', 'ラベル']);
     expect(rows[0]).toMatchObject({ productCount: 1, lotCount: 2, quantity: 14, costValue: 1820, retailValue: 2800 });
     expect(rows[2]).toMatchObject({ productCount: 1, quantity: 0, costValue: 0 });
+  });
+
+  it('ロットの実原価があればそれを使って集計する', () => {
+    const rows = categorySummaries(withL2UnitPrice(150), CATEGORIES);
+    expect(rows.find(r => r.name === '乳製品')).toMatchObject({ costValue: 4 * 130 + 10 * 150 });
   });
 });
 

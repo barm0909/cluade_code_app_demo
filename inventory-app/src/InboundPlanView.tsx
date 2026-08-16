@@ -152,6 +152,7 @@ export function InboundPlanView({ inboundPlans, products, warehouses, suppliers,
               <th>賞味期限</th>
               <th>入荷先</th>
               <th>仕入先</th>
+              <th style={{ textAlign: 'right' }}>仕入単価</th>
               <th style={{ textAlign: 'right' }}>予定</th>
               <th style={{ textAlign: 'right' }}>入荷済</th>
               <th style={{ textAlign: 'right' }}>残</th>
@@ -172,6 +173,7 @@ export function InboundPlanView({ inboundPlans, products, warehouses, suppliers,
                 <td><ExpiryBadge expiryDate={r.plan.expiryDate} /></td>
                 <td><WarehouseDot warehouse={warehouses.find(w => w.id === r.plan.warehouseId)} /></td>
                 <td>{r.supplierName || '—'}</td>
+                <td style={{ textAlign: 'right' }}>{r.plan.unitPrice > 0 ? `¥${r.plan.unitPrice.toLocaleString()}` : '—'}</td>
                 <td style={{ textAlign: 'right' }}>{r.plan.quantity}</td>
                 <td style={{ textAlign: 'right' }}>{r.plan.receivedQuantity}</td>
                 <td style={{ textAlign: 'right', fontWeight: 600 }}>{r.remaining}</td>
