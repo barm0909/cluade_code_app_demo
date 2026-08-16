@@ -9,6 +9,7 @@ import {
   inboundPlanTotals,
   inboundPlanCsv,
   planReceipt,
+  mergedLotUnitPrice,
   totalQuantity,
   EMPTY_INBOUND_PLAN_FILTER,
   DEFAULT_WAREHOUSE_ID,
@@ -224,6 +225,32 @@ describe('planReceipt', () => {
   });
 });
 
+describe('mergedLotUnitPrice', () => {
+  it('新規ロットなら入荷単価をそのまま使う', () => {
+    expect(mergedLotUnitPrice(undefined, product(), 10, 100)).toBe(100);
+  });
+
+  it('既存ロットへの加算は数量で加重平均する', () => {
+    const existing: Lot = { id: 'l1', lotNo: '20260401', quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 100 };
+    expect(mergedLotUnitPrice(existing, product(), 10, 200)).toBe(150); // (10*100+10*200)/20
+  });
+
+  it('既存ロットが原価未設定なら商品の現在原価を仮の単価として加重平均する', () => {
+    const existing: Lot = { id: 'l1', lotNo: '20260401', quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID };
+    expect(mergedLotUnitPrice(existing, product(), 10, 100)).toBe(80); // (10*60+10*100)/20, 60はproduct()のcostPrice
+  });
+
+  it('仕入単価が未入力(0)の入荷では既存ロットの原価をそのまま維持する', () => {
+    const existing: Lot = { id: 'l1', lotNo: '20260401', quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 100 };
+    expect(mergedLotUnitPrice(existing, product(), 10, 0)).toBe(100);
+  });
+
+  it('仕入単価が未入力で既存ロットも原価未設定なら undefined のまま (商品原価へフォールバック)', () => {
+    const existing: Lot = { id: 'l1', lotNo: '20260401', quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID };
+    expect(mergedLotUnitPrice(existing, product(), 10, 0)).toBeUndefined();
+  });
+});
+
 // ────────────────────────────────────────────────────────────
 // フックのミューテーション
 // ────────────────────────────────────────────────────────────
@@ -308,7 +335,7 @@ describe('useInventory — 入荷 (receiveInboundPlan)', () => {
 
     const productAfter = result.current.products.find(p => p.id === '1')!;
     const lot = productAfter.lots.find(l => l.lotNo === '20260401')!;
-    expect(lot).toMatchObject({ quantity: 12, expiryDate: '2026-04-01', warehouseId: DEFAULT_WAREHOUSE_ID });
+    expect(lot).toMatchObject({ quantity: 12, expiryDate: '2026-04-01', warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 125 });
     expect(totalQuantity(productAfter)).toBe(before + 12);
 
     const updated = result.current.inboundPlans.find(p => p.id === target.id)!;
@@ -399,6 +426,48 @@ describe('useInventory — 入荷 (receiveInboundPlan)', () => {
     const after = result.current.products.find(p => p.id === '1')!;
     expect(after.lots).toHaveLength(lotCountBefore);
     expect(after.lots.find(l => l.id === existing.id)!.quantity).toBe(existing.quantity + 6);
+  });
+
+  it('既存ロットへ加算するとき、原価は数量で加重平均される', () => {
+    const { result } = renderHook(() => useInventory());
+    act(() => {
+      result.current.addProduct({ name: '原価マージテスト', sku: 'MRG-001', categoryId: 'cat-dairy', minQuantity: 0, price: 200, costPrice: 100 });
+    });
+    const productId = result.current.products.find(p => p.sku === 'MRG-001')!.id;
+    act(() => {
+      result.current.addLot(productId, { lotNo: '20260401', expiryDate: '2026-04-01', quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 118 });
+    });
+    act(() => {
+      result.current.addInboundPlan({ ...INPUT, productId, lotNo: '20260401', quantity: 6, unitPrice: 125 });
+    });
+    const target = result.current.inboundPlans.at(-1)!;
+
+    act(() => { result.current.receiveInboundPlan(target.id, { quantity: 6 }); });
+
+    const lot = result.current.products.find(p => p.id === productId)!.lots.find(l => l.lotNo === '20260401')!;
+    expect(lot.quantity).toBe(16);
+    expect(lot.unitPrice).toBe(121); // Math.round((10*118 + 6*125) / 16)
+  });
+
+  it('仕入単価未入力の入荷で既存ロットへ加算しても、その原価は変わらない', () => {
+    const { result } = renderHook(() => useInventory());
+    act(() => {
+      result.current.addProduct({ name: '原価維持テスト', sku: 'KEEP-001', categoryId: 'cat-dairy', minQuantity: 0, price: 200, costPrice: 100 });
+    });
+    const productId = result.current.products.find(p => p.sku === 'KEEP-001')!.id;
+    act(() => {
+      result.current.addLot(productId, { lotNo: '20260401', expiryDate: '2026-04-01', quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 118 });
+    });
+    act(() => {
+      result.current.addInboundPlan({ ...INPUT, productId, lotNo: '20260401', quantity: 6, unitPrice: 0 });
+    });
+    const target = result.current.inboundPlans.at(-1)!;
+
+    act(() => { result.current.receiveInboundPlan(target.id, { quantity: 6 }); });
+
+    const lot = result.current.products.find(p => p.id === productId)!.lots.find(l => l.lotNo === '20260401')!;
+    expect(lot.quantity).toBe(16);
+    expect(lot.unitPrice).toBe(118);
   });
 });
 

@@ -57,6 +57,15 @@ describe('stocktakeRows', () => {
     expect(stocktakeRows(PRODUCTS, { ...EMPTY_STOCKTAKE_FILTER, categoryId: 'cat-dairy' }).map(r => r.lotId)).toEqual(['l1', 'l2']);
     expect(stocktakeRows(PRODUCTS, { ...EMPTY_STOCKTAKE_FILTER, warehouseId: 'wh-sales' }).map(r => r.lotId)).toEqual(['l1', 'l3']);
   });
+
+  it('ロットが実原価を持っていれば、商品の原価ではなくそちらを使う', () => {
+    const withUnitPrice: Product[] = PRODUCTS.map(p => p.id === 'p1'
+      ? { ...p, lots: p.lots.map(l => l.id === 'l1' ? { ...l, unitPrice: 150 } : l) }
+      : p);
+    const rows = stocktakeRows(withUnitPrice, EMPTY_STOCKTAKE_FILTER);
+    expect(rows.find(r => r.lotId === 'l1')).toMatchObject({ costPrice: 150 });
+    expect(rows.find(r => r.lotId === 'l2')).toMatchObject({ costPrice: 130 }); // 原価未設定はフォールバック
+  });
 });
 
 // ────────────────────────────────────────────────────────────

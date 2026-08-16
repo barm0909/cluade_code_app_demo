@@ -47,6 +47,7 @@ interface Lot {
   expiryDate?: string;
   quantity: number;
   warehouseId: string;
+  unitPrice?: number;
 }
 
 interface Product {
@@ -115,6 +116,7 @@ interface LotRow {
   expiry_date: string | null;
   quantity: number;
   warehouse_id: string;
+  unit_price: number | null;
 }
 
 interface InboundPlanRow {
@@ -167,7 +169,7 @@ interface TransactionRow {
 async function readState(db: D1Database) {
   const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at FROM products'),
-    db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id FROM lots'),
+    db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
     db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id FROM stock_transactions ORDER BY date DESC'),
@@ -183,6 +185,7 @@ async function readState(db: D1Database) {
       quantity: r.quantity,
       warehouseId: r.warehouse_id,
       ...(r.expiry_date != null ? { expiryDate: r.expiry_date } : {}),
+      ...(r.unit_price != null ? { unitPrice: r.unit_price } : {}),
     };
     const list = lotsByProduct.get(r.product_id);
     if (list) list.push(lot);
@@ -266,14 +269,14 @@ async function replaceProducts(db: D1Database, products: Product[]) {
     'INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertLot = db.prepare(
-    'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
   for (const p of products) {
     stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.janCode || null, p.categoryId, p.minQuantity, p.price, p.costPrice, p.updatedAt));
   }
   for (const p of products) {
     for (const l of p.lots) {
-      stmts.push(insertLot.bind(l.id, p.id, l.lotNo, l.expiryDate ?? null, l.quantity, l.warehouseId));
+      stmts.push(insertLot.bind(l.id, p.id, l.lotNo, l.expiryDate ?? null, l.quantity, l.warehouseId, l.unitPrice ?? null));
     }
   }
   await db.batch(stmts);

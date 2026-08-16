@@ -95,6 +95,14 @@ describe('planDisposal', () => {
     const plan = planDisposal(PRODUCTS, []);
     expect(plan).toEqual({ targets: [], quantity: 0, costValue: 0, expiredCount: 0, notExpiredCount: 0 });
   });
+
+  it('ロットが実原価を持っていれば、商品の原価ではなくそちらを使う', () => {
+    const withUnitPrice = PRODUCTS.map(p => p.id === 'p1'
+      ? { ...p, lots: p.lots.map(l => l.id === 'l1' ? { ...l, unitPrice: 150 } : l) }
+      : p);
+    const plan = planDisposal(withUnitPrice, ['l1']);
+    expect(plan.targets[0]).toMatchObject({ costPrice: 150, costValue: 4 * 150 });
+  });
 });
 
 // ────────────────────────────────────────────────────────────
@@ -170,6 +178,11 @@ describe('disposalRows', () => {
   it('マスタから消えた商品は原価0として数量だけ数える', () => {
     const rows = disposalRows([txn({ id: 't9', date: '2026-08-10T01:00:00.000Z', type: '廃棄', quantity: 7, productId: 'gone', productName: '廃番品', productSku: 'X-001' })], PRODUCTS);
     expect(rows[0]).toMatchObject({ productName: '廃番品', quantity: 7, costValue: 0 });
+  });
+
+  it('記録に仕入単価があれば、商品の現在原価ではなくそちらを使う (廃棄時のロット実原価)', () => {
+    const rows = disposalRows([txn({ id: 't9', date: '2026-08-10T01:00:00.000Z', type: '廃棄', quantity: 4, unitPrice: 150 })], PRODUCTS);
+    expect(rows[0]).toMatchObject({ costValue: 4 * 150 }); // 商品の costPrice (130) ではなく記録の150を使う
   });
 
   it('廃棄がなければ空配列を返す', () => {

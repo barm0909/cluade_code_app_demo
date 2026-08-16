@@ -12,6 +12,7 @@ const MOCK_WAREHOUSES = [
 const defaultProps = {
   lot: null,
   warehouses: MOCK_WAREHOUSES,
+  defaultUnitPrice: 100,
   onSave: vi.fn(),
   onClose: vi.fn(),
 };
@@ -74,6 +75,44 @@ describe('LotModal — ロットNo バリデーション', () => {
     const input = screen.getByPlaceholderText('例: 20261231');
     await user.type(input, '202612319999');
     expect((input as HTMLInputElement).value).toHaveLength(8);
+  });
+});
+
+describe('LotModal — 原価', () => {
+  it('新規追加では原価欄の既定値が defaultUnitPrice になる', () => {
+    render(<LotModal {...defaultProps} defaultUnitPrice={130} />);
+    expect(screen.getByLabelText(/原価/)).toHaveValue(130);
+  });
+
+  it('原価欄を既定値のまま保存すると unitPrice は送られない（商品原価に追従させる）', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<LotModal {...defaultProps} onSave={onSave} defaultUnitPrice={130} />);
+    await user.type(screen.getByPlaceholderText('例: 20261231'), '20261231');
+    await user.click(screen.getByText('保存'));
+    expect(onSave).toHaveBeenCalledWith(expect.not.objectContaining({ unitPrice: expect.anything() }));
+  });
+
+  it('原価欄を変更して保存すると unitPrice がそのまま送られる', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<LotModal {...defaultProps} onSave={onSave} defaultUnitPrice={130} />);
+    await user.type(screen.getByPlaceholderText('例: 20261231'), '20261231');
+    const costInput = screen.getByLabelText(/原価/);
+    await user.clear(costInput);
+    await user.type(costInput, '150');
+    await user.click(screen.getByText('保存'));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 150 }));
+  });
+
+  it('既に独自の原価を持つロットは、値を変えなくても unitPrice を維持したまま送る', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const lot = { id: '1', lotNo: '20261231', quantity: 5, warehouseId: 'wh-sales', unitPrice: 118 };
+    render(<LotModal {...defaultProps} lot={lot} onSave={onSave} defaultUnitPrice={130} />);
+    expect(screen.getByLabelText(/原価/)).toHaveValue(118);
+    await user.click(screen.getByText('保存'));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ unitPrice: 118 }));
   });
 });
 

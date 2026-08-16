@@ -23,15 +23,17 @@ interface InboundPlan {
 
 interface StockTransaction {
   // ...既存のフィールド
-  unitPrice?: number;   // 仕入単価 (円)。入荷予定からの「入荷」だけが持つ
-  supplierId?: string;  // 仕入先マスタの id。同上
+  unitPrice?: number;   // 仕入単価/原価 (円)。「入荷」（仕入単価）と「廃棄」（そのロットの原価）だけが持つ
+  supplierId?: string;  // 仕入先マスタの id。「入荷」だけが持つ
 }
 ```
 
 - `unitPrice` は入荷予定の作成・編集フォームで入力する任意項目（既定 0 = 未入力）。
 - `receiveInboundPlan` が入荷のたびに `plan.unitPrice` と `plan.supplierId` を
-  帳票の「入荷」行へそのままコピーする。他の区分（調整入庫・出庫・移動・廃棄・棚卸など）は
-  この2つの属性を持たない。
+  帳票の「入荷」行へそのままコピーする。
+- ロット単位の実原価トラッキング機能（[../CLAUDE.md](../CLAUDE.md) の `Lot.unitPrice` 参照）により、
+  `disposeLots`（一括廃棄）も廃棄した時点のロットの原価を「廃棄」行の `unitPrice` に書き込む
+  （supplierId は持たない）。それ以外の区分（調整入庫・出庫・移動・棚卸など）はこの属性を持たない。
 - 帳票は記録時点の値をコピーして持つ方針（商品名・SKU と同じ）なので、あとで仕入先を改名しても
   過去の原価履歴の表示だけが変わり、記録された単価そのものは変わらない。
 
@@ -77,9 +79,13 @@ interface StockTransaction {
 - `receiveInboundPlan` — 入荷のたびに `unitPrice` / `supplierId` を帳票へ書き写す
 - `inboundPlanCsv` / `InboundPlanView` — 入荷予定の一覧・CSV に仕入単価列を追加
 
-在庫数・原価（`Product.costPrice`）そのものは変わりません。原価履歴はあくまで
-「過去にいくらで仕入れたか」の記録で、`Product.costPrice`（棚卸・廃棄ロスなどが使う現在原価）
-を自動更新することはしません。
+在庫数・商品の原価（`Product.costPrice`）そのものは変わりません。原価履歴はあくまで
+「過去にいくらで仕入れたか」という**仕入イベントの記録**です。
+
+これとは別に `Lot.unitPrice`（ロットの実原価）という概念があります。こちらは「そのロットの現在の
+原価基準」で、複数回の入荷で加重平均されたり、ダッシュボード・棚卸・廃棄ロスの評価額計算に
+直接使われたりします（`lotUnitCost`）。原価履歴の各行がそのまま `Lot.unitPrice` になるとは限りません
+（同じロットへ複数回入荷すると加重平均されるため）。詳しくは `CLAUDE.md` の Data model の説明を参照してください。
 
 テストは純粋関数が `src/test/costHistory.test.ts`、画面が `src/test/CostHistoryView.test.tsx`
 です。

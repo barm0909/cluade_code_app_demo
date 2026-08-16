@@ -1,5 +1,5 @@
 import { Fragment, useState, useMemo } from 'react';
-import { useInventory, daysUntilExpiry, totalQuantity, csvExportHint, csvExportLabel, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
+import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
 import type { Product, Lot, LotTraceKey, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
@@ -410,6 +410,7 @@ export default function App() {
                                     <th>賞味期限</th>
                                     <th>倉庫</th>
                                     <th>在庫数</th>
+                                    <th style={{ textAlign: 'right' }}>原価</th>
                                     <th>操作</th>
                                   </tr>
                                 </thead>
@@ -422,6 +423,7 @@ export default function App() {
                                       <td>
                                         <span className={l.quantity === 0 ? 'qty-low' : ''}>{l.quantity}</span>
                                       </td>
+                                      <td style={{ textAlign: 'right' }}>¥{lotUnitCost(l, p).toLocaleString()}</td>
                                       <td>
                                         <div className="row-actions">
                                           <button className="btn-receive" onClick={() => setIoLot({ product: p, lot: l, direction: 'in' })}>入庫</button>
@@ -473,6 +475,7 @@ export default function App() {
         <LotModal
           lot={editingLot.lot}
           warehouses={warehouses}
+          defaultUnitPrice={products.find(p => p.id === editingLot.productId)?.costPrice ?? 0}
           onSave={data => editingLot.lot
             ? updateLot(editingLot.productId, editingLot.lot.id, data)
             : addLot(editingLot.productId, data)

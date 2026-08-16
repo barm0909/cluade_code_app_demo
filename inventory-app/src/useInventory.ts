@@ -39,6 +39,8 @@ export interface Lot {
   expiryDate?: string;
   quantity: number;
   warehouseId: string;
+  /** このロットの実原価 (円)。未設定なら商品の現在原価 (Product.costPrice) を使う */
+  unitPrice?: number;
 }
 
 export interface Product {
@@ -183,6 +185,11 @@ export function totalQuantityByWarehouse(product: Product, warehouseId: string):
   return product.lots.filter(l => l.warehouseId === warehouseId).reduce((s, l) => s + l.quantity, 0);
 }
 
+/** ロットに適用する実原価。未設定なら商品の現在原価にフォールバックする */
+export function lotUnitCost(lot: Lot, product: Product): number {
+  return lot.unitPrice ?? product.costPrice;
+}
+
 // JANコード入力の正規化: 全角数字を半角へ直し、ハイフン・空白などの区切り文字を除去する
 // (IME オンのままの入力やバーコード表記のハイフンで検証に落ちないようにするため)
 export function normalizeJanCode(value: string): string {
@@ -278,8 +285,8 @@ const SAMPLE_DATA: Product[] = [
   {
     id: '1', name: '牛乳', sku: 'ML-001', janCode: '4901234567894', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130,
     lots: [
-      { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
-      { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID },
+      { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 118 },
+      { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 120 },
     ],
     updatedAt: new Date().toISOString(),
   },
@@ -550,7 +557,7 @@ export function stocktakeRows(products: Product[], filter: StocktakeFilter): Sto
         expiryDate: l.expiryDate,
         warehouseId: l.warehouseId,
         bookQuantity: l.quantity,
-        costPrice: p.costPrice,
+        costPrice: lotUnitCost(l, p),
       });
     }
   }
@@ -1030,6 +1037,19 @@ export function planReceipt(plan: InboundPlan, product: Product | undefined, inp
   return { quantity, lotNo, expiryDate, warehouseId, existingLot };
 }
 
+/**
+ * 入荷で加算されるロットの原価を求める。新規ロットならその単価をそのまま使う。
+ * 既存ロットへ加算するときは、既存分と新規分を数量で加重平均する (円未満は四捨五入)。
+ * 仕入単価が未入力 (0) の入荷では、既存ロットの原価をそのまま維持する
+ * (支払った額が分からない入荷で、既に分かっている原価を上書きしないため)。
+ */
+export function mergedLotUnitPrice(existingLot: Lot | undefined, product: Product, addedQuantity: number, addedUnitPrice: number): number | undefined {
+  if (addedUnitPrice <= 0) return existingLot?.unitPrice;
+  if (!existingLot || existingLot.quantity <= 0) return addedUnitPrice;
+  const priorPrice = lotUnitCost(existingLot, product);
+  return Math.round((existingLot.quantity * priorPrice + addedQuantity * addedUnitPrice) / (existingLot.quantity + addedQuantity));
+}
+
 /** 入荷の結果 (呼び出し側が通知に使う) */
 export interface ReceiptResult extends ReceiptTarget {
   /** 入荷後の残数 */
@@ -1077,11 +1097,11 @@ export function dashboardTotals(products: Product[], withinDays: number = EXPIRY
     const qty = totalQuantity(p);
     totals.lotCount += p.lots.length;
     totals.quantity += qty;
-    totals.costValue += qty * p.costPrice;
     totals.retailValue += qty * p.price;
     if (qty <= p.minQuantity) totals.lowStock++;
     if (qty === 0) totals.outOfStock++;
     for (const l of p.lots) {
+      totals.costValue += l.quantity * lotUnitCost(l, p);
       if (!l.expiryDate || l.quantity <= 0) continue;
       const days = daysUntilExpiry(l.expiryDate);
       if (days < 0) totals.expiredLots++;
@@ -1161,7 +1181,7 @@ export function expiringLotRows(products: Product[], withinDays: number = EXPIRY
         days,
         quantity: l.quantity,
         warehouseId: l.warehouseId,
-        costValue: l.quantity * p.costPrice,
+        costValue: l.quantity * lotUnitCost(l, p),
       });
     }
   }
@@ -1202,7 +1222,7 @@ export function warehouseSummaries(products: Product[], warehouses: Warehouse[])
       row.productCount++;
       row.lotCount += lots.length;
       row.quantity += qty;
-      row.costValue += qty * p.costPrice;
+      row.costValue += lots.reduce((s, l) => s + l.quantity * lotUnitCost(l, p), 0);
       row.retailValue += qty * p.price;
     }
     return row;
@@ -1222,7 +1242,7 @@ export function categorySummaries(products: Product[], categories: Category[]): 
       row.productCount++;
       row.lotCount += p.lots.length;
       row.quantity += qty;
-      row.costValue += qty * p.costPrice;
+      row.costValue += p.lots.reduce((s, l) => s + l.quantity * lotUnitCost(l, p), 0);
       row.retailValue += qty * p.price;
     }
     return row;
@@ -1288,6 +1308,7 @@ export function planDisposal(products: Product[], lotIds: Iterable<string>): Dis
   for (const p of products) {
     for (const l of p.lots) {
       if (!wanted.has(l.id) || l.quantity <= 0) continue;
+      const costPrice = lotUnitCost(l, p);
       targets.push({
         productId: p.id,
         productName: p.name,
@@ -1297,8 +1318,8 @@ export function planDisposal(products: Product[], lotIds: Iterable<string>): Dis
         expiryDate: l.expiryDate,
         warehouseId: l.warehouseId,
         quantity: l.quantity,
-        costPrice: p.costPrice,
-        costValue: l.quantity * p.costPrice,
+        costPrice,
+        costValue: l.quantity * costPrice,
         expired: isExpired(l),
       });
     }
@@ -1355,8 +1376,9 @@ export interface DisposalRow {
 
 /**
  * 廃棄の記録を商品ごとにまとめ、ロス金額の大きい順に返す。
- * 帳票は原価を持たないので金額は商品マスタの「現在の原価」を掛けた概算で、
- * 削除された商品 (マスタにない) は原価0として数量だけを数える。
+ * 廃棄時にロットの実原価が記録されていればそれを使う (disposeLots が書く unitPrice)。
+ * それがない古い記録や、削除された商品 (マスタにない) は商品マスタの「現在の原価」を掛けた概算になり、
+ * マスタにもない場合は原価0として数量だけを数える。
  */
 export function disposalRows(txns: StockTransaction[], products: Product[]): DisposalRow[] {
   const costById = new Map(products.map(p => [p.id, p.costPrice]));
@@ -1372,7 +1394,7 @@ export function disposalRows(txns: StockTransaction[], products: Product[]): Dis
     };
     row.count++;
     row.quantity += t.quantity;
-    row.costValue += t.quantity * (costById.get(t.productId) ?? 0);
+    row.costValue += t.quantity * (t.unitPrice ?? costById.get(t.productId) ?? 0);
     byProduct.set(t.productId, row);
   }
   return [...byProduct.values()].sort((a, b) =>
@@ -2036,6 +2058,7 @@ export function useInventory() {
       quantity: t.quantity,
       note,
       fromWarehouseId: t.warehouseId,
+      unitPrice: t.costPrice,
     })));
 
     return plan;
@@ -2092,19 +2115,23 @@ export function useInventory() {
 
     const target = planReceipt(plan, product, input);
     if (target.quantity <= 0) return null;
+    const mergedPrice = mergedLotUnitPrice(target.existingLot, product, target.quantity, plan.unitPrice);
 
     setProducts(prev => {
       const now = new Date().toISOString();
       const next = prev.map(p => {
         if (p.id !== product.id) return p;
         const lots = target.existingLot
-          ? p.lots.map(l => l.id === target.existingLot!.id ? { ...l, quantity: l.quantity + target.quantity } : l)
+          ? p.lots.map(l => l.id === target.existingLot!.id
+              ? { ...l, quantity: l.quantity + target.quantity, ...(mergedPrice != null ? { unitPrice: mergedPrice } : {}) }
+              : l)
           : [...p.lots, {
               id: crypto.randomUUID(),
               lotNo: target.lotNo,
               ...(target.expiryDate ? { expiryDate: target.expiryDate } : {}),
               quantity: target.quantity,
               warehouseId: target.warehouseId,
+              ...(mergedPrice != null ? { unitPrice: mergedPrice } : {}),
             }];
         return { ...p, lots, updatedAt: now };
       });
@@ -2355,7 +2382,7 @@ export function useInventory() {
         const next = prev.map(p => {
           if (p.id !== productId) return p;
           const updatedLots = p.lots.map(l => l.id === lotId ? { ...l, quantity: l.quantity - moveQty } : l);
-          const newLot: Lot = { id: crypto.randomUUID(), lotNo: lot.lotNo, expiryDate: lot.expiryDate, quantity: moveQty, warehouseId: targetWarehouseId };
+          const newLot: Lot = { id: crypto.randomUUID(), lotNo: lot.lotNo, expiryDate: lot.expiryDate, quantity: moveQty, warehouseId: targetWarehouseId, ...(lot.unitPrice != null ? { unitPrice: lot.unitPrice } : {}) };
           return { ...p, lots: [...updatedLots, newLot], updatedAt: new Date().toISOString() };
         });
         save(next); return next;
