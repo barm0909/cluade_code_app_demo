@@ -23,6 +23,7 @@ const makeEmpty = (products: Product[], warehouses: Warehouse[]) => ({
   lotNo: '',
   expiryDate: '',
   supplierId: '',
+  unitPrice: 0,
   note: '',
 });
 
@@ -44,6 +45,7 @@ export function InboundPlanModal({ plan, products, warehouses, suppliers, onSave
           lotNo: plan.lotNo,
           expiryDate: plan.expiryDate ?? '',
           supplierId: plan.supplierId,
+          unitPrice: plan.unitPrice,
           note: plan.note,
         }
       : makeEmpty(products, warehouses));
@@ -164,6 +166,10 @@ export function InboundPlanModal({ plan, products, warehouses, suppliers, onSave
                     <option key={s.id} value={s.id}>{s.name}{s.active ? '' : '（取引停止）'}</option>
                   ))}
                 </select>
+              </label>
+              <label htmlFor="ip-unit-price">
+                仕入単価 (円) <span className="label-hint">（任意）</span>
+                <NumberInput id="ip-unit-price" min={0} value={form.unitPrice} onValueChange={v => setForm(f => ({ ...f, unitPrice: v }))} />
               </label>
               <label className="form-span-2" htmlFor="ip-note">
                 備考 <span className="label-hint">（任意）</span>

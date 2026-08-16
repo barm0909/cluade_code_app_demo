@@ -81,6 +81,10 @@ export interface StockTransaction {
   note: string;
   fromWarehouseId?: string;
   toWarehouseId?: string;
+  /** 仕入単価 (円)。入荷予定からの「入荷」だけが持つ。それ以外の区分では未設定 */
+  unitPrice?: number;
+  /** 仕入先マスタの id。unitPrice と同じく「入荷予定からの入荷」だけが持つ */
+  supplierId?: string;
 }
 
 // 入荷予定 (発注済み・入荷待ちの在庫)。実際の在庫はまだ持たず、入荷して初めてロットになる。
@@ -98,6 +102,7 @@ export interface InboundPlan {
   supplierId: string; // 仕入先マスタの id。空文字は「仕入先未設定」
   /** @deprecated 仕入先マスタ導入前の自由入力。読み込み時に migrateInboundPlans が supplierId へ移す */
   supplier?: string;
+  unitPrice: number; // 仕入単価 (円)。0 は未入力
   note: string;
   canceledAt?: string; // キャンセル日時 (ISO)。未設定なら有効な予定
   createdAt: string;
@@ -307,16 +312,16 @@ const SAMPLE_INBOUND_PLANS: InboundPlan[] = [
   {
     id: 'ip1', productId: '1', expectedDate: d(2), quantity: 24, receivedQuantity: 0,
     warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: d(12).replace(/-/g, ''), expiryDate: d(12),
-    supplierId: 'sup-yamada', note: '定期便', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    supplierId: 'sup-yamada', unitPrice: 120, note: '定期便', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
   {
     id: 'ip2', productId: '2', expectedDate: d(-1), quantity: 20, receivedQuantity: 8,
     warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: d(4).replace(/-/g, ''), expiryDate: d(4),
-    supplierId: 'sup-asahi', note: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    supplierId: 'sup-asahi', unitPrice: 98, note: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
   {
     id: 'ip3', productId: '3', expectedDate: d(5), quantity: 1000, receivedQuantity: 0,
-    warehouseId: 'wh-hold', lotNo: '20260401', supplierId: 'sup-osaka-print', note: '検品後に販売倉庫へ移動',
+    warehouseId: 'wh-hold', lotNo: '20260401', supplierId: 'sup-osaka-print', unitPrice: 8, note: '検品後に販売倉庫へ移動',
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   },
 ];
@@ -358,16 +363,17 @@ function migrateInboundPlans(plans: InboundPlan[], suppliers: Supplier[]): { pla
   const idByName = new Map(sups.map(s => [s.name, s.id]));
   const migrated = plans.map(plan => {
     const { supplier, ...rest } = plan;
-    if (rest.supplierId) return rest;
+    const withUnitPrice = { ...rest, unitPrice: rest.unitPrice ?? 0 };
+    if (withUnitPrice.supplierId) return withUnitPrice;
     const legacyName = (supplier ?? '').trim();
-    if (!legacyName) return { ...rest, supplierId: '' };
+    if (!legacyName) return { ...withUnitPrice, supplierId: '' };
     let id = idByName.get(legacyName);
     if (!id) {
       id = crypto.randomUUID();
       sups.push({ ...EMPTY_SUPPLIER, id, name: legacyName });
       idByName.set(legacyName, id);
     }
-    return { ...rest, supplierId: id };
+    return { ...withUnitPrice, supplierId: id };
   });
   return { plans: migrated, suppliers: sups };
 }
@@ -433,6 +439,7 @@ export const CSV_EXPORTS = {
   disposal: { label: '廃棄ロス', description: '期間内の商品別の廃棄実績' },
   trace: { label: 'ロット追跡', description: '選択したロットの入荷から出庫までの履歴' },
   supplier: { label: '仕入先一覧', description: '仕入先マスタと入荷予定の状況' },
+  costHistory: { label: '原価履歴', description: '入荷時に記録された仕入単価の履歴' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -965,7 +972,7 @@ export function inboundPlanTotals(rows: InboundPlanRow[]): InboundPlanTotals {
 
 export function inboundPlanCsv(rows: InboundPlanRow[], warehouses: Warehouse[]): string {
   const whName = (id: string) => warehouses.find(w => w.id === id)?.name ?? id;
-  const header = '入荷予定日,商品名,SKU,ロットNo,賞味期限,入荷先倉庫,仕入先,予定数量,入荷済,残数,状態,備考';
+  const header = '入荷予定日,商品名,SKU,ロットNo,賞味期限,入荷先倉庫,仕入先,仕入単価,予定数量,入荷済,残数,状態,備考';
   const body = rows.map(r => [
     r.plan.expectedDate,
     r.productName,
@@ -974,6 +981,7 @@ export function inboundPlanCsv(rows: InboundPlanRow[], warehouses: Warehouse[]):
     r.plan.expiryDate ?? '',
     whName(r.plan.warehouseId),
     r.supplierName,
+    r.plan.unitPrice,
     r.plan.quantity,
     r.plan.receivedQuantity,
     r.remaining,
@@ -1393,6 +1401,125 @@ export function disposalCsv(rows: DisposalRow[]): string {
 
 export function exportDisposalCsv(rows: DisposalRow[]) {
   downloadCsv(csvFileName('disposal'), disposalCsv(rows));
+}
+
+// ---------------------------------------------------------------------------
+// 仕入価格・原価履歴 (原価履歴)
+// 入荷予定に仕入単価を持たせ、受け入れ (receiveInboundPlan) がその単価を「入荷」帳票へ
+// 書き写す。専用の永続データは持たず、廃棄ロス集計・ロット追跡と同じく帳票から組み立てる。
+// ---------------------------------------------------------------------------
+
+export interface CostHistoryRow {
+  txnId: string;
+  date: string;
+  productId: string;
+  productName: string;
+  productSku: string;
+  lotNo: string;
+  supplierId: string;
+  supplierName: string;
+  unitPrice: number;
+  quantity: number;
+  amount: number; // unitPrice * quantity
+  /** 同一商品×同一仕入先の1つ前の記録の単価。なければ undefined (初回入荷) */
+  previousUnitPrice?: number;
+}
+
+/**
+ * 帳票の「入荷」のうち仕入単価が入っているもの (入荷予定からの入荷) だけを新しい順に整形する。
+ * unitPrice が 0 (未入力) の記録は履歴として無意味なので除外する。
+ */
+export function costHistoryRows(ledger: StockTransaction[], suppliers: Supplier[]): CostHistoryRow[] {
+  const supplierNameById = new Map(suppliers.map(s => [s.id, s.name]));
+  const source = ledger
+    .filter(t => t.type === '入荷' && t.unitPrice != null && t.unitPrice > 0)
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date)); // 前回比を求めるため古い順に処理する
+
+  const lastPriceByKey = new Map<string, number>();
+  const rows: CostHistoryRow[] = source.map(t => {
+    const supplierId = t.supplierId ?? '';
+    const key = `${t.productId} ${supplierId}`;
+    const previousUnitPrice = lastPriceByKey.get(key);
+    lastPriceByKey.set(key, t.unitPrice!);
+    return {
+      txnId: t.id,
+      date: t.date,
+      productId: t.productId,
+      productName: t.productName,
+      productSku: t.productSku,
+      lotNo: t.lotNo,
+      supplierId,
+      supplierName: supplierNameById.get(supplierId) ?? '',
+      unitPrice: t.unitPrice!,
+      quantity: t.quantity,
+      amount: t.unitPrice! * t.quantity,
+      previousUnitPrice,
+    };
+  });
+
+  return rows.sort((a, b) => b.date.localeCompare(a.date)); // 表示は新しい順
+}
+
+// 原価履歴の絞り込み条件。ledger 帳票と同じ方針で「空文字はその条件では絞らない」
+export interface CostHistoryFilter {
+  keyword: string; // 商品名・SKU・仕入先名の部分一致
+  supplierId: string;
+  from: string; // YYYY-MM-DD (この日を含む)
+  to: string; // YYYY-MM-DD (この日を含む)
+}
+
+export const EMPTY_COST_HISTORY_FILTER: CostHistoryFilter = { keyword: '', supplierId: '', from: '', to: '' };
+
+export function filterCostHistory(rows: CostHistoryRow[], filter: CostHistoryFilter): CostHistoryRow[] {
+  const q = filter.keyword.trim().toLowerCase();
+  return rows.filter(r => {
+    if (q && !(
+      r.productName.toLowerCase().includes(q)
+      || r.productSku.toLowerCase().includes(q)
+      || r.supplierName.toLowerCase().includes(q)
+    )) return false;
+    if (filter.supplierId && r.supplierId !== filter.supplierId) return false;
+    if (filter.from || filter.to) {
+      const day = localDateKey(r.date);
+      if (filter.from && day < filter.from) return false;
+      if (filter.to && day > filter.to) return false;
+    }
+    return true;
+  });
+}
+
+export interface CostHistoryTotals {
+  count: number;
+  averageUnitPrice: number;
+  amount: number;
+}
+
+export function costHistoryTotals(rows: CostHistoryRow[]): CostHistoryTotals {
+  if (rows.length === 0) return { count: 0, averageUnitPrice: 0, amount: 0 };
+  const amount = rows.reduce((s, r) => s + r.amount, 0);
+  const quantity = rows.reduce((s, r) => s + r.quantity, 0);
+  return { count: rows.length, averageUnitPrice: quantity > 0 ? amount / quantity : 0, amount };
+}
+
+export function costHistoryCsv(rows: CostHistoryRow[]): string {
+  const header = '日時,商品名,SKU,ロットNo,仕入先,仕入単価,前回単価,数量,金額';
+  const body = rows.map(r => [
+    formatLedgerDateTime(r.date),
+    r.productName,
+    r.productSku,
+    r.lotNo,
+    r.supplierName,
+    r.unitPrice,
+    r.previousUnitPrice ?? '',
+    r.quantity,
+    r.amount,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportCostHistoryCsv(rows: CostHistoryRow[]) {
+  downloadCsv(csvFileName('costHistory'), costHistoryCsv(rows));
 }
 
 // ---------------------------------------------------------------------------
@@ -2004,6 +2131,8 @@ export function useInventory() {
       quantity: target.quantity,
       note: input.note?.trim() || (supplier ? `入荷予定（${supplier}）` : '入荷予定'),
       toWarehouseId: target.warehouseId,
+      unitPrice: plan.unitPrice,
+      ...(plan.supplierId ? { supplierId: plan.supplierId } : {}),
     });
 
     return {

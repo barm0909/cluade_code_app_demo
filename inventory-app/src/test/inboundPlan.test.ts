@@ -33,6 +33,7 @@ const plan = (over: Partial<InboundPlan> & { id: string }): InboundPlan => ({
   warehouseId: DEFAULT_WAREHOUSE_ID,
   lotNo: '20260101',
   supplierId: 'sup-yamada',
+  unitPrice: 0,
   note: '',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
@@ -180,11 +181,11 @@ describe('inboundPlanTotals', () => {
 
 describe('inboundPlanCsv', () => {
   it('ヘッダーと1予定1行を出力する', () => {
-    const rows = inboundPlanRows([plan({ id: '1', expectedDate: '2026-03-01', quantity: 10, receivedQuantity: 4, expiryDate: '2026-04-01', note: 'メモ' })], [product()], EMPTY_INBOUND_PLAN_FILTER, SUPPLIERS);
+    const rows = inboundPlanRows([plan({ id: '1', expectedDate: '2026-03-01', quantity: 10, receivedQuantity: 4, expiryDate: '2026-04-01', unitPrice: 110, note: 'メモ' })], [product()], EMPTY_INBOUND_PLAN_FILTER, SUPPLIERS);
     const lines = inboundPlanCsv(rows, WAREHOUSES).split('\n');
 
-    expect(lines[0]).toBe('入荷予定日,商品名,SKU,ロットNo,賞味期限,入荷先倉庫,仕入先,予定数量,入荷済,残数,状態,備考');
-    expect(lines[1]).toBe('2026-03-01,テスト商品,T-001,20260101,2026-04-01,販売倉庫,山田商店,10,4,6,一部入荷,メモ');
+    expect(lines[0]).toBe('入荷予定日,商品名,SKU,ロットNo,賞味期限,入荷先倉庫,仕入先,仕入単価,予定数量,入荷済,残数,状態,備考');
+    expect(lines[1]).toBe('2026-03-01,テスト商品,T-001,20260101,2026-04-01,販売倉庫,山田商店,110,10,4,6,一部入荷,メモ');
   });
 });
 
@@ -234,6 +235,7 @@ const INPUT: InboundPlanInput = {
   lotNo: '20260401',
   expiryDate: '2026-04-01',
   supplierId: 'sup-yamada', // DEFAULT_SUPPLIERS の山田乳業
+  unitPrice: 125,
   note: '定期便',
 };
 
@@ -316,6 +318,7 @@ describe('useInventory — 入荷 (receiveInboundPlan)', () => {
     expect(result.current.ledger[0]).toMatchObject({
       type: '入荷', productId: '1', lotNo: '20260401', quantity: 12,
       note: '入荷予定（山田乳業）', toWarehouseId: DEFAULT_WAREHOUSE_ID,
+      unitPrice: 125, supplierId: 'sup-yamada',
     });
   });
 

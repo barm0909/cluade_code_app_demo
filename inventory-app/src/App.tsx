@@ -8,6 +8,7 @@ import { DashboardView } from './DashboardView';
 import { InboundPlanView } from './InboundPlanView';
 import { LedgerView } from './LedgerView';
 import { LotTraceView } from './LotTraceView';
+import { CostHistoryView } from './CostHistoryView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
@@ -167,7 +168,7 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger' | 'trace'>('inventory');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger' | 'trace' | 'cost'>('inventory');
   // ロット追跡タブで追跡中のロット。在庫一覧の「追跡」ボタンからも指定される
   const [traceTarget, setTraceTarget] = useState<LotTraceKey | null>(null);
   const { confirm, confirmDialog } = useConfirm();
@@ -291,6 +292,7 @@ export default function App() {
         <button className={activeTab === 'stocktake' ? 'tab active' : 'tab'} onClick={() => setActiveTab('stocktake')}>棚卸</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
         <button className={activeTab === 'trace' ? 'tab active' : 'tab'} onClick={() => setActiveTab('trace')}>ロット追跡</button>
+        <button className={activeTab === 'cost' ? 'tab active' : 'tab'} onClick={() => setActiveTab('cost')}>原価履歴</button>
       </div>
 
       {activeTab === 'dashboard' ? (
@@ -317,6 +319,8 @@ export default function App() {
           target={traceTarget}
           onTargetChange={setTraceTarget}
         />
+      ) : activeTab === 'cost' ? (
+        <CostHistoryView ledger={ledger} suppliers={suppliers} />
       ) : activeTab === 'stocktake' ? (
         <StocktakeView products={products} categories={categories} warehouses={warehouses} onApply={applyStocktake} />
       ) : activeTab === 'master' ? (<>

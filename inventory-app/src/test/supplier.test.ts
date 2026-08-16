@@ -39,6 +39,7 @@ const plan = (over: Partial<InboundPlan> & { id: string }): InboundPlan => ({
   warehouseId: DEFAULT_WAREHOUSE_ID,
   lotNo: '20260101',
   supplierId: 'sup-a',
+  unitPrice: 0,
   note: '',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
@@ -283,7 +284,7 @@ describe('useInventory — 仕入先マスタ', () => {
     const input: InboundPlanInput = {
       productId: result.current.products[0].id,
       expectedDate: d(1), quantity: 5, warehouseId: DEFAULT_WAREHOUSE_ID,
-      lotNo: '20260101', supplierId: target.id, note: '',
+      lotNo: '20260101', supplierId: target.id, unitPrice: 0, note: '',
     };
     act(() => { result.current.addInboundPlan(input); });
     const created = result.current.inboundPlans.at(-1)!;
