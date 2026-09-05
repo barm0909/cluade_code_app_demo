@@ -441,7 +441,7 @@ export const CSV_EXPORTS = {
   inventory: { label: '在庫一覧', description: '商品×ロット単位の在庫一覧' },
   ledger: { label: '入出庫帳票', description: '絞り込み後の入出庫履歴' },
   stocktake: { label: '棚卸表', description: '帳簿在庫と実数カウントの一覧' },
-  reorder: { label: '要発注リスト', description: '発注点を下回っている商品' },
+  reorder: { label: '要発注リスト', description: '発注点を下回っている商品と推奨発注数' },
   inbound: { label: '入荷予定', description: '絞り込み後の入荷予定' },
   disposal: { label: '廃棄ロス', description: '期間内の商品別の廃棄実績' },
   trace: { label: 'ロット追跡', description: '選択したロットの入荷から出庫までの履歴' },
@@ -1250,18 +1250,202 @@ export function categorySummaries(products: Product[], categories: Category[]): 
   return withShare(rows);
 }
 
-/** 要発注リストの CSV。そのまま発注依頼の下書きに使える想定 */
-export function lowStockCsv(rows: LowStockRow[], categories: Category[]): string {
+// ---------------------------------------------------------------------------
+// 発注提案 (要発注リスト → 入荷予定)
+// 発注点を下回った商品を見つけるところまでは lowStockRows がやっていたが、そこから先
+// (いくつ・どこへ・いつ発注するか) は入荷予定を1件ずつ手で作るしかなかった。
+// ここでは要発注の各行に「入荷予定残」「推奨発注数」「仕入先」を足し、そのまま
+// InboundPlanInput へ変換できるようにする。発注は在庫を動かさない (動くのは
+// receiveInboundPlan のとき) ので、帳票には何も書かない。
+// ---------------------------------------------------------------------------
+
+/** 目標在庫 = 発注点の何倍まで戻すか。ダッシュボードで切り替える */
+export const REORDER_TARGET_RATIOS = [1, 1.5, 2] as const;
+export const DEFAULT_REORDER_RATIO = 2;
+
+/** 発注提案から作った入荷予定の備考。入荷予定タブでこの操作由来だと分かるようにする */
+export const REORDER_NOTE = '発注提案';
+
+/** 発注提案の1行 = 要発注リストの1行 + 発注に必要な既定値 */
+export interface ReorderSuggestion extends LowStockRow {
+  incoming: number; // 未入荷の入荷予定の残数合計 (キャンセル済みは除く)
+  projected: number; // 入荷予定を織り込んだ見込在庫 = quantity + incoming
+  projectedShortage: number; // 見込在庫でも発注点に届かない不足数
+  suggestedQuantity: number; // 推奨発注数 = max(0, 発注点 × 倍率 - 見込在庫)
+  supplierId: string; // 直近の入荷予定から引き継いだ仕入先。取引停止・削除済みなら空文字
+  supplierName: string;
+  leadTimeDays: number;
+  expectedDate: string; // 入荷予定日の既定値 = 今日 + 標準リードタイム
+  warehouseId: string; // 入荷先倉庫の既定値。直近の入荷予定の倉庫、なければ既定倉庫
+  unitPrice: number; // 仕入単価の既定値。直近の入荷予定の単価、未入力なら商品の原価
+  orderCost: number; // suggestedQuantity × unitPrice
+}
+
+export interface ReorderOptions {
+  targetRatio?: number; // 目標在庫の倍率 (既定 DEFAULT_REORDER_RATIO)
+  from?: Date; // 入荷予定日の起点 (既定は今日)。テストで固定するために外から渡せる
+}
+
+/**
+ * 要発注の各商品について「何をいくつ発注すればよいか」を組み立てる。状態は変更しない。
+ * 入荷予定の残数を差し引くので、すでに発注済みの商品は推奨発注数が 0 になり、二重発注を防ぐ。
+ * 仕入先・倉庫・仕入単価は「直近に作った入荷予定」から引き継ぐ (過去と同じ条件で頼み直すのが通常のため)。
+ */
+export function reorderSuggestions(
+  products: Product[],
+  inboundPlans: InboundPlan[],
+  suppliers: Supplier[],
+  warehouses: Warehouse[],
+  options: ReorderOptions = {},
+): ReorderSuggestion[] {
+  const { targetRatio = DEFAULT_REORDER_RATIO, from = new Date() } = options;
+
+  const incoming = new Map<string, number>();
+  const latestPlan = new Map<string, InboundPlan>();
+  for (const plan of inboundPlans) {
+    if (plan.canceledAt) continue;
+    incoming.set(plan.productId, (incoming.get(plan.productId) ?? 0) + remainingInbound(plan));
+    const current = latestPlan.get(plan.productId);
+    if (!current || plan.createdAt > current.createdAt) latestPlan.set(plan.productId, plan);
+  }
+
+  const fallbackWarehouseId = warehouses.some(w => w.id === DEFAULT_WAREHOUSE_ID)
+    ? DEFAULT_WAREHOUSE_ID
+    : (warehouses[0]?.id ?? '');
+
+  return lowStockRows(products).map(row => {
+    const plan = latestPlan.get(row.productId);
+    // 取引停止・削除済みの仕入先は引き継がない (入荷予定フォームの選択肢から消えているため)
+    const supplier = suppliers.find(s => s.id === plan?.supplierId && s.active);
+    const inbound = incoming.get(row.productId) ?? 0;
+    const projected = row.quantity + inbound;
+    const suggestedQuantity = Math.max(0, Math.ceil(row.minQuantity * targetRatio) - projected);
+    const unitPrice = plan && plan.unitPrice > 0 ? plan.unitPrice : row.costPrice;
+    return {
+      ...row,
+      incoming: inbound,
+      projected,
+      projectedShortage: Math.max(0, row.minQuantity - projected),
+      suggestedQuantity,
+      supplierId: supplier?.id ?? '',
+      supplierName: supplier?.name ?? '',
+      leadTimeDays: supplier?.leadTimeDays ?? 0,
+      expectedDate: expectedDateFromLeadTime(supplier, from),
+      warehouseId: warehouses.some(w => w.id === plan?.warehouseId) ? plan!.warehouseId : fallbackWarehouseId,
+      unitPrice,
+      orderCost: suggestedQuantity * unitPrice,
+    };
+  });
+}
+
+/** 発注提案の行に対する画面での上書き (数量と仕入先はその場で変えられる) */
+export interface ReorderOverride {
+  quantity?: number;
+  supplierId?: string;
+}
+
+/**
+ * 発注提案の1行を入荷予定の入力値へ変換する。
+ * 仕入先を変えたときは入荷予定日もその仕入先の標準リードタイムで引き直す。
+ * ロットNo・賞味期限は発注時点では決まらないので空にしておき、入荷時に入力させる
+ * (planReceipt は空のロットNo を賞味期限から採番する)。
+ */
+export function reorderPlanInput(
+  row: ReorderSuggestion,
+  suppliers: Supplier[],
+  override: ReorderOverride = {},
+  from = new Date(),
+): InboundPlanInput {
+  const supplierId = override.supplierId ?? row.supplierId;
+  const supplier = suppliers.find(s => s.id === supplierId);
+  return {
+    productId: row.productId,
+    expectedDate: supplierId === row.supplierId ? row.expectedDate : expectedDateFromLeadTime(supplier, from),
+    quantity: Math.max(0, Math.floor(override.quantity ?? row.suggestedQuantity)),
+    warehouseId: row.warehouseId,
+    lotNo: '',
+    expiryDate: '',
+    supplierId,
+    unitPrice: row.unitPrice,
+    note: REORDER_NOTE,
+  };
+}
+
+/** 発注登録する1商品。確認ダイアログの表示に要るものを平坦に持たせる */
+export interface ReorderTarget {
+  productId: string;
+  productName: string;
+  productSku: string;
+  quantity: number;
+  supplierId: string;
+  supplierName: string;
+  expectedDate: string;
+  unitPrice: number;
+  orderCost: number;
+  warehouseId: string;
+}
+
+export interface ReorderPlan {
+  targets: ReorderTarget[];
+  inputs: InboundPlanInput[]; // targets と同じ並びの入荷予定入力値 (そのまま addInboundPlans に渡せる)
+  quantity: number; // 発注数の合計
+  orderCost: number; // 発注金額の合計
+  noSupplier: number; // 仕入先が決まっていない件数 (注意喚起に使う)
+}
+
+/**
+ * 選んだ商品を発注登録したときに何がいくつ作られるかを求める。状態は一切変更しない
+ * (確認ダイアログのプレビューと実行が同じ結果を共有するための純粋関数)。
+ * 発注数が 0 の行と、提案に出ていない productId は黙って除外する。
+ */
+export function planReorder(
+  rows: ReorderSuggestion[],
+  productIds: Iterable<string>,
+  suppliers: Supplier[],
+  overrides: Record<string, ReorderOverride> = {},
+  from = new Date(),
+): ReorderPlan {
+  const wanted = new Set(productIds);
+  const plan: ReorderPlan = { targets: [], inputs: [], quantity: 0, orderCost: 0, noSupplier: 0 };
+
+  for (const row of rows) {
+    if (!wanted.has(row.productId)) continue;
+    const input = reorderPlanInput(row, suppliers, overrides[row.productId], from);
+    if (input.quantity <= 0) continue;
+    plan.targets.push({
+      productId: row.productId,
+      productName: row.productName,
+      productSku: row.productSku,
+      quantity: input.quantity,
+      supplierId: input.supplierId,
+      supplierName: supplierName(suppliers, input.supplierId),
+      expectedDate: input.expectedDate,
+      unitPrice: input.unitPrice,
+      orderCost: input.quantity * input.unitPrice,
+      warehouseId: input.warehouseId,
+    });
+    plan.inputs.push(input);
+    plan.quantity += input.quantity;
+    plan.orderCost += input.quantity * input.unitPrice;
+    if (!input.supplierId) plan.noSupplier++;
+  }
+  return plan;
+}
+
+/** 要発注リストの CSV。推奨発注数と仕入先まで入っているので、そのまま発注依頼の下書きに使える */
+export function reorderCsv(rows: ReorderSuggestion[], categories: Category[]): string {
   const catName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
-  const header = '商品名,SKU,カテゴリ,在庫数,発注点,不足数,発注見込金額';
+  const header = '商品名,SKU,カテゴリ,在庫数,発注点,入荷予定残,見込在庫,不足数,推奨発注数,仕入先,入荷予定日,発注見込金額';
   const body = rows.map(r => [
-    r.productName, r.productSku, catName(r.categoryId), r.quantity, r.minQuantity, r.shortage, r.restockCost,
+    r.productName, r.productSku, catName(r.categoryId), r.quantity, r.minQuantity,
+    r.incoming, r.projected, r.projectedShortage, r.suggestedQuantity,
+    r.supplierName, r.expectedDate, r.orderCost,
   ].map(csvCell).join(','));
   return [header, ...body].join('\n');
 }
 
-export function exportLowStockCsv(rows: LowStockRow[], categories: Category[]) {
-  downloadCsv(csvFileName('reorder'), lowStockCsv(rows, categories));
+export function exportReorderCsv(rows: ReorderSuggestion[], categories: Category[]) {
+  downloadCsv(csvFileName('reorder'), reorderCsv(rows, categories));
 }
 
 // ---------------------------------------------------------------------------
@@ -2076,6 +2260,22 @@ export function useInventory() {
     });
   }, []);
 
+  /**
+   * 入荷予定の一括登録 (発注提案からの発注登録)。1回の state 更新 / 1回の PUT にまとめる。
+   * 数量 0 の入力は予定として意味がないので落とす。作成した件数を返す。
+   */
+  const addInboundPlans = useCallback((inputs: InboundPlanInput[]): number => {
+    const valid = inputs.filter(i => i.quantity > 0);
+    if (valid.length === 0) return 0;
+    setInboundPlans(prev => {
+      const now = new Date().toISOString();
+      const created = valid.map(data => ({ ...data, id: crypto.randomUUID(), receivedQuantity: 0, createdAt: now, updatedAt: now }));
+      const next = [...prev, ...created];
+      saveInboundPlans(next); return next;
+    });
+    return valid.length;
+  }, []);
+
   // 入荷実績 (receivedQuantity) は編集対象外。キャンセル済みの予定は編集しない
   const updateInboundPlan = useCallback((id: string, data: InboundPlanInput) => {
     setInboundPlans(prev => {
@@ -2447,5 +2647,5 @@ export function useInventory() {
     saveInboundPlans(freshPlans);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier };
 }

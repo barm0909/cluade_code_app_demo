@@ -1,10 +1,12 @@
 # ダッシュボード機能
 
-在庫の全体像と「いま手を打つべきもの」（要発注・期限・廃棄ロス）を1画面にまとめたタブです。
+在庫の全体像と「いま手を打つべきもの」（発注・期限・廃棄ロス）を1画面にまとめたタブです。
 期限切れロットの一括廃棄だけは、このタブから在庫を動かせます。
+発注提案からの発注登録もこのタブで行えますが、こちらは在庫を動かさず入荷予定を作るだけです。
 
-専用のデータは持たず、既存の `products` / `categories` / `warehouses` / `ledger` を集計しているだけなので、
-DBマイグレーションや Worker API の追加は不要です（廃棄も既存の `廃棄` 区分の出庫として帳票に積むだけです）。
+専用のデータは持たず、既存の `products` / `categories` / `warehouses` / `ledger` / `inboundPlans` /
+`suppliers` を集計しているだけなので、DBマイグレーションや Worker API の追加は不要です
+（廃棄も既存の `廃棄` 区分の出庫として帳票に積むだけ、発注登録も既存の `inbound_plans` を増やすだけです）。
 
 ---
 
@@ -27,19 +29,21 @@ DBマイグレーションや Worker API の追加は不要です（廃棄も既
 
 「欠品」は「要発注」の内数です（在庫0は発注点以下でもあるため両方に数えられます）。
 
-### 2. 要発注リスト
+### 2. 発注提案
 
-在庫数が発注点以下の商品を、不足数（`発注点 − 在庫数`）の大きい順に一覧表示します。
+在庫数が発注点以下の商品を、不足数の大きい順に一覧表示します。
 発注点ちょうどの商品も不足数0で並びます（在庫0の行は赤、それ以外は薄赤で強調）。
+各行はチェックボックスで選び、**入荷予定としてまとめて登録**できます（詳細は
+[reorder-feature.md](reorder-feature.md)）。
 
 見出し右の「CSVエクスポート（要発注リスト）」で `要発注リスト_YYYY-MM-DD.csv` を出力できます。
 ボタンの表示名・ツールチップ・ファイル名は `useInventory.ts` の `CSV_EXPORTS` /
 `csvFileName` / `csvExportLabel` / `csvExportHint` が一元管理しています。
 
 ```
-商品名,SKU,カテゴリ,在庫数,発注点,不足数,発注見込金額
-値札ラベル(赤),LB-R01,ラベル,0,100,100,200
-食パン,BR-001,パン,3,5,2,180
+商品名,SKU,カテゴリ,在庫数,発注点,入荷予定残,見込在庫,不足数,推奨発注数,仕入先,入荷予定日,発注見込金額
+値札ラベル(赤),LB-R01,ラベル,0,100,0,0,100,200,大阪印刷,2026-09-06,1600
+食パン,BR-001,パン,3,5,12,15,0,0,朝日ベーカリー,2026-09-06,0
 ```
 
 ### 3. 期限アラート
@@ -87,11 +91,12 @@ DBマイグレーションや Worker API の追加は不要です（廃棄も既
 | 関数 | 役割 |
 |------|------|
 | `dashboardTotals(products, withinDays?)` | サマリカードの集計 |
-| `lowStockRows(products)` | 要発注リストの行（不足数の降順、同数なら商品名順） |
+| `lowStockRows(products)` | 要発注の行（不足数の降順、同数なら商品名順） |
+| `reorderSuggestions(...)` / `planReorder(...)` | 発注提案の行と発注登録のプレビュー（[reorder-feature.md](reorder-feature.md)） |
 | `expiringLotRows(products, withinDays?)` | 期限アラートの行（期限の昇順） |
 | `warehouseSummaries(products, warehouses)` | 倉庫別サマリ（構成比つき） |
 | `categorySummaries(products, categories)` | カテゴリ別サマリ（構成比つき） |
-| `lowStockCsv` / `exportLowStockCsv` | 要発注リストのCSV |
+| `reorderCsv` / `exportReorderCsv` | 要発注リストのCSV |
 | `planDisposal(products, lotIds)` | 廃棄プレビュー（数量・ロス金額・期限切れ件数） |
 | `disposalPeriodStart(period, today?)` | 集計期間の開始日（今月/今年/全期間） |
 | `disposalTransactions(ledger, from?)` | 帳票から `廃棄` だけを期間で絞る |
@@ -99,7 +104,8 @@ DBマイグレーションや Worker API の追加は不要です（廃棄も既
 | `disposalCsv` / `exportDisposalCsv` | 廃棄ロスのCSV |
 
 在庫を変更するのは `useInventory` の `disposeLots(lotIds, note?)` だけで、`App.tsx` が
-`onDispose` として `DashboardView` に渡します（`DashboardView` 自体は状態を持ちません）。
+`onDispose` として `DashboardView` に渡します。発注登録は在庫を変えない `addInboundPlans(inputs)` を
+`onCreateOrders` として渡します（`DashboardView` 自体は永続データを持ちません）。
 
 定数 `EXPIRY_SOON_DAYS`（既定しきい値7日）、`DASHBOARD_EXPIRY_OPTIONS`（`[7, 14, 30]`）、
 `DISPOSAL_PERIODS`（`['今月', '今年', '全期間']`）、`DISPOSAL_NOTE`（`'一括廃棄'`）も同ファイルに定義しています。

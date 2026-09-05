@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { InboundPlan, Product, ReceiveInput, Warehouse } from './useInventory';
-import { planReceipt, remainingInbound, mergedLotUnitPrice } from './useInventory';
+import { planReceipt, remainingInbound, mergedLotUnitPrice, generateLotNo } from './useInventory';
 import { WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
 
@@ -47,6 +47,14 @@ export function ReceiveInboundModal({ plan, product, warehouses, supplierName = 
     setLotError('');
   };
 
+  // ロットNo未定の予定 (発注提案から作られたものなど) でも入荷できるよう、賞味期限を入れたら
+  // そこからロットNoを補う。手入力したロットNoは尊重する (入荷予定フォームと同じ規則)
+  const handleExpiryChange = (val: string) => {
+    setLotNo(prev => prev === '' || prev === generateLotNo(expiryDate || undefined) ? generateLotNo(val || undefined) : prev);
+    setExpiryDate(val);
+    setLotError('');
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (qty <= 0 || qty > remaining) return;
@@ -86,7 +94,7 @@ export function ReceiveInboundModal({ plan, product, warehouses, supplierName = 
               </label>
               <label htmlFor="receive-expiry">
                 賞味期限 <span className="label-hint">（任意）</span>
-                <input id="receive-expiry" type="date" value={expiryDate} onChange={e => setExpiryDate(e.target.value)} />
+                <input id="receive-expiry" type="date" value={expiryDate} onChange={e => handleExpiryChange(e.target.value)} />
               </label>
               <label htmlFor="receive-lot-no">
                 ロットNo <span className="label-hint">（半角数字8桁）</span>

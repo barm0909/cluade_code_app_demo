@@ -3,11 +3,13 @@ import {
   categorySummaries,
   dashboardTotals,
   expiringLotRows,
-  lowStockCsv,
   lowStockRows,
+  planReorder,
+  reorderCsv,
+  reorderSuggestions,
   warehouseSummaries,
 } from '../useInventory';
-import type { Category, Product, Warehouse } from '../useInventory';
+import type { Category, InboundPlan, Product, Supplier, Warehouse } from '../useInventory';
 
 const WAREHOUSES: Warehouse[] = [
   { id: 'wh-sales', name: '販売倉庫', color: '#4caf50' },
@@ -219,23 +221,126 @@ describe('categorySummaries', () => {
 });
 
 // ────────────────────────────────────────────────────────────
-// lowStockCsv — 要発注リストの CSV
+// 発注提案 — reorderSuggestions / planReorder / reorderCsv
 // ────────────────────────────────────────────────────────────
-describe('lowStockCsv', () => {
+const SUPPLIERS: Supplier[] = [
+  { id: 'sp1', name: '山田乳業', code: 'S-001', contact: '', phone: '', email: '', address: '', leadTimeDays: 3, note: '', active: true },
+  { id: 'sp2', name: '佐藤製パン', code: 'S-002', contact: '', phone: '', email: '', address: '', leadTimeDays: 5, note: '', active: true },
+  { id: 'sp3', name: '旧ラベル社', code: 'S-003', contact: '', phone: '', email: '', address: '', leadTimeDays: 1, note: '', active: false },
+];
+
+const plan = (over: Partial<InboundPlan> = {}): InboundPlan => ({
+  id: 'ip1', productId: 'p2', expectedDate: '2026-09-10', quantity: 10, receivedQuantity: 0,
+  warehouseId: 'wh-sales', lotNo: '', expiryDate: '', supplierId: 'sp2', unitPrice: 95, note: '',
+  createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z', ...over,
+});
+
+// 入荷予定日の検証は実時刻に依存しないよう起点を固定する
+const FROM = new Date('2026-09-05T00:00:00.000Z');
+const suggest = (plans: InboundPlan[] = [], options = {}) =>
+  reorderSuggestions(PRODUCTS, plans, SUPPLIERS, WAREHOUSES, { from: FROM, ...options });
+const rowOf = (rows: ReturnType<typeof suggest>, productId: string) => rows.find(r => r.productId === productId)!;
+
+describe('reorderSuggestions', () => {
+  it('要発注の行に推奨発注数を付ける (目標在庫 = 発注点 × 倍率)', () => {
+    const bread = rowOf(suggest(), 'p2'); // 在庫3 / 発注点5
+    expect(bread.suggestedQuantity).toBe(7); // 5×2 - 3
+    expect(bread.orderCost).toBe(7 * 90); // 過去の予定がないので商品の原価を使う
+    expect(rowOf(suggest([], { targetRatio: 1 }), 'p2').suggestedQuantity).toBe(2);
+  });
+
+  it('発注点に満たない在庫の商品だけを対象にする', () => {
+    expect(suggest().map(r => r.productId)).toEqual(['p3', 'p2']); // 牛乳(在庫14/発注点5)は対象外
+  });
+
+  it('未入荷の入荷予定の残数を差し引く', () => {
+    const bread = rowOf(suggest([plan({ quantity: 10, receivedQuantity: 4 })]), 'p2');
+    expect(bread.incoming).toBe(6);
+    expect(bread.projected).toBe(9); // 在庫3 + 残6
+    expect(bread.projectedShortage).toBe(0); // 発注点5 には届いている
+    expect(bread.suggestedQuantity).toBe(1); // 目標10 まではあと1
+  });
+
+  it('キャンセル済みの入荷予定は残数に数えない', () => {
+    expect(rowOf(suggest([plan({ canceledAt: '2026-08-02T00:00:00.000Z' })]), 'p2').incoming).toBe(0);
+  });
+
+  it('直近の入荷予定から仕入先・倉庫・仕入単価を引き継ぐ', () => {
+    const rows = suggest([
+      plan({ id: 'old', supplierId: 'sp1', unitPrice: 80, warehouseId: 'wh-hold', createdAt: '2026-07-01T00:00:00.000Z', receivedQuantity: 10 }),
+      plan({ id: 'new', supplierId: 'sp2', unitPrice: 95, warehouseId: 'wh-sales', createdAt: '2026-08-01T00:00:00.000Z', receivedQuantity: 10 }),
+    ]);
+    const bread = rowOf(rows, 'p2');
+    expect(bread.supplierId).toBe('sp2');
+    expect(bread.supplierName).toBe('佐藤製パン');
+    expect(bread.warehouseId).toBe('wh-sales');
+    expect(bread.unitPrice).toBe(95);
+    expect(bread.expectedDate).toBe('2026-09-10'); // 起点 9/5 + リードタイム5日
+  });
+
+  it('仕入単価が未入力(0)の予定からは商品の原価を使う', () => {
+    expect(rowOf(suggest([plan({ unitPrice: 0, receivedQuantity: 10 })]), 'p2').unitPrice).toBe(90);
+  });
+
+  it('取引停止・削除済みの仕入先は引き継がない', () => {
+    const rows = suggest([plan({ supplierId: 'sp3', receivedQuantity: 10 }), plan({ id: 'ip2', supplierId: 'gone', productId: 'p3', receivedQuantity: 10 })]);
+    expect(rowOf(rows, 'p2').supplierId).toBe('');
+    expect(rowOf(rows, 'p3').supplierId).toBe('');
+    expect(rowOf(rows, 'p2').expectedDate).toBe('2026-09-05'); // リードタイム不明なので当日
+  });
+
+  it('過去の入荷予定がない商品は既定倉庫を入荷先にする', () => {
+    expect(rowOf(suggest(), 'p3').warehouseId).toBe('wh-sales');
+  });
+});
+
+describe('planReorder', () => {
+  it('選んだ商品だけを入荷予定の入力値に変換する', () => {
+    const rows = suggest();
+    const result = planReorder(rows, ['p2'], SUPPLIERS, {}, FROM);
+    expect(result.targets).toHaveLength(1);
+    expect(result.quantity).toBe(7);
+    expect(result.orderCost).toBe(630);
+    expect(result.noSupplier).toBe(1); // 過去の予定がないので仕入先未設定
+    expect(result.inputs[0]).toEqual({
+      productId: 'p2', expectedDate: '2026-09-05', quantity: 7, warehouseId: 'wh-sales',
+      lotNo: '', expiryDate: '', supplierId: '', unitPrice: 90, note: '発注提案',
+    });
+  });
+
+  it('数量の上書きを反映し、0 になった行は作らない', () => {
+    const rows = suggest();
+    const result = planReorder(rows, ['p2', 'p3'], SUPPLIERS, { p2: { quantity: 20 }, p3: { quantity: 0 } }, FROM);
+    expect(result.targets.map(t => t.productId)).toEqual(['p2']);
+    expect(result.quantity).toBe(20);
+  });
+
+  it('仕入先を上書きすると入荷予定日もその仕入先のリードタイムで引き直す', () => {
+    const result = planReorder(suggest(), ['p2'], SUPPLIERS, { p2: { supplierId: 'sp1' } }, FROM);
+    expect(result.inputs[0]).toMatchObject({ supplierId: 'sp1', expectedDate: '2026-09-08' });
+    expect(result.targets[0].supplierName).toBe('山田乳業');
+    expect(result.noSupplier).toBe(0);
+  });
+
+  it('提案に出ていない商品は黙って無視する', () => {
+    expect(planReorder(suggest(), ['p1', 'nope'], SUPPLIERS, {}, FROM).targets).toHaveLength(0);
+  });
+});
+
+describe('reorderCsv', () => {
   it('ヘッダーと各行を出力し、カテゴリ名を解決する', () => {
-    const csv = lowStockCsv(lowStockRows(PRODUCTS), CATEGORIES);
-    const lines = csv.split('\n');
-    expect(lines[0]).toBe('商品名,SKU,カテゴリ,在庫数,発注点,不足数,発注見込金額');
-    expect(lines[1]).toBe('値札ラベル,LB-R01,ラベル,0,100,100,200');
-    expect(lines[2]).toBe('食パン,BR-001,パン,3,5,2,180');
+    const lines = reorderCsv(suggest([plan({ quantity: 10, receivedQuantity: 4 })]), CATEGORIES).split('\n');
+    expect(lines[0]).toBe('商品名,SKU,カテゴリ,在庫数,発注点,入荷予定残,見込在庫,不足数,推奨発注数,仕入先,入荷予定日,発注見込金額');
+    expect(lines[1]).toBe('値札ラベル,LB-R01,ラベル,0,100,0,0,100,200,,2026-09-05,400');
+    expect(lines[2]).toBe('食パン,BR-001,パン,3,5,6,9,0,1,佐藤製パン,2026-09-10,95');
   });
 
   it('カンマを含む商品名は引用符で囲む', () => {
-    const rows = lowStockRows([{ ...PRODUCTS[1], name: '食パン,6枚切' }]);
-    expect(lowStockCsv(rows, CATEGORIES).split('\n')[1]).toContain('"食パン,6枚切"');
+    const rows = reorderSuggestions([{ ...PRODUCTS[1], name: '食パン,6枚切' }], [], SUPPLIERS, WAREHOUSES, { from: FROM });
+    expect(reorderCsv(rows, CATEGORIES).split('\n')[1]).toContain('"食パン,6枚切"');
   });
 
   it('該当商品がなければヘッダーだけを返す', () => {
-    expect(lowStockCsv([], CATEGORIES).split('\n')).toHaveLength(1);
+    expect(reorderCsv([], CATEGORIES).split('\n')).toHaveLength(1);
   });
 });
