@@ -115,6 +115,36 @@ describe('InboundPlanView — 入荷', () => {
     }));
   });
 
+  it('ロットNo未定の予定は、賞味期限を入れるとロットNoが補われる', async () => {
+    const user = userEvent.setup();
+    // 発注提案から作られた予定はロットNo・賞味期限が空
+    const ordered: InboundPlan = { ...PLANS[0], id: 'ip4', lotNo: '', expiryDate: undefined };
+    render(<InboundPlanView {...defaultProps} inboundPlans={[ordered]} />);
+
+    await user.click(within(planRows()[0]).getByText('入荷'));
+    expect(screen.getByLabelText(/ロットNo/)).toHaveValue('');
+    expect(screen.getByText('入荷する')).toBeDisabled();
+
+    await user.type(screen.getByLabelText(/賞味期限/), '2026-12-31');
+    expect(screen.getByLabelText(/ロットNo/)).toHaveValue('20261231');
+
+    await user.click(screen.getByText('入荷する'));
+    expect(defaultProps.onReceive).toHaveBeenCalledWith('ip4', expect.objectContaining({
+      lotNo: '20261231', expiryDate: '2026-12-31',
+    }));
+  });
+
+  it('手入力したロットNoは賞味期限を変えても上書きされない', async () => {
+    const user = userEvent.setup();
+    render(<InboundPlanView {...defaultProps} inboundPlans={[{ ...PLANS[0], lotNo: '', expiryDate: undefined }]} />);
+
+    await user.click(within(planRows()[0]).getByText('入荷'));
+    await user.type(screen.getByLabelText(/ロットNo/), '99999999');
+    await user.type(screen.getByLabelText(/賞味期限/), '2026-12-31');
+
+    expect(screen.getByLabelText(/ロットNo/)).toHaveValue('99999999');
+  });
+
   it('残数のない予定は入荷ボタンが押せない', () => {
     const done: InboundPlan = { ...PLANS[0], id: 'ip3', receivedQuantity: 24 };
     render(<InboundPlanView {...defaultProps} inboundPlans={[done]} />);
@@ -142,6 +172,19 @@ describe('InboundPlanView — 作成・取消', () => {
     expect(defaultProps.onAdd).toHaveBeenCalledWith(expect.objectContaining({
       productId: 'p2', quantity: 30, lotNo: '20261231',
     }));
+  });
+
+  it('ロットNoが未定 (空欄) のままでも保存できる', async () => {
+    const user = userEvent.setup();
+    render(<InboundPlanView {...defaultProps} />);
+
+    await user.click(screen.getByText('+ 入荷予定を追加'));
+    const qty = screen.getByLabelText('予定数量');
+    await user.clear(qty);
+    await user.type(qty, '10');
+    await user.click(screen.getByText('保存'));
+
+    expect(defaultProps.onAdd).toHaveBeenCalledWith(expect.objectContaining({ lotNo: '', quantity: 10 }));
   });
 
   it('仕入先はマスタから選べ、選ぶと予定日が標準リードタイムに合わせて動く', async () => {

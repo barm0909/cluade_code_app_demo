@@ -12,6 +12,8 @@ interface Props {
   onClose: () => void;
 }
 
+// 発注時点ではロットNoが決まっていないことがあるので、空欄 (未定) も許す。
+// 入力があるときだけ 8桁を要求し、空欄のまま入荷すると planReceipt が賞味期限から採番する。
 const LOT_PATTERN = /^\d{8}$/;
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -91,7 +93,7 @@ export function InboundPlanModal({ plan, products, warehouses, suppliers, onSave
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.productId || form.quantity <= 0) return;
-    if (!LOT_PATTERN.test(form.lotNo)) {
+    if (form.lotNo !== '' && !LOT_PATTERN.test(form.lotNo)) {
       setLotError('半角数字8桁で入力してください');
       return;
     }
@@ -146,10 +148,9 @@ export function InboundPlanModal({ plan, products, warehouses, suppliers, onSave
                 <input id="ip-expiry" type="date" value={form.expiryDate} onChange={e => handleExpiryChange(e.target.value)} />
               </label>
               <label htmlFor="ip-lot-no">
-                ロットNo <span className="label-hint">（半角数字8桁）</span>
+                ロットNo <span className="label-hint">（半角数字8桁 — 未定なら空欄）</span>
                 <input
                   id="ip-lot-no"
-                  required
                   value={form.lotNo}
                   onChange={e => handleLotNoChange(e.target.value)}
                   placeholder="例: 20261231"

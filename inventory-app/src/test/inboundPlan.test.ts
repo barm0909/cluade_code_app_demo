@@ -313,6 +313,35 @@ describe('useInventory — 入荷予定の作成・編集', () => {
     expect(result.current.inboundPlans.find(p => p.id === target.id)).toBeUndefined();
   });
 
+  it('addInboundPlans は複数の予定をまとめて追加し、数量0の入力は落とす', () => {
+    const { result } = renderHook(() => useInventory());
+    const before = result.current.inboundPlans.length;
+    let created = 0;
+
+    act(() => {
+      created = result.current.addInboundPlans([
+        { ...INPUT, quantity: 5 },
+        { ...INPUT, productId: '2', quantity: 8 },
+        { ...INPUT, productId: '3', quantity: 0 },
+      ]);
+    });
+
+    expect(created).toBe(2);
+    expect(result.current.inboundPlans.length).toBe(before + 2);
+    expect(result.current.inboundPlans.slice(-2).map(p => p.quantity)).toEqual([5, 8]);
+    expect(result.current.inboundPlans.at(-1)).toMatchObject({ receivedQuantity: 0 });
+  });
+
+  it('addInboundPlans は空配列・全て数量0なら何もしない', () => {
+    const { result } = renderHook(() => useInventory());
+    const before = result.current.inboundPlans.length;
+
+    act(() => { expect(result.current.addInboundPlans([])).toBe(0); });
+    act(() => { expect(result.current.addInboundPlans([{ ...INPUT, quantity: 0 }])).toBe(0); });
+
+    expect(result.current.inboundPlans.length).toBe(before);
+  });
+
   it('商品を削除するとその商品の入荷予定も消える', () => {
     const { result } = renderHook(() => useInventory());
     act(() => { result.current.addInboundPlan(INPUT); });
@@ -490,6 +519,21 @@ describe('useInventory — 入荷予定の永続化', () => {
     await waitFor(() => expect(server.inboundPlans[0].receivedQuantity).toBe(4));
     expect(server.products[0].lots.find(l => l.lotNo === '20260401')?.quantity).toBe(4);
     expect(server.ledger[0]).toMatchObject({ type: '入荷', quantity: 4 });
+  });
+
+  it('addInboundPlans の一括登録も /api/inbound-plans に保存される', async () => {
+    const server = stubApi({
+      products: [product([], { id: 'p1' })],
+      warehouses: WAREHOUSES,
+      categories: [{ id: 'cat-dairy', name: '乳製品' }],
+    });
+    const { result } = renderHook(() => useInventory());
+    await waitFor(() => expect(result.current.products).toHaveLength(1));
+
+    act(() => { result.current.addInboundPlans([{ ...INPUT, productId: 'p1', quantity: 3 }, { ...INPUT, productId: 'p1', quantity: 4 }]); });
+
+    await waitFor(() => expect(server.inboundPlans).toHaveLength(2));
+    expect(server.inboundPlans.map(p => p.quantity)).toEqual([3, 4]);
   });
 
   it('入荷予定を返さない旧サーバーからのレスポンスでも空で動作する', async () => {

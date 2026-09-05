@@ -421,6 +421,14 @@ tr:hover td { background: #fafbff; }
 .dashboard-actions .btn-danger { padding: 7px 14px; font-size: 0.85rem; }
 .dashboard-actions .btn-danger:disabled { background: #ccc; cursor: not-allowed; }
 .dashboard-actions .btn-ghost-light:disabled { opacity: 0.4; cursor: not-allowed; }
+.dashboard-actions .btn-primary { padding: 7px 14px; font-size: 0.85rem; }
+.dashboard-actions .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
+/* 発注提案の行内編集。表の行が縦に伸びないよう入力欄は小さめに揃える */
+.cell-sub { color: #999; font-size: 0.78rem; margin-top: 2px; }
+.cell-input-qty { width: 76px; padding: 5px 8px; text-align: right; font-size: 0.85rem; }
+.cell-input-select { max-width: 150px; padding: 5px 8px; font-size: 0.85rem; }
+/* 発注済み (入荷予定に残っている) 数量。要発注でも二重発注しなくていいことを示す */
+.badge-ordered { background: #e8f0fe; color: #3b5bdb; }
 /* 廃棄するロットの選択列。行の他の中身と幅を取り合わないよう固定幅にする */
 .check-cell { width: 36px; text-align: center; }
 .check-cell input { cursor: pointer; }

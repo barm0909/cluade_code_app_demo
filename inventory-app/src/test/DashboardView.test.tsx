@@ -3,7 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DashboardView } from '../DashboardView';
 import { csvExportLabel, planDisposal } from '../useInventory';
-import type { Category, Product, StockTransaction, Warehouse } from '../useInventory';
+import type { Category, InboundPlan, Product, StockTransaction, Supplier, Warehouse } from '../useInventory';
 
 const WAREHOUSES: Warehouse[] = [
   { id: 'wh-sales', name: '販売倉庫', color: '#4caf50' },
@@ -39,6 +39,17 @@ const PRODUCTS: Product[] = [
   },
 ];
 
+const SUPPLIERS: Supplier[] = [
+  { id: 'sp1', name: '山田乳業', code: 'S-001', contact: '', phone: '', email: '', address: '', leadTimeDays: 3, note: '', active: true },
+  { id: 'sp2', name: '佐藤製パン', code: 'S-002', contact: '', phone: '', email: '', address: '', leadTimeDays: 5, note: '', active: true },
+];
+
+const plan = (over: Partial<InboundPlan> = {}): InboundPlan => ({
+  id: 'ip1', productId: 'p2', expectedDate: d(3), quantity: 10, receivedQuantity: 0,
+  warehouseId: 'wh-sales', lotNo: '', expiryDate: '', supplierId: 'sp2', unitPrice: 95, note: '',
+  createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z', ...over,
+});
+
 const sectionTable = (title: string | RegExp) => {
   const section = screen.getByRole('heading', { name: title }).closest('section')!;
   return within(section as HTMLElement).getByRole('table');
@@ -46,10 +57,14 @@ const sectionTable = (title: string | RegExp) => {
 
 const bodyRows = (table: HTMLElement) => within(table).getAllByRole('row').slice(1);
 
-// 廃棄 (onDispose) は App 側のミューテータなので、ここでは呼ばれた lotIds だけを見る
+// 廃棄 (onDispose) / 発注登録 (onCreateOrders) は App 側のミューテータなので、
+// ここでは呼ばれた引数だけを見る
 const renderDashboard = (overrides: Partial<React.ComponentProps<typeof DashboardView>> = {}) => {
   const onDispose = vi.fn<React.ComponentProps<typeof DashboardView>['onDispose']>(
     lotIds => planDisposal(overrides.products ?? PRODUCTS, lotIds),
+  );
+  const onCreateOrders = vi.fn<React.ComponentProps<typeof DashboardView>['onCreateOrders']>(
+    inputs => inputs.length,
   );
   render(
     <DashboardView
@@ -57,11 +72,14 @@ const renderDashboard = (overrides: Partial<React.ComponentProps<typeof Dashboar
       categories={CATEGORIES}
       warehouses={WAREHOUSES}
       ledger={[]}
+      suppliers={SUPPLIERS}
+      inboundPlans={[]}
       onDispose={onDispose}
+      onCreateOrders={onCreateOrders}
       {...overrides}
     />,
   );
-  return { onDispose };
+  return { onDispose, onCreateOrders };
 };
 
 describe('DashboardView', () => {
@@ -78,13 +96,15 @@ describe('DashboardView', () => {
     expect(screen.getByText('2商品 / 3ロット')).toBeInTheDocument();
   });
 
-  it('要発注リストに発注点以下の商品と発注見込金額を出す', () => {
+  it('発注提案に発注点以下の商品と推奨発注数を出す', () => {
     renderDashboard();
-    const rows = bodyRows(sectionTable(/要発注リスト/));
+    const rows = bodyRows(sectionTable(/発注提案/));
     expect(rows).toHaveLength(1);
     expect(within(rows[0]).getByText('食パン')).toBeInTheDocument();
     expect(within(rows[0]).getByText('パン')).toBeInTheDocument();
-    expect(screen.getByText('発注見込金額 ¥180')).toBeInTheDocument();
+    // 発注点5の2倍 = 10 まで戻す → 在庫3 なので 7個・原価90 で ¥630
+    expect(within(rows[0]).getByLabelText('食パンの発注数')).toHaveValue(7);
+    expect(screen.getByText('発注見込金額 ¥630')).toBeInTheDocument();
   });
 
   it('発注点を下回る商品がなければ案内文を出し、CSVボタンを無効にする', () => {
@@ -92,6 +112,80 @@ describe('DashboardView', () => {
     renderDashboard({ products: enough });
     expect(screen.getByText(/発注点を下回っている商品はありません/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: csvExportLabel('reorder') })).toBeDisabled();
+  });
+
+  it('目標在庫の倍率を変えると推奨発注数が変わる', async () => {
+    const user = userEvent.setup();
+    renderDashboard();
+
+    await user.selectOptions(screen.getByLabelText(/目標在庫/), '1');
+    expect(screen.getByLabelText('食パンの発注数')).toHaveValue(2); // 発注点5 - 在庫3
+  });
+
+  it('入荷予定の残数を差し引き、発注済みの商品は推奨発注数が0になる', () => {
+    renderDashboard({ inboundPlans: [plan({ quantity: 10, receivedQuantity: 0 })] });
+    const row = bodyRows(sectionTable(/発注提案/))[0];
+    expect(within(row).getByText('発注済 10')).toBeInTheDocument();
+    expect(within(row).getByLabelText('食パンの発注数')).toHaveValue(0);
+    expect(screen.getByRole('button', { name: /発注が要る商品を選択（0件）/ })).toBeDisabled();
+  });
+
+  it('キャンセル済みの入荷予定は残数に数えない', () => {
+    renderDashboard({ inboundPlans: [plan({ canceledAt: '2026-08-02T00:00:00.000Z' })] });
+    expect(within(bodyRows(sectionTable(/発注提案/))[0]).getByLabelText('食パンの発注数')).toHaveValue(7);
+  });
+
+  it('選択して発注登録すると、入荷予定の入力値が onCreateOrders に渡る', async () => {
+    const user = userEvent.setup();
+    const { onCreateOrders } = renderDashboard({ inboundPlans: [plan({ quantity: 10, receivedQuantity: 10 })] });
+
+    // 過去の入荷予定から仕入先・仕入単価を引き継ぐ (入荷済みなので残数は 0)
+    expect(screen.getByLabelText('食パンの仕入先')).toHaveValue('sp2');
+
+    await user.click(screen.getByRole('button', { name: /発注が要る商品を選択（1件）/ }));
+    await user.click(screen.getByRole('button', { name: /選択した商品を発注登録（1件）/ }));
+    expect(screen.getByText(/1商品（合計7個・¥665）の入荷予定を作成します/)).toBeInTheDocument(); // 7 × 95
+
+    await user.click(screen.getByRole('button', { name: '発注登録する' }));
+    expect(onCreateOrders).toHaveBeenCalledTimes(1);
+    expect(onCreateOrders.mock.calls[0][0]).toEqual([
+      expect.objectContaining({ productId: 'p2', quantity: 7, supplierId: 'sp2', unitPrice: 95, warehouseId: 'wh-sales', note: '発注提案' }),
+    ]);
+    expect(await screen.findByText(/1件の入荷予定を作成しました/)).toBeInTheDocument();
+  });
+
+  it('発注数を書き換えるとその行が選択され、書き換えた数量で登録される', async () => {
+    const user = userEvent.setup();
+    const { onCreateOrders } = renderDashboard();
+
+    const qty = screen.getByLabelText('食パンの発注数');
+    await user.clear(qty);
+    await user.type(qty, '12');
+    expect(screen.getByLabelText('食パンを発注する')).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: /選択した商品を発注登録（1件）/ }));
+    await user.click(screen.getByRole('button', { name: '発注登録する' }));
+    expect(onCreateOrders.mock.calls[0][0][0]).toMatchObject({ quantity: 12 });
+  });
+
+  it('仕入先を選び直すと入荷予定日がその仕入先のリードタイムで引き直される', async () => {
+    const user = userEvent.setup();
+    const { onCreateOrders } = renderDashboard();
+
+    await user.selectOptions(screen.getByLabelText('食パンの仕入先'), 'sp1'); // リードタイム3日
+    await user.click(screen.getByRole('button', { name: /選択した商品を発注登録（1件）/ }));
+    await user.click(screen.getByRole('button', { name: '発注登録する' }));
+    expect(onCreateOrders.mock.calls[0][0][0]).toMatchObject({ supplierId: 'sp1', expectedDate: d(3) });
+  });
+
+  it('発注登録をキャンセルすると何も作られない', async () => {
+    const user = userEvent.setup();
+    const { onCreateOrders } = renderDashboard();
+
+    await user.click(screen.getByLabelText('食パンを発注する'));
+    await user.click(screen.getByRole('button', { name: /選択した商品を発注登録（1件）/ }));
+    await user.click(screen.getByRole('button', { name: 'キャンセル' }));
+    expect(onCreateOrders).not.toHaveBeenCalled();
   });
 
   it('期限アラートは既定で7日以内、表示範囲を広げると対象が増える', async () => {

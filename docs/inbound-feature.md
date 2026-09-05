@@ -22,7 +22,7 @@ interface InboundPlan {
   quantity: number;          // 予定数量
   receivedQuantity: number;  // 入荷済数量 (分割入荷の累計)
   warehouseId: string;       // 入荷先倉庫
-  lotNo: string;             // 予定ロットNo (入荷時の既定値)
+  lotNo: string;             // 予定ロットNo (入荷時の既定値)。発注時点で未定なら空文字
   expiryDate?: string;       // 予定賞味期限
   supplierId: string;        // 仕入先マスタの id ('' なら未設定)
   note: string;
@@ -105,6 +105,7 @@ interface InboundPlan {
 | `inboundPlanCsv(rows, warehouses)` / `exportInboundPlanCsv` | CSV（`CSV_EXPORTS.inbound`、`入荷予定_YYYY-MM-DD.csv`） |
 | `planReceipt(plan, product, input)` | 入荷でどのロットがどう増えるかを返す。状態は変更しない |
 | `addInboundPlan` / `updateInboundPlan` / `cancelInboundPlan` / `deleteInboundPlan` | 予定の CRUD。キャンセル済みは編集不可、`receivedQuantity` は編集対象外 |
+| `addInboundPlans(inputs)` | 予定の一括登録（ダッシュボードの発注提案から）。1回の state 更新 / 1回の PUT にまとめ、数量0の入力は落とす。[reorder-feature.md](reorder-feature.md) 参照 |
 | `receiveInboundPlan(id, input)` | 入荷。ロット反映・予定更新・帳票記録を行い `ReceiptResult` を返す（入荷できなければ `null`） |
 
 その他の連動:
