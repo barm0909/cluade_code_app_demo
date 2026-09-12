@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { InboundPlan, InboundPlanInput, Product, Supplier, SupplierInput, Warehouse } from './useInventory';
-import { csvExportHint, csvExportLabel, exportSupplierCsv, purchaseOrderRows, purchaseOrderTotals, supplierRows } from './useInventory';
+import { csvExportHint, csvExportLabel, exportSupplierCsv, purchaseOrderRows, supplierRows } from './useInventory';
 import { SupplierModal } from './SupplierModal';
 import { PurchaseOrderModal } from './PurchaseOrderModal';
 import { useConfirm } from './useConfirm';
@@ -41,7 +41,6 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, warehous
     () => poSupplier ? purchaseOrderRows(inboundPlans, products, poSupplier.id) : [],
     [inboundPlans, products, poSupplier],
   );
-  const poTotals = useMemo(() => purchaseOrderTotals(poRows), [poRows]);
 
   return (
     <section className="supplier-master">
@@ -165,7 +164,6 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, warehous
         <PurchaseOrderModal
           supplier={poSupplier}
           rows={poRows}
-          totals={poTotals}
           products={products}
           warehouses={warehouses}
           onAddPlan={onAddInboundPlan}

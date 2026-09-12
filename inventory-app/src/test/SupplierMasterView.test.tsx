@@ -260,3 +260,54 @@ describe('SupplierMasterView — 発注書', () => {
     expect(screen.getAllByText('¥500')).toHaveLength(2);
   });
 });
+
+describe('SupplierMasterView — 発注書のチェックボックス選択', () => {
+  const PLAN2: InboundPlan = {
+    id: 'ip2', productId: 'p1', expectedDate: d(3), quantity: 5, receivedQuantity: 0,
+    warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: '', supplierId: 'sup-yamada', unitPrice: 100, note: '',
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('デフォルトは全行選択済みで、合計は全行分になる', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[...PLANS, PLAN2]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書')); // 山田乳業
+
+    // 残20 (単価120→¥2,400) + 予定5 (単価100→¥500) = 数量25・金額¥2,900
+    expect(screen.getByRole('checkbox', { name: 'すべて選択' })).toBeChecked();
+    expect(screen.getByText('25')).toBeInTheDocument();
+    expect(screen.getByText('¥2,900')).toBeInTheDocument();
+  });
+
+  it('行のチェックを外すとその行が合計から除かれ、印刷ボタンはそのまま有効', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[...PLANS, PLAN2]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書'));
+    await user.click(screen.getByRole('checkbox', { name: new RegExp(d(3)) })); // 2行目 (予定5) を除外
+
+    // 合計は1行目分だけになり、1行目自身の表示 (20 / ¥2,400) と合わせて2箇所ずつになる
+    expect(screen.getAllByText('20')).toHaveLength(2);
+    expect(screen.getAllByText('¥2,400')).toHaveLength(2);
+    expect(screen.getByRole('checkbox', { name: 'すべて選択' })).not.toBeChecked();
+    expect(screen.getByText('印刷')).toBeEnabled();
+  });
+
+  it('全部チェックを外すと印刷ボタンが無効になり、「すべて選択」で全部戻る', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[...PLANS, PLAN2]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書'));
+    await user.click(screen.getByRole('checkbox', { name: new RegExp(d(-1)) }));
+    await user.click(screen.getByRole('checkbox', { name: new RegExp(d(3)) }));
+
+    expect(screen.getByText('印刷')).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox', { name: 'すべて選択' }));
+
+    expect(screen.getByText('印刷')).toBeEnabled();
+    expect(screen.getByText('25')).toBeInTheDocument();
+    expect(screen.getByText('¥2,900')).toBeInTheDocument();
+  });
+});

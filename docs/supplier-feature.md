@@ -113,14 +113,33 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
 残して他を隠す `@media print`（`App.css`）と `window.print()` で実現しています。
 
 - 明細は純粋関数 `purchaseOrderRows(inboundPlans, products, supplierId)` が組みます。
-  対象はその仕入先の**未入荷・一部入荷で残数がある予定**（キャンセル済み・入荷済みは除く）で、
-  入荷予定日の早い順。数量は `remainingInbound(plan)`（＝まだ発注として残っている分）です
-- `purchaseOrderTotals(rows)` が件数・数量・金額の合計を出します
+  対象はその仕入先の**未入荷・一部入荷で残数がある予定**（キャンセル済み・入荷済みは除く）**全部**で、
+  入荷予定日の早い順。数量は `remainingInbound(plan)`（＝まだ発注として残っている分）です。
+  「前回すでに発注書に載せたかどうか」は見ていないので、残数が残っている限り毎回全部載ります
+  （下の「明細の選択」参照）
 - 宛先（仕入先名・住所・連絡先）は仕入先マスタからそのまま表示します
 - 発注元（自社）の名前・住所・電話・担当者は在庫データではないため DB には保存せず、
   入力するとブラウザの `localStorage`（キー `po-sender-info`）にその場で保存し、次回開いたときに復元します。
   端末ごとの入力なので、別のPC・別のブラウザでは空欄から入力し直しになります
 - 発注日は当日を初期値にした編集可能な日付欄です
+
+### 明細の選択（チェックボックス）
+
+`purchaseOrderRows` はその仕入先の未入荷・一部入荷の予定を無条件に全部返すため、以前に発注書へ
+載せた分も次に開いたときにまた載ってしまいます。そこで各行にチェックボックスを付け、**今回印刷する
+明細だけを選べる**ようにしています。
+
+- 選択状態はモーダル内のローカル state（`excludedIds`：チェックを**外した** `plan.id` の集合）で持ちます。
+  空 = 全部選択、というのが既定なので、開いた直後や新しい行が増えたとき（後述の「明細を追加」を含む）は
+  何もしなくても全部チェック済みになります
+- チェックを外した行は画面上は薄い色で残りますが（一覧から消えないので、あとで再度チェックできます）、
+  `<tr>` に `no-print` を付けて印刷対象からは丸ごと除外します。チェックボックスの列自体は
+  ヘッダー・明細行・合計行のすべてで無条件に `no-print`（画面にだけ出す）なので、印刷時に列がずれることはありません
+  （どの行も同じ列数だけ消えるため）
+- `purchaseOrderTotals(rows)`（合計欄の件数・数量・金額）と「印刷」ボタンの活性/非活性は、
+  **チェックが入っている行だけ**（`purchaseOrderRows` の戻り値をローカルにフィルタしたもの）から計算します。
+  1件もチェックしていない状態では「印刷」ボタンが押せません
+- ヘッダーの「すべて選択」チェックボックスで一括切替できます
 
 ### 明細を追加（＝入荷予定の作成）
 
@@ -129,7 +148,7 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
 ロットNo・賞味期限は発注時点では未定なので空のまま作る — 発注提案（[reorder-feature.md](../reorder-feature.md)）が
 作る予定と同じ扱いです。
 
-`rows`/`totals` は呼び出し側（`SupplierMasterView`）が `inboundPlans` から都度組み直したものを渡しているので、
+`rows` は呼び出し側（`SupplierMasterView`）が `inboundPlans` から都度組み直したものを渡しているので、
 追加した明細は入荷予定タブと同じく即座にプレビュー・合計へ反映されます（モーダル内だけのローカルな一時データではありません）。
 すでにある未入荷・一部入荷の予定を印刷するだけの用途にもそのまま使えます。
 
@@ -147,8 +166,8 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
 | `supplierUsage(plans)` | supplierId → 予定件数・入荷待ち件数と数量・遅延件数 |
 | `supplierRows(suppliers, plans, keyword?, includeInactive?)` | 絞り込み＋集計。取引中が先、その中は名前順 |
 | `supplierCsv(rows)` / `exportSupplierCsv` | CSV（`CSV_EXPORTS.supplier`、`仕入先一覧_YYYY-MM-DD.csv`） |
-| `purchaseOrderRows(inboundPlans, products, supplierId)` | 発注書の明細（未入荷・一部入荷で残数がある予定、予定日順） |
-| `purchaseOrderTotals(rows)` | 発注書の合計（件数・数量・金額） |
+| `purchaseOrderRows(inboundPlans, products, supplierId)` | 発注書の明細候補（未入荷・一部入荷で残数がある予定**全部**、予定日順。前回印刷済みかは見ない） |
+| `purchaseOrderTotals(rows)` | 渡した行の合計（件数・数量・金額）。`PurchaseOrderModal` はチェック済みの行だけを渡す |
 | `addSupplier` / `updateSupplier` / `deleteSupplier` | マスタの CRUD。削除は入荷予定から参照されていないときだけ |
 | `migrateInboundPlans(plans, suppliers)` | 旧データ（自由入力の仕入先名）をマスタへ対応付ける |
 

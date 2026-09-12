@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { DEFAULT_WAREHOUSE_ID, expectedDateFromLeadTime } from './useInventory';
-import type { InboundPlanInput, Product, PurchaseOrderRow, PurchaseOrderTotals, Supplier, Warehouse } from './useInventory';
+import { DEFAULT_WAREHOUSE_ID, expectedDateFromLeadTime, purchaseOrderTotals } from './useInventory';
+import type { InboundPlanInput, Product, PurchaseOrderRow, Supplier, Warehouse } from './useInventory';
 import { NumberInput } from './NumberInput';
 
 interface SenderInfo {
@@ -36,7 +36,6 @@ function saveSenderInfo(info: SenderInfo) {
 interface Props {
   supplier: Supplier;
   rows: PurchaseOrderRow[];
-  totals: PurchaseOrderTotals;
   products: Product[];
   warehouses: Warehouse[];
   onAddPlan: (data: InboundPlanInput) => void;
@@ -46,9 +45,14 @@ interface Props {
 /**
  * 仕入先マスタから開く発注書の作成・プレビュー・印刷画面。
  * 「明細を追加」で新しい入荷予定をその場で登録でき（ロットNo・賞味期限は発注時点では
- * 未定なので空のまま — 発注提案 (docs/reorder-feature.md) と同じ扱い）、rows/totals は
+ * 未定なので空のまま — 発注提案 (docs/reorder-feature.md) と同じ扱い）、rows は
  * 呼び出し側 (SupplierMasterView) が inboundPlans から都度組み直すので、追加した明細は
  * 即座にプレビューに反映される。すでにある未入荷・一部入荷の予定を印刷するだけの用途にも使える。
+ *
+ * rows はその仕入先の未入荷・一部入荷の予定を**全部**含む（前回すでに発注書を出した分も
+ * 含めて毎回全部載る）ので、行ごとのチェックボックスで今回印刷する明細だけを選べるように
+ * している。選択状態は「外した id の集合」として持つ（新しく増えた行や明細追加で作った行が
+ * 自動的にチェック済みになるように — 何もしなければ全部選択されているのが基本）。
  *
  * ブラウザの印刷機能 (window.print) を使い、`.po-print-area` だけを印刷するよう
  * App.css の @media print で他の要素を隠す。PDF化はブラウザの「PDFに保存」を使う想定なので、
@@ -57,7 +61,7 @@ interface Props {
  * 他のモーダルと違い document.body に直接ポータルする。印刷時は #root ごと隠すので、
  * アプリ本体の中に留めると（非表示でも高さは残るため）印刷が無駄に複数ページに分かれてしまう。
  */
-export function PurchaseOrderModal({ supplier, rows, totals, products, warehouses, onAddPlan, onClose }: Props) {
+export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAddPlan, onClose }: Props) {
   const [sender, setSender] = useState<SenderInfo>(loadSenderInfo);
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [newLine, setNewLine] = useState(() => ({
@@ -67,6 +71,8 @@ export function PurchaseOrderModal({ supplier, rows, totals, products, warehouse
     expectedDate: expectedDateFromLeadTime(supplier),
     warehouseId: warehouses.some(w => w.id === DEFAULT_WAREHOUSE_ID) ? DEFAULT_WAREHOUSE_ID : (warehouses[0]?.id ?? ''),
   }));
+  // 印刷対象から外した行の plan.id。空 = 全部印刷対象 (デフォルト全選択)
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(() => new Set());
 
   const setSenderField = (key: keyof SenderInfo, value: string) => {
     setSender(prev => {
@@ -75,6 +81,21 @@ export function PurchaseOrderModal({ supplier, rows, totals, products, warehouse
       return next;
     });
   };
+
+  const toggleRow = (id: string) => {
+    setExcludedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const excludedInRows = rows.filter(r => excludedIds.has(r.plan.id));
+  const allSelected = rows.length > 0 && excludedInRows.length === 0;
+  const toggleAll = () => setExcludedIds(allSelected ? new Set(rows.map(r => r.plan.id)) : new Set());
+
+  const selectedRows = useMemo(() => rows.filter(r => !excludedIds.has(r.plan.id)), [rows, excludedIds]);
+  const totals = useMemo(() => purchaseOrderTotals(selectedRows), [selectedRows]);
 
   const canAddLine = newLine.productId !== '' && newLine.quantity > 0 && newLine.warehouseId !== '';
 
@@ -187,6 +208,9 @@ export function PurchaseOrderModal({ supplier, rows, totals, products, warehouse
               <table className="po-table">
                 <thead>
                   <tr>
+                    <th className="po-check-col no-print">
+                      <input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="すべて選択" />
+                    </th>
                     <th>商品名</th>
                     <th>SKU</th>
                     <th>入荷予定日</th>
@@ -196,19 +220,26 @@ export function PurchaseOrderModal({ supplier, rows, totals, products, warehouse
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(r => (
-                    <tr key={r.plan.id}>
-                      <td>{r.productName}</td>
-                      <td className="mono">{r.productSku}</td>
-                      <td className="mono">{r.plan.expectedDate}</td>
-                      <td style={{ textAlign: 'right' }}>{r.quantity.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right' }}>{r.unitPrice > 0 ? `¥${r.unitPrice.toLocaleString()}` : '—'}</td>
-                      <td style={{ textAlign: 'right' }}>{r.amount > 0 ? `¥${r.amount.toLocaleString()}` : '—'}</td>
-                    </tr>
-                  ))}
+                  {rows.map(r => {
+                    const excluded = excludedIds.has(r.plan.id);
+                    return (
+                      <tr key={r.plan.id} className={excluded ? 'po-row-excluded no-print' : ''}>
+                        <td className="po-check-col no-print">
+                          <input type="checkbox" checked={!excluded} onChange={() => toggleRow(r.plan.id)} aria-label={`${r.productName}（${r.plan.expectedDate}）を印刷対象にする`} />
+                        </td>
+                        <td>{r.productName}</td>
+                        <td className="mono">{r.productSku}</td>
+                        <td className="mono">{r.plan.expectedDate}</td>
+                        <td style={{ textAlign: 'right' }}>{r.quantity.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right' }}>{r.unitPrice > 0 ? `¥${r.unitPrice.toLocaleString()}` : '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{r.amount > 0 ? `¥${r.amount.toLocaleString()}` : '—'}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr>
+                    <td className="po-check-col no-print"></td>
                     <td colSpan={3}>合計</td>
                     <td style={{ textAlign: 'right' }}>{totals.quantity.toLocaleString()}</td>
                     <td></td>
@@ -222,7 +253,7 @@ export function PurchaseOrderModal({ supplier, rows, totals, products, warehouse
 
         <div className="modal-actions no-print">
           <button type="button" className="btn-secondary" onClick={onClose}>閉じる</button>
-          <button type="button" className="btn-primary" disabled={rows.length === 0} onClick={() => window.print()}>印刷</button>
+          <button type="button" className="btn-primary" disabled={selectedRows.length === 0} onClick={() => window.print()}>印刷</button>
         </div>
       </div>
     </div>,
