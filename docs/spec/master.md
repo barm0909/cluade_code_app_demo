@@ -169,6 +169,8 @@ JANコードは入力しながら自動整形されます（全角数字→半�
   （日付）」と表示され、チェックボックスも押せません）。同じ発注をうっかり二重に印刷してしまうのを防ぐためで、
   解除する操作はありません。「印刷ボタンを押した」時点で印刷済みとして扱うため、印刷ダイアログを
   キャンセルした場合も印刷済みになります
+- 印刷した内容は**発注履歴タブ**にも記録され、あとから同じ内容を再表示・再印刷できます。詳しくは
+  [purchase-order-history.md](purchase-order-history.md) を参照してください
 - 宛先（仕入先名・住所・連絡先）は仕入先マスタの内容がそのまま入ります
 - 発注元（自社名・住所・電話・担当者）と発注日は画面上で入力・変更できます。
   自社の情報は**この端末のブラウザに保存**され、次回発注書を開いたときも残ります
@@ -201,7 +203,8 @@ JANコードは入力しながら自動整形されます（全角数字→半�
   `src/SupplierMasterView.tsx`（＋登録・編集ダイアログ `src/SupplierModal.tsx`、発注書 `src/PurchaseOrderModal.tsx`）。
   すべて商品マスタタブに縦並び
 - 更新処理：`src/useInventory.ts` の `updateProduct` / `deleteProduct` / `add|update|deleteCategory` /
-  `add|update|deleteWarehouse` / `add|update|deleteSupplier` / `markInboundPlansPrinted`（発注書の印刷済みロック）
+  `add|update|deleteWarehouse` / `add|update|deleteSupplier` / `printPurchaseOrder`（発注書の印刷。
+  印刷済みロックと発注履歴への記録を1回で行う。詳しくは [purchase-order-history.md](purchase-order-history.md)）
 - JANコードの整形・検証：`normalizeJanCode` / `isValidJanCode`
 - 仕入先の入力チェック：`supplierValidationError`（画面と更新処理が共有）。仕様の詳細は
   [../supplier-feature.md](../supplier-feature.md)

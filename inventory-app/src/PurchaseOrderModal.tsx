@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { DEFAULT_WAREHOUSE_ID, expectedDateFromLeadTime, purchaseOrderTotals } from './useInventory';
-import type { InboundPlanInput, Product, PurchaseOrderRow, Supplier, Warehouse } from './useInventory';
+import type { InboundPlanInput, PrintPurchaseOrderInput, Product, PurchaseOrderRow, Supplier, Warehouse } from './useInventory';
 import { NumberInput } from './NumberInput';
 
 interface SenderInfo {
@@ -39,7 +39,7 @@ interface Props {
   products: Product[];
   warehouses: Warehouse[];
   onAddPlan: (data: InboundPlanInput) => void;
-  onMarkPrinted: (ids: string[]) => void;
+  onPrint: (input: PrintPurchaseOrderInput) => void;
   onClose: () => void;
 }
 
@@ -55,9 +55,10 @@ interface Props {
  * している。選択状態は「外した id の集合」として持つ（新しく増えた行や明細追加で作った行が
  * 自動的にチェック済みになるように — 何もしなければ全部選択されているのが基本）。
  *
- * 「印刷」を押すと、そのとき選択されている明細の id を `onMarkPrinted`（＝
- * `markInboundPlansPrinted`）に渡して `plan.printedAt` を記録してから `window.print()` を呼ぶ。
- * `printedAt` が付いた明細は次に発注書を開いたときチェックできない（二重発注の防止）。
+ * 「印刷」を押すと、そのとき選択されている明細・仕入先・発注元情報を `onPrint`（＝
+ * `printPurchaseOrder`）に渡してから `window.print()` を呼ぶ。呼び出し側は
+ * (1) 対象の `plan.printedAt` を記録して次回チェックできなくし（二重発注の防止）、
+ * (2) 印刷内容のスナップショットを発注履歴 (`purchaseOrderPrints`) に残す。
  * 実際に印刷ダイアログで印刷したか・キャンセルしたかまでは検知できないので、
  * 「印刷ボタンを押した = 発注書として出した」という簡略化した扱いにしている。
  *
@@ -68,7 +69,7 @@ interface Props {
  * 他のモーダルと違い document.body に直接ポータルする。印刷時は #root ごと隠すので、
  * アプリ本体の中に留めると（非表示でも高さは残るため）印刷が無駄に複数ページに分かれてしまう。
  */
-export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAddPlan, onMarkPrinted, onClose }: Props) {
+export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAddPlan, onPrint, onClose }: Props) {
   const [sender, setSender] = useState<SenderInfo>(loadSenderInfo);
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [newLine, setNewLine] = useState(() => ({
@@ -129,7 +130,7 @@ export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAdd
 
   const handlePrint = () => {
     if (selectedRows.length === 0) return;
-    onMarkPrinted(selectedRows.map(r => r.plan.id));
+    onPrint({ supplier, orderDate, sender, rows: selectedRows });
     window.print();
   };
 

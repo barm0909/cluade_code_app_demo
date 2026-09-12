@@ -112,6 +112,35 @@ export interface InboundPlan {
   updatedAt: string;
 }
 
+// 発注書の印刷履歴。1回の「印刷」操作 (= 1枚の発注書) につき、印刷した明細の数だけ行を作る
+// (stock_transactions と同じ「1件1行、必要な情報は都度そのまま持たせる」方針)。
+// printGroupId が同じ行は同じ印刷操作 = 同じ発注書に載っていたことを意味する。
+// 商品名・仕入先名などは印刷した時点のスナップショットなので、あとで商品名を改名したり
+// 仕入先を編集したりしても、この履歴の表示は変わらない (帳票の過去記録と同じ扱い)。
+// 在庫は動かないので stock_transactions には何も書かない。
+export interface PurchaseOrderPrintItem {
+  id: string;
+  printGroupId: string; // 同じ発注書 (1回の印刷) をまとめる id
+  printedAt: string; // 印刷日時 (ISO)。同じ printGroupId の行はすべて同じ値
+  supplierId: string;
+  supplierName: string;
+  supplierAddress: string;
+  supplierContact: string;
+  supplierPhone: string;
+  orderDate: string; // 発注書に入力されていた発注日 (YYYY-MM-DD)
+  senderName: string; // 発注元 (自社) 情報。当時 localStorage に入っていた内容のスナップショット
+  senderAddress: string;
+  senderPhone: string;
+  senderContact: string;
+  inboundPlanId: string; // 元になった入荷予定の id (参考情報。予定が削除されても履歴は残る)
+  productName: string;
+  productSku: string;
+  expectedDate: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number; // quantity * unitPrice
+}
+
 export type SortField = 'name' | 'sku' | 'janCode' | 'category' | 'price' | 'costPrice';
 export type SortOrder = 'asc' | 'desc';
 
@@ -220,6 +249,7 @@ interface ServerState {
   ledger: StockTransaction[];
   inboundPlans?: InboundPlan[]; // 入荷予定を持たない旧サーバーからのレスポンスも読めるよう任意扱い
   suppliers?: Supplier[]; // 仕入先マスタも同様 (未導入のサーバーからは返ってこない)
+  purchaseOrderPrints?: PurchaseOrderPrintItem[]; // 発注書の印刷履歴も同様 (未導入のサーバーからは返ってこない)
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -232,7 +262,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -434,6 +464,10 @@ function saveInboundPlans(plans: InboundPlan[]) {
   persist('inbound-plans', plans);
 }
 
+function savePurchaseOrderPrints(prints: PurchaseOrderPrintItem[]) {
+  persist('purchase-order-prints', prints);
+}
+
 // ---- CSV エクスポートの種類 ----
 // 画面に CSV エクスポートボタンが複数あり、どれも中身が違う。ボタンの表示名・ツールチップ・
 // 出力ファイル名をここ1箇所で決めることで、「どのボタンから何のファイルが出るのか」を
@@ -448,6 +482,7 @@ export const CSV_EXPORTS = {
   trace: { label: 'ロット追跡', description: '選択したロットの入荷から出庫までの履歴' },
   supplier: { label: '仕入先一覧', description: '仕入先マスタと入荷予定の状況' },
   costHistory: { label: '原価履歴', description: '入荷時に記録された仕入単価の履歴' },
+  purchaseOrderHistory: { label: '発注履歴', description: '発注書として印刷した明細の履歴' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -1041,6 +1076,14 @@ export function purchaseOrderRows(plans: InboundPlan[], products: Product[], sup
 
 export function purchaseOrderTotals(rows: PurchaseOrderRow[]): PurchaseOrderTotals {
   return rows.reduce((t, r) => ({ count: t.count + 1, quantity: t.quantity + r.quantity, amount: t.amount + r.amount }), { count: 0, quantity: 0, amount: 0 });
+}
+
+/** printPurchaseOrder への入力。発注書モーダルで選択・入力していた内容をそのまま渡す */
+export interface PrintPurchaseOrderInput {
+  supplier: Supplier;
+  orderDate: string;
+  sender: { name: string; address: string; phone: string; contact: string };
+  rows: PurchaseOrderRow[]; // 印刷対象として選択されていた明細
 }
 
 /** 入荷時の入力。未指定の項目は予定の内容をそのまま使う */
@@ -1770,6 +1813,108 @@ export function exportCostHistoryCsv(rows: CostHistoryRow[]) {
 }
 
 // ---------------------------------------------------------------------------
+// 発注履歴 (発注書として印刷した明細の履歴)
+// ---------------------------------------------------------------------------
+
+/** 発注履歴の1件 = 1回の印刷操作 (同じ printGroupId の行をまとめたもの) */
+export interface PurchaseOrderPrintGroup {
+  printGroupId: string;
+  printedAt: string;
+  supplierId: string;
+  supplierName: string;
+  supplierAddress: string;
+  supplierContact: string;
+  supplierPhone: string;
+  orderDate: string;
+  senderName: string;
+  senderAddress: string;
+  senderPhone: string;
+  senderContact: string;
+  items: PurchaseOrderPrintItem[];
+  totalQuantity: number;
+  totalAmount: number;
+}
+
+export interface PurchaseOrderHistoryFilter {
+  keyword: string; // 仕入先名・商品名・SKU の部分一致
+  supplierId: string;
+  from: string; // 印刷日 YYYY-MM-DD (この日を含む)
+  to: string;
+}
+
+export const EMPTY_PURCHASE_ORDER_HISTORY_FILTER: PurchaseOrderHistoryFilter = { keyword: '', supplierId: '', from: '', to: '' };
+
+/**
+ * 印刷履歴 (1行1明細) を印刷操作単位 (printGroupId) にまとめ、印刷日時の新しい順に返す。
+ * 絞り込みはグループ単位で行う (キーワードは仕入先名か、含まれる明細のどれか1件の商品名・SKU に一致すればヒット)。
+ */
+export function purchaseOrderPrintGroups(
+  prints: PurchaseOrderPrintItem[],
+  filter: PurchaseOrderHistoryFilter = EMPTY_PURCHASE_ORDER_HISTORY_FILTER,
+): PurchaseOrderPrintGroup[] {
+  const byGroup = new Map<string, PurchaseOrderPrintItem[]>();
+  for (const p of prints) {
+    const list = byGroup.get(p.printGroupId);
+    if (list) list.push(p); else byGroup.set(p.printGroupId, [p]);
+  }
+
+  const q = filter.keyword.trim().toLowerCase();
+  const groups: PurchaseOrderPrintGroup[] = [];
+  for (const items of byGroup.values()) {
+    const head = items[0];
+    if (filter.supplierId && head.supplierId !== filter.supplierId) continue;
+    if (filter.from || filter.to) {
+      const day = localDateKey(head.printedAt);
+      if (filter.from && day < filter.from) continue;
+      if (filter.to && day > filter.to) continue;
+    }
+    if (q && !(
+      head.supplierName.toLowerCase().includes(q)
+      || items.some(i => i.productName.toLowerCase().includes(q) || i.productSku.toLowerCase().includes(q))
+    )) continue;
+
+    groups.push({
+      printGroupId: head.printGroupId,
+      printedAt: head.printedAt,
+      supplierId: head.supplierId,
+      supplierName: head.supplierName,
+      supplierAddress: head.supplierAddress,
+      supplierContact: head.supplierContact,
+      supplierPhone: head.supplierPhone,
+      orderDate: head.orderDate,
+      senderName: head.senderName,
+      senderAddress: head.senderAddress,
+      senderPhone: head.senderPhone,
+      senderContact: head.senderContact,
+      items,
+      totalQuantity: items.reduce((s, i) => s + i.quantity, 0),
+      totalAmount: items.reduce((s, i) => s + i.amount, 0),
+    });
+  }
+  return groups.sort((a, b) => b.printedAt.localeCompare(a.printedAt));
+}
+
+export function purchaseOrderHistoryCsv(groups: PurchaseOrderPrintGroup[]): string {
+  const header = '印刷日時,発注日,仕入先,商品名,SKU,入荷予定日,数量,単価,金額';
+  const body = groups.flatMap(g => g.items.map(i => [
+    formatLedgerDateTime(g.printedAt),
+    g.orderDate,
+    g.supplierName,
+    i.productName,
+    i.productSku,
+    i.expectedDate,
+    i.quantity,
+    i.unitPrice,
+    i.amount,
+  ].map(csvCell).join(',')));
+  return [header, ...body].join('\n');
+}
+
+export function exportPurchaseOrderHistoryCsv(groups: PurchaseOrderPrintGroup[]) {
+  downloadCsv(csvFileName('purchaseOrderHistory'), purchaseOrderHistoryCsv(groups));
+}
+
+// ---------------------------------------------------------------------------
 // ロットトレーサビリティ (ロット追跡)
 // リコール時に要るのは「このロットが、いつ入って、どこを経由して、いつ出たか」。
 // 必要な記録は帳票 (ledger) にすべて残っているので専用の永続データは持たず、集計だけで組み立てる。
@@ -2032,6 +2177,7 @@ export function useInventory() {
   const [categories, setCategories] = useState<Category[]>(DEFAULT_CATEGORIES);
   const [inboundPlans, setInboundPlans] = useState<InboundPlan[]>(SAMPLE_INBOUND_PLANS);
   const [suppliers, setSuppliers] = useState<Supplier[]>(DEFAULT_SUPPLIERS);
+  const [purchaseOrderPrints, setPurchaseOrderPrints] = useState<PurchaseOrderPrintItem[]>([]);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
@@ -2054,6 +2200,7 @@ export function useInventory() {
       const { txns, changed } = migrateLedger(state.ledger);
       setLedger(txns);
       if (changed) saveLedger(txns);
+      setPurchaseOrderPrints(state.purchaseOrderPrints ?? []);
     });
     return () => { cancelled = true; };
   }, []);
@@ -2343,17 +2490,50 @@ export function useInventory() {
     });
   }, []);
 
-  // 発注書として印刷したことを記録する (PurchaseOrderModal の「印刷」ボタンから、
-  // 選択中の明細の id をまとめて渡す)。印刷済みの明細は次に発注書を開いたとき
-  // チェックできなくする (purchaseOrderRows 自体は前回印刷したかを見ないため)。
-  // 在庫は動かないので帳票には何も記録しない
-  const markInboundPlansPrinted = useCallback((ids: string[]) => {
-    if (ids.length === 0) return;
+  /**
+   * 発注書を印刷する (PurchaseOrderModal の「印刷」ボタンから、選択中の明細をまとめて渡す)。
+   * 1) 対象の入荷予定に印刷日時を記録し、次回発注書を開いたときチェックできなくする
+   *    (purchaseOrderRows 自体は前回印刷したかを見ないため。二重発注の防止)
+   * 2) 印刷内容 (仕入先・発注元・明細) のスナップショットを purchaseOrderPrints に追加し、
+   *    あとから同じ内容を再表示・再印刷できるようにする (docs/purchase-order-history-feature.md)
+   * 在庫は動かないので帳票には何も記録しない
+   */
+  const printPurchaseOrder = useCallback((input: PrintPurchaseOrderInput) => {
+    if (input.rows.length === 0) return;
+    const now = new Date().toISOString();
+    const printGroupId = crypto.randomUUID();
+
     setInboundPlans(prev => {
-      const idSet = new Set(ids);
-      const now = new Date().toISOString();
+      const idSet = new Set(input.rows.map(r => r.plan.id));
       const next = prev.map(p => idSet.has(p.id) ? { ...p, printedAt: now, updatedAt: now } : p);
       saveInboundPlans(next); return next;
+    });
+
+    setPurchaseOrderPrints(prev => {
+      const created: PurchaseOrderPrintItem[] = input.rows.map(r => ({
+        id: crypto.randomUUID(),
+        printGroupId,
+        printedAt: now,
+        supplierId: input.supplier.id,
+        supplierName: input.supplier.name,
+        supplierAddress: input.supplier.address,
+        supplierContact: input.supplier.contact,
+        supplierPhone: input.supplier.phone,
+        orderDate: input.orderDate,
+        senderName: input.sender.name,
+        senderAddress: input.sender.address,
+        senderPhone: input.sender.phone,
+        senderContact: input.sender.contact,
+        inboundPlanId: r.plan.id,
+        productName: r.productName,
+        productSku: r.productSku,
+        expectedDate: r.plan.expectedDate,
+        quantity: r.quantity,
+        unitPrice: r.unitPrice,
+        amount: r.amount,
+      }));
+      const next = [...prev, ...created];
+      savePurchaseOrderPrints(next); return next;
     });
   }, []);
 
@@ -2700,7 +2880,10 @@ export function useInventory() {
     const freshPlans: InboundPlan[] = JSON.parse(JSON.stringify(SAMPLE_INBOUND_PLANS));
     setInboundPlans(freshPlans);
     saveInboundPlans(freshPlans);
+    // 発注書の印刷履歴にサンプルはないので、リセットのたびに空に戻す
+    setPurchaseOrderPrints([]);
+    savePurchaseOrderPrints([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, markInboundPlansPrinted, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder };
 }

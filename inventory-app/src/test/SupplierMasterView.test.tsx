@@ -50,7 +50,7 @@ const defaultProps = {
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
   onAddInboundPlan: vi.fn(),
-  onMarkPrinted: vi.fn(),
+  onPrint: vi.fn(),
 };
 
 beforeEach(() => {
@@ -315,14 +315,19 @@ describe('SupplierMasterView — 発注書のチェックボックス選択', ()
 });
 
 describe('SupplierMasterView — 発注書の印刷済みロック', () => {
-  it('印刷を押すと、選択中の明細の id で onMarkPrinted が呼ばれてから window.print が呼ばれる', async () => {
+  it('印刷を押すと、選択中の明細・仕入先・発注元情報で onPrint が呼ばれてから window.print が呼ばれる', async () => {
     const user = userEvent.setup();
     render(<SupplierMasterView {...defaultProps} />);
 
     await user.click(within(supplierRows()[0]).getByText('発注書')); // 山田乳業 (予定は ip1 の1件)
     await user.click(screen.getByText('印刷'));
 
-    expect(defaultProps.onMarkPrinted).toHaveBeenCalledWith(['ip1']);
+    expect(defaultProps.onPrint).toHaveBeenCalledWith(expect.objectContaining({
+      supplier: expect.objectContaining({ id: 'sup-yamada' }),
+      orderDate: expect.any(String),
+      sender: expect.objectContaining({ name: '', address: '', phone: '', contact: '' }),
+      rows: [expect.objectContaining({ plan: expect.objectContaining({ id: 'ip1' }) })],
+    }));
     expect(window.print).toHaveBeenCalled();
   });
 

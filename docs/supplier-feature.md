@@ -141,21 +141,26 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
   1件もチェックしていない状態では「印刷」ボタンが押せません
 - ヘッダーの「すべて選択」チェックボックスで一括切替できます
 
-### 印刷済みロック（二重発注の防止）
+### 印刷済みロック（二重発注の防止）と発注履歴
 
-「印刷」ボタンを押すと、その時点でチェックが入っている明細の `plan.id` を `onMarkPrinted`
-（＝ `markInboundPlansPrinted`）に渡してから `window.print()` を呼びます。これにより対象の
-`InboundPlan.printedAt` に印刷日時が記録され、**同じ明細は次に発注書を開いてもチェックできなく
-なります**（チェックボックスは `disabled`、行には「印刷済み（YYYY-MM-DD）」と表示、合計・
-「すべて選択」の対象からも外れます）。ロックを解除する操作はありません。
+「印刷」ボタンを押すと、その時点でチェックが入っている明細・仕入先・発注元・発注日をまとめて
+`onPrint`（＝ `printPurchaseOrder`）に渡してから `window.print()` を呼びます。`printPurchaseOrder`
+は1回の呼び出しで2つのことを行います:
+
+1. 対象の `InboundPlan.printedAt` に印刷日時を記録する。**同じ明細は次に発注書を開いても
+   チェックできなくなります**（チェックボックスは `disabled`、行には「印刷済み（YYYY-MM-DD）」と表示、
+   合計・「すべて選択」の対象からも外れます）。ロックを解除する操作はありません
+2. 印刷した内容（明細・仕入先・発注元）のスナップショットを発注履歴 (`purchaseOrderPrints`) に追加する。
+   あとから同じ内容を再表示・再印刷できます。詳しくは
+   [purchase-order-history-feature.md](purchase-order-history-feature.md) を参照してください
 
 印刷ダイアログで実際に印刷したかキャンセルしたかまでは検知できないため、
 「印刷ボタンを押した＝発注書として出した」という簡略化した扱いにしています。
 
 `printedAt` は在庫を動かす操作ではないので帳票には何も記録しません。予定の編集
 （`InboundPlanModal`）は `printedAt` を含まない項目だけを送るため、編集しても印刷履歴は消えません。
-専用のマイグレーション（`migrations/0008_inbound_plan_printed.sql`：`inbound_plans.printed_at`）を
-追加しています。
+専用のマイグレーション（`migrations/0008_inbound_plan_printed.sql`：`inbound_plans.printed_at`、
+`migrations/0009_purchase_order_prints.sql`：`purchase_order_prints` テーブル）を追加しています。
 
 ### 明細を追加（＝入荷予定の作成）
 
@@ -184,7 +189,7 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
 | `supplierCsv(rows)` / `exportSupplierCsv` | CSV（`CSV_EXPORTS.supplier`、`仕入先一覧_YYYY-MM-DD.csv`） |
 | `purchaseOrderRows(inboundPlans, products, supplierId)` | 発注書の明細候補（未入荷・一部入荷で残数がある予定**全部**、予定日順。前回印刷済みかは見ない） |
 | `purchaseOrderTotals(rows)` | 渡した行の合計（件数・数量・金額）。`PurchaseOrderModal` はチェック済み（＝未印刷）の行だけを渡す |
-| `markInboundPlansPrinted(ids)` | 指定した予定に印刷日時 (`printedAt`) を記録する。在庫は動かないので帳票には何も記録しない |
+| `printPurchaseOrder(input)` | 発注書を印刷する。対象の予定へ `printedAt` を記録し、発注履歴 (`purchaseOrderPrints`) にもスナップショットを追加する。在庫は動かないので帳票には何も記録しない。詳細は [purchase-order-history-feature.md](purchase-order-history-feature.md) |
 | `addSupplier` / `updateSupplier` / `deleteSupplier` | マスタの CRUD。削除は入荷予定から参照されていないときだけ |
 | `migrateInboundPlans(plans, suppliers)` | 旧データ（自由入力の仕入先名）をマスタへ対応付ける |
 
