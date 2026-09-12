@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
-import type { InboundPlan, Supplier, SupplierInput } from './useInventory';
-import { csvExportHint, csvExportLabel, exportSupplierCsv, supplierRows } from './useInventory';
+import type { InboundPlan, Product, Supplier, SupplierInput } from './useInventory';
+import { csvExportHint, csvExportLabel, exportSupplierCsv, purchaseOrderRows, purchaseOrderTotals, supplierRows } from './useInventory';
 import { SupplierModal } from './SupplierModal';
+import { PurchaseOrderModal } from './PurchaseOrderModal';
 import { useConfirm } from './useConfirm';
 
 interface Props {
   suppliers: Supplier[];
   inboundPlans: InboundPlan[];
+  products: Product[];
   onAdd: (data: SupplierInput) => void;
   onUpdate: (id: string, data: SupplierInput) => void;
   onDelete: (id: string) => void;
@@ -17,11 +19,13 @@ interface Props {
  * 一覧の絞り込みと入荷予定の集計は純粋関数 supplierRows に任せ、この画面は表示と
  * 操作の受け渡しだけを持つ (他のマスタ・一覧画面と同じ構成)。
  */
-export function SupplierMasterView({ suppliers, inboundPlans, onAdd, onUpdate, onDelete }: Props) {
+export function SupplierMasterView({ suppliers, inboundPlans, products, onAdd, onUpdate, onDelete }: Props) {
   const [keyword, setKeyword] = useState('');
   const [showInactive, setShowInactive] = useState(true);
   // 編集対象は id で持ち、常に最新の仕入先を引き直す
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
+  // 発注書を出す対象の仕入先。id で持ち、常に最新の入荷予定から明細を引き直す
+  const [poSupplierId, setPoSupplierId] = useState<string | null>(null);
   const { confirm, confirmDialog } = useConfirm();
 
   const rows = useMemo(
@@ -30,6 +34,12 @@ export function SupplierMasterView({ suppliers, inboundPlans, onAdd, onUpdate, o
   );
 
   const editingSupplier = editingId && editingId !== 'new' ? suppliers.find(s => s.id === editingId) ?? null : null;
+  const poSupplier = poSupplierId ? suppliers.find(s => s.id === poSupplierId) ?? null : null;
+  const poRows = useMemo(
+    () => poSupplier ? purchaseOrderRows(inboundPlans, products, poSupplier.id) : [],
+    [inboundPlans, products, poSupplier],
+  );
+  const poTotals = useMemo(() => purchaseOrderTotals(poRows), [poRows]);
 
   return (
     <section className="supplier-master">
@@ -103,6 +113,12 @@ export function SupplierMasterView({ suppliers, inboundPlans, onAdd, onUpdate, o
                     <button className="btn-edit" onClick={() => setEditingId(s.id)}>編集</button>
                     <button
                       className="btn-move"
+                      disabled={usage.pendingCount === 0}
+                      title={usage.pendingCount === 0 ? '入荷待ちの予定がありません' : 'この仕入先の入荷待ちの予定から発注書を作成します'}
+                      onClick={() => setPoSupplierId(s.id)}
+                    >発注書</button>
+                    <button
+                      className="btn-move"
                       title={s.active ? '新規の入荷予定で選べないようにします（過去の予定は残ります）' : '取引を再開し、入荷予定で選べるようにします'}
                       onClick={() => onUpdate(s.id, { ...s, active: !s.active })}
                     >{s.active ? '取引停止' : '取引再開'}</button>
@@ -142,6 +158,14 @@ export function SupplierMasterView({ suppliers, inboundPlans, onAdd, onUpdate, o
           suppliers={suppliers}
           onSave={data => editingId === 'new' ? onAdd(data) : onUpdate(editingId, data)}
           onClose={() => setEditingId(null)}
+        />
+      )}
+      {poSupplier && (
+        <PurchaseOrderModal
+          supplier={poSupplier}
+          rows={poRows}
+          totals={poTotals}
+          onClose={() => setPoSupplierId(null)}
         />
       )}
       {confirmDialog}

@@ -75,6 +75,9 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
 一覧の「入荷予定」列には、その仕入先の予定件数・入荷待ち件数と数量・遅延件数が出ます。
 入荷待ちがある仕入先はここから発注状況が分かるので、要発注リストと突き合わせる必要がありません。
 
+行の「発注書」ボタン（入荷待ちが1件もない仕入先では無効）を押すと、その仕入先の
+未入荷・一部入荷の入荷予定から明細を組んだ発注書のプレビューが開きます。詳細は次節。
+
 ### 入力チェック
 
 `supplierValidationError(input, suppliers, selfId?)`（純粋関数）が判定し、
@@ -103,6 +106,26 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
 
 ---
 
+## 発注書の出力
+
+`PurchaseOrderModal.tsx` が開くプレビューは、印刷（ブラウザの「PDFに保存」を含む）を
+前提にした発注書フォーマットです。専用のPDFライブラリは使わず、`.po-print-area` だけを
+残して他を隠す `@media print`（`App.css`）と `window.print()` で実現しています。
+
+- 明細は純粋関数 `purchaseOrderRows(inboundPlans, products, supplierId)` が組みます。
+  対象はその仕入先の**未入荷・一部入荷で残数がある予定**（キャンセル済み・入荷済みは除く）で、
+  入荷予定日の早い順。数量は `remainingInbound(plan)`（＝まだ発注として残っている分）です
+- `purchaseOrderTotals(rows)` が件数・数量・金額の合計を出します
+- 宛先（仕入先名・住所・連絡先）は仕入先マスタからそのまま表示します
+- 発注元（自社）の名前・住所・電話・担当者は在庫データではないため DB には保存せず、
+  入力するとブラウザの `localStorage`（キー `po-sender-info`）にその場で保存し、次回開いたときに復元します。
+  端末ごとの入力なので、別のPC・別のブラウザでは空欄から入力し直しになります
+- 発注日は当日を初期値にした編集可能な日付欄です
+- 在庫・入荷予定・帳票には何も書き込みません（表示専用）。実際に発注した記録を残したい場合は、
+  従来どおり入荷予定の登録・編集で管理してください
+
+---
+
 ## 実装
 
 | 関数 | 役割 |
@@ -115,6 +138,8 @@ DB 側の `inbound_plans.supplier` 列は旧データを読むために残して
 | `supplierUsage(plans)` | supplierId → 予定件数・入荷待ち件数と数量・遅延件数 |
 | `supplierRows(suppliers, plans, keyword?, includeInactive?)` | 絞り込み＋集計。取引中が先、その中は名前順 |
 | `supplierCsv(rows)` / `exportSupplierCsv` | CSV（`CSV_EXPORTS.supplier`、`仕入先一覧_YYYY-MM-DD.csv`） |
+| `purchaseOrderRows(inboundPlans, products, supplierId)` | 発注書の明細（未入荷・一部入荷で残数がある予定、予定日順） |
+| `purchaseOrderTotals(rows)` | 発注書の合計（件数・数量・金額） |
 | `addSupplier` / `updateSupplier` / `deleteSupplier` | マスタの CRUD。削除は入荷予定から参照されていないときだけ |
 | `migrateInboundPlans(plans, suppliers)` | 旧データ（自由入力の仕入先名）をマスタへ対応付ける |
 

@@ -1002,6 +1002,46 @@ export function exportInboundPlanCsv(rows: InboundPlanRow[], warehouses: Warehou
   downloadCsv(csvFileName('inbound'), inboundPlanCsv(rows, warehouses));
 }
 
+/** 発注書の1行。1つの入荷予定 = 1明細として扱う */
+export interface PurchaseOrderRow {
+  plan: InboundPlan;
+  productName: string;
+  productSku: string;
+  quantity: number; // 残数 (= remainingInbound)。分割入荷済みの分は発注済として除く
+  unitPrice: number;
+  amount: number; // quantity * unitPrice
+}
+
+export interface PurchaseOrderTotals {
+  count: number;
+  quantity: number;
+  amount: number;
+}
+
+/**
+ * ある仕入先へ改めて発注書を出すべき明細 (未入荷・一部入荷の残数がある予定) を、
+ * 入荷予定日の早い順に返す。キャンセル済み・入荷済み・他の仕入先の予定は含めない。
+ * 商品マスタから消えた商品の予定は inboundPlanRows と同じ理由で除外する。
+ */
+export function purchaseOrderRows(plans: InboundPlan[], products: Product[], supplierId: string): PurchaseOrderRow[] {
+  const productById = new Map(products.map(p => [p.id, p]));
+  const rows: PurchaseOrderRow[] = [];
+  for (const plan of plans) {
+    if (plan.supplierId !== supplierId || plan.canceledAt) continue;
+    const product = productById.get(plan.productId);
+    if (!product) continue;
+    const quantity = remainingInbound(plan);
+    if (quantity <= 0) continue;
+    rows.push({ plan, productName: product.name, productSku: product.sku, quantity, unitPrice: plan.unitPrice, amount: quantity * plan.unitPrice });
+  }
+  return rows.sort((a, b) =>
+    a.plan.expectedDate.localeCompare(b.plan.expectedDate) || a.plan.createdAt.localeCompare(b.plan.createdAt));
+}
+
+export function purchaseOrderTotals(rows: PurchaseOrderRow[]): PurchaseOrderTotals {
+  return rows.reduce((t, r) => ({ count: t.count + 1, quantity: t.quantity + r.quantity, amount: t.amount + r.amount }), { count: 0, quantity: 0, amount: 0 });
+}
+
 /** 入荷時の入力。未指定の項目は予定の内容をそのまま使う */
 export interface ReceiveInput {
   quantity: number;
