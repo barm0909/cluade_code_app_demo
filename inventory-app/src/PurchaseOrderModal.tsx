@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { PurchaseOrderRow, PurchaseOrderTotals, Supplier } from './useInventory';
+import { DEFAULT_WAREHOUSE_ID, expectedDateFromLeadTime } from './useInventory';
+import type { InboundPlanInput, Product, PurchaseOrderRow, PurchaseOrderTotals, Supplier, Warehouse } from './useInventory';
+import { NumberInput } from './NumberInput';
 
 interface SenderInfo {
   name: string;
@@ -35,11 +37,19 @@ interface Props {
   supplier: Supplier;
   rows: PurchaseOrderRow[];
   totals: PurchaseOrderTotals;
+  products: Product[];
+  warehouses: Warehouse[];
+  onAddPlan: (data: InboundPlanInput) => void;
   onClose: () => void;
 }
 
 /**
- * 仕入先マスタから開く発注書のプレビュー兼印刷画面。
+ * 仕入先マスタから開く発注書の作成・プレビュー・印刷画面。
+ * 「明細を追加」で新しい入荷予定をその場で登録でき（ロットNo・賞味期限は発注時点では
+ * 未定なので空のまま — 発注提案 (docs/reorder-feature.md) と同じ扱い）、rows/totals は
+ * 呼び出し側 (SupplierMasterView) が inboundPlans から都度組み直すので、追加した明細は
+ * 即座にプレビューに反映される。すでにある未入荷・一部入荷の予定を印刷するだけの用途にも使える。
+ *
  * ブラウザの印刷機能 (window.print) を使い、`.po-print-area` だけを印刷するよう
  * App.css の @media print で他の要素を隠す。PDF化はブラウザの「PDFに保存」を使う想定なので、
  * 専用ライブラリは追加しない。
@@ -47,9 +57,16 @@ interface Props {
  * 他のモーダルと違い document.body に直接ポータルする。印刷時は #root ごと隠すので、
  * アプリ本体の中に留めると（非表示でも高さは残るため）印刷が無駄に複数ページに分かれてしまう。
  */
-export function PurchaseOrderModal({ supplier, rows, totals, onClose }: Props) {
+export function PurchaseOrderModal({ supplier, rows, totals, products, warehouses, onAddPlan, onClose }: Props) {
   const [sender, setSender] = useState<SenderInfo>(loadSenderInfo);
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [newLine, setNewLine] = useState(() => ({
+    productId: products[0]?.id ?? '',
+    quantity: 0,
+    unitPrice: 0,
+    expectedDate: expectedDateFromLeadTime(supplier),
+    warehouseId: warehouses.some(w => w.id === DEFAULT_WAREHOUSE_ID) ? DEFAULT_WAREHOUSE_ID : (warehouses[0]?.id ?? ''),
+  }));
 
   const setSenderField = (key: keyof SenderInfo, value: string) => {
     setSender(prev => {
@@ -57,6 +74,23 @@ export function PurchaseOrderModal({ supplier, rows, totals, onClose }: Props) {
       saveSenderInfo(next);
       return next;
     });
+  };
+
+  const canAddLine = newLine.productId !== '' && newLine.quantity > 0 && newLine.warehouseId !== '';
+
+  const handleAddLine = () => {
+    if (!canAddLine) return;
+    onAddPlan({
+      productId: newLine.productId,
+      expectedDate: newLine.expectedDate,
+      quantity: newLine.quantity,
+      warehouseId: newLine.warehouseId,
+      lotNo: '',
+      supplierId: supplier.id,
+      unitPrice: newLine.unitPrice,
+      note: '',
+    });
+    setNewLine(l => ({ ...l, quantity: 0 })); // 商品・倉庫・単価・日付は続けて追加しやすいよう残す
   };
 
   return createPortal(
@@ -87,6 +121,43 @@ export function PurchaseOrderModal({ supplier, rows, totals, onClose }: Props) {
               <input id="po-sender-contact" value={sender.contact} onChange={e => setSenderField('contact', e.target.value)} />
             </label>
           </div>
+
+          {products.length > 0 && (
+            <div className="fefo-plan no-print">
+              <div className="fefo-plan-head">明細を追加</div>
+              <div className="form-grid">
+                <label htmlFor="po-new-product">
+                  商品
+                  <select id="po-new-product" value={newLine.productId} onChange={e => setNewLine(l => ({ ...l, productId: e.target.value }))}>
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}（{p.sku}）</option>
+                    ))}
+                  </select>
+                </label>
+                <label htmlFor="po-new-qty">
+                  数量
+                  <NumberInput id="po-new-qty" min={1} value={newLine.quantity} onValueChange={v => setNewLine(l => ({ ...l, quantity: v }))} />
+                </label>
+                <label htmlFor="po-new-warehouse">
+                  入荷先倉庫
+                  <select id="po-new-warehouse" value={newLine.warehouseId} onChange={e => setNewLine(l => ({ ...l, warehouseId: e.target.value }))}>
+                    {warehouses.map(w => (
+                      <option key={w.id} value={w.id}>{w.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label htmlFor="po-new-date">
+                  入荷予定日
+                  <input id="po-new-date" type="date" value={newLine.expectedDate} onChange={e => setNewLine(l => ({ ...l, expectedDate: e.target.value }))} />
+                </label>
+                <label htmlFor="po-new-price">
+                  仕入単価 (円) <span className="label-hint">（任意）</span>
+                  <NumberInput id="po-new-price" min={0} value={newLine.unitPrice} onValueChange={v => setNewLine(l => ({ ...l, unitPrice: v }))} />
+                </label>
+              </div>
+              <button type="button" className="btn-primary" style={{ marginTop: 10 }} disabled={!canAddLine} onClick={handleAddLine}>+ 明細を追加</button>
+            </div>
+          )}
 
           <div className="po-print-area">
             <h1 className="po-title">発注書</h1>

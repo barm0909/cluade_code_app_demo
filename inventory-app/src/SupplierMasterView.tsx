@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { InboundPlan, Product, Supplier, SupplierInput } from './useInventory';
+import type { InboundPlan, InboundPlanInput, Product, Supplier, SupplierInput, Warehouse } from './useInventory';
 import { csvExportHint, csvExportLabel, exportSupplierCsv, purchaseOrderRows, purchaseOrderTotals, supplierRows } from './useInventory';
 import { SupplierModal } from './SupplierModal';
 import { PurchaseOrderModal } from './PurchaseOrderModal';
@@ -9,9 +9,11 @@ interface Props {
   suppliers: Supplier[];
   inboundPlans: InboundPlan[];
   products: Product[];
+  warehouses: Warehouse[];
   onAdd: (data: SupplierInput) => void;
   onUpdate: (id: string, data: SupplierInput) => void;
   onDelete: (id: string) => void;
+  onAddInboundPlan: (data: InboundPlanInput) => void;
 }
 
 /**
@@ -19,7 +21,7 @@ interface Props {
  * 一覧の絞り込みと入荷予定の集計は純粋関数 supplierRows に任せ、この画面は表示と
  * 操作の受け渡しだけを持つ (他のマスタ・一覧画面と同じ構成)。
  */
-export function SupplierMasterView({ suppliers, inboundPlans, products, onAdd, onUpdate, onDelete }: Props) {
+export function SupplierMasterView({ suppliers, inboundPlans, products, warehouses, onAdd, onUpdate, onDelete, onAddInboundPlan }: Props) {
   const [keyword, setKeyword] = useState('');
   const [showInactive, setShowInactive] = useState(true);
   // 編集対象は id で持ち、常に最新の仕入先を引き直す
@@ -113,8 +115,7 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, onAdd, o
                     <button className="btn-edit" onClick={() => setEditingId(s.id)}>編集</button>
                     <button
                       className="btn-move"
-                      disabled={usage.pendingCount === 0}
-                      title={usage.pendingCount === 0 ? '入荷待ちの予定がありません' : 'この仕入先の入荷待ちの予定から発注書を作成します'}
+                      title="発注書を作成・印刷します（新しい明細を追加すると入荷予定として登録されます）"
                       onClick={() => setPoSupplierId(s.id)}
                     >発注書</button>
                     <button
@@ -165,6 +166,9 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, onAdd, o
           supplier={poSupplier}
           rows={poRows}
           totals={poTotals}
+          products={products}
+          warehouses={warehouses}
+          onAddPlan={onAddInboundPlan}
           onClose={() => setPoSupplierId(null)}
         />
       )}

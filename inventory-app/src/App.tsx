@@ -336,7 +336,7 @@ export default function App() {
         <ProductMasterView products={products} categories={categories} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
         <WarehouseMasterView warehouses={warehouses} products={products} inboundPlans={inboundPlans} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
-        <SupplierMasterView suppliers={suppliers} inboundPlans={inboundPlans} products={products} onAdd={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} />
+        <SupplierMasterView suppliers={suppliers} inboundPlans={inboundPlans} products={products} warehouses={warehouses} onAdd={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} onAddInboundPlan={addInboundPlan} />
       </>) : (<>
 
       <div className="controls">
