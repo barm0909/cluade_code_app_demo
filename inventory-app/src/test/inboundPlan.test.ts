@@ -11,6 +11,8 @@ import {
   planReceipt,
   mergedLotUnitPrice,
   totalQuantity,
+  purchaseOrderRows,
+  purchaseOrderTotals,
   EMPTY_INBOUND_PLAN_FILTER,
   DEFAULT_WAREHOUSE_ID,
 } from '../useInventory';
@@ -187,6 +189,42 @@ describe('inboundPlanCsv', () => {
 
     expect(lines[0]).toBe('入荷予定日,商品名,SKU,ロットNo,賞味期限,入荷先倉庫,仕入先,仕入単価,予定数量,入荷済,残数,状態,備考');
     expect(lines[1]).toBe('2026-03-01,テスト商品,T-001,20260101,2026-04-01,販売倉庫,山田商店,110,10,4,6,一部入荷,メモ');
+  });
+});
+
+describe('purchaseOrderRows / purchaseOrderTotals', () => {
+  const products = [product([], { id: 'p1', name: '牛乳', sku: 'ML-001' }), product([], { id: 'p2', name: '食パン', sku: 'BR-001' })];
+
+  it('指定した仕入先の未入荷・一部入荷の残数だけを予定日の早い順で返す', () => {
+    const rows = purchaseOrderRows([
+      plan({ id: 'b', productId: 'p2', expectedDate: d(5), quantity: 20, unitPrice: 200, supplierId: 'sup-yamada' }),
+      plan({ id: 'a', productId: 'p1', expectedDate: d(1), quantity: 10, receivedQuantity: 3, unitPrice: 100, supplierId: 'sup-yamada' }),
+      plan({ id: 'other-supplier', supplierId: 'sup-asahi' }),
+      plan({ id: 'done', quantity: 5, receivedQuantity: 5, supplierId: 'sup-yamada' }),
+      plan({ id: 'canceled', supplierId: 'sup-yamada', canceledAt: 'x' }),
+    ], products, 'sup-yamada');
+
+    expect(rows.map(r => r.plan.id)).toEqual(['a', 'b']);
+    expect(rows[0]).toMatchObject({ productName: '牛乳', productSku: 'ML-001', quantity: 7, unitPrice: 100, amount: 700 });
+    expect(rows[1]).toMatchObject({ productName: '食パン', quantity: 20, unitPrice: 200, amount: 4000 });
+  });
+
+  it('商品マスタにない商品の予定は含めない', () => {
+    const rows = purchaseOrderRows([plan({ id: '1', productId: 'missing', supplierId: 'sup-yamada' })], products, 'sup-yamada');
+    expect(rows).toEqual([]);
+  });
+
+  it('件数・数量・金額を合計する', () => {
+    const rows = purchaseOrderRows([
+      plan({ id: '1', productId: 'p1', quantity: 10, unitPrice: 100, supplierId: 'sup-yamada' }),
+      plan({ id: '2', productId: 'p2', quantity: 3, unitPrice: 0, supplierId: 'sup-yamada' }),
+    ], products, 'sup-yamada');
+
+    expect(purchaseOrderTotals(rows)).toEqual({ count: 2, quantity: 13, amount: 1000 });
+  });
+
+  it('明細が0件なら合計も0になる', () => {
+    expect(purchaseOrderTotals([])).toEqual({ count: 0, quantity: 0, amount: 0 });
   });
 });
 

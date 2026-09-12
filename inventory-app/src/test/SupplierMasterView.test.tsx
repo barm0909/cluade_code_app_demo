@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SupplierMasterView } from '../SupplierMasterView';
-import type { InboundPlan, Supplier } from '../useInventory';
+import type { InboundPlan, Product, Supplier } from '../useInventory';
 import { DEFAULT_WAREHOUSE_ID } from '../useInventory';
 
 const d = (offset: number) => {
@@ -35,15 +35,23 @@ const PLANS: InboundPlan[] = [
   },
 ];
 
+const PRODUCTS: Product[] = [
+  { id: 'p1', name: '牛乳', sku: 'ML-001', categoryId: 'cat-dairy', lots: [], minQuantity: 0, price: 200, costPrice: 120, updatedAt: '2026-01-01T00:00:00.000Z' },
+];
+
 const defaultProps = {
   suppliers: SUPPLIERS,
   inboundPlans: PLANS,
+  products: PRODUCTS,
   onAdd: vi.fn(),
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
 };
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  localStorage.clear();
+});
 
 const supplierRows = () => within(screen.getByRole('table')).getAllByRole('row').slice(1);
 
@@ -179,5 +187,38 @@ describe('SupplierMasterView — 削除', () => {
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'キャンセル' }));
 
     expect(defaultProps.onDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe('SupplierMasterView — 発注書', () => {
+  it('入荷待ちがない仕入先は発注書ボタンが無効', () => {
+    render(<SupplierMasterView {...defaultProps} />);
+    // 朝日ベーカリー (入荷予定なし)
+    expect(within(supplierRows()[1]).getByText('発注書')).toBeDisabled();
+  });
+
+  it('入荷待ちの予定から明細を組んだ発注書が開く', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書')); // 山田乳業
+
+    expect(screen.getByText('発注書 — 山田乳業')).toBeInTheDocument();
+    expect(screen.getByText('山田乳業 御中')).toBeInTheDocument();
+    expect(screen.getByText('牛乳')).toBeInTheDocument();
+    // 予定24・入荷済4 → 残20、単価120 → 金額2,400円 (合計行にも同じ数量・金額が出る)
+    expect(screen.getAllByText('20')).toHaveLength(2);
+    expect(screen.getByText('¥120')).toBeInTheDocument();
+    expect(screen.getAllByText(/2,400/)).toHaveLength(2);
+  });
+
+  it('閉じるボタンでモーダルが消える', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書'));
+    await user.click(screen.getByText('閉じる'));
+
+    expect(screen.queryByText('発注書 — 山田乳業')).not.toBeInTheDocument();
   });
 });

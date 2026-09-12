@@ -506,3 +506,35 @@ tr:hover td { background: #fafbff; }
 @media (max-width: 720px) {
   .trace-balance { margin-left: 0; }
 }
+
+/* 発注書 (仕入先マスタ → 発注書) */
+.modal-po { width: 720px; }
+.po-print-area {
+  border: 1px solid #eee; border-radius: 8px; padding: 20px 24px; background: white;
+}
+.po-title { text-align: center; font-size: 1.3rem; letter-spacing: 0.2em; margin: 0 0 18px; }
+.po-header { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 14px; }
+.po-to-name, .po-from-name { font-weight: 700; }
+.po-to { font-size: 0.95rem; line-height: 1.6; }
+.po-from { font-size: 0.85rem; line-height: 1.6; text-align: right; color: #333; }
+.po-lead { margin: 0 0 12px; }
+.po-table th, .po-table td { padding: 8px 10px; border-bottom: 1px solid #eee; }
+.po-table thead th { border-bottom: 2px solid #ccc; text-align: left; }
+.po-table tfoot td { border-top: 2px solid #ccc; border-bottom: none; font-weight: 700; }
+
+@media print {
+  /* アプリ本体を丸ごと隠す (非表示にするだけの visibility:hidden だと高さが残り、
+     発注書が1ページに収まる内容でも余計な空白ページができてしまう) */
+  #root { display: none; }
+  /* .po-overlay は document.body 直下にポータルしているモーダルだけに付く */
+  .po-overlay {
+    position: static; inset: auto; background: none; padding: 0; overflow: visible; display: block;
+  }
+  .po-overlay .modal {
+    position: static; width: auto; max-width: none; max-height: none; overflow: visible;
+    box-shadow: none; border-radius: 0; padding: 0;
+  }
+  .po-overlay .modal-body { overflow: visible; padding: 0; }
+  .po-print-area { border: none; padding: 0; }
+  .no-print { display: none !important; }
+}

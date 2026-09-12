@@ -156,6 +156,20 @@ JANコードは入力しながら自動整形されます（全角数字→半�
 使われている場合は削除ボタンが押せず、マウスを乗せると
 「入荷予定で使用中の仕入先は削除できません（取引停止にしてください）」と表示されます。
 
+### 発注書
+
+行の「発注書」ボタンを押すと、その仕入先あての発注書のプレビューが開きます。
+入荷待ちの予定が1件もない仕入先ではボタンが押せません。
+
+- 明細はその仕入先の**未入荷・一部入荷の入荷予定**（入荷予定日の早い順）で、数量は残数（まだ入荷していない分）です
+- 宛先（仕入先名・住所・連絡先）は仕入先マスタの内容がそのまま入ります
+- 発注元（自社名・住所・電話・担当者）と発注日は画面上で入力・変更できます。
+  自社の情報は**この端末のブラウザに保存**され、次回発注書を開いたときも残ります
+  （別のパソコン・別のブラウザで開いたときは空欄から入力し直しになります）
+- 「印刷」ボタンでブラウザの印刷ダイアログが開きます。PDFで保存したい場合は、
+  印刷ダイアログの出力先を「PDFに保存」に変えてください
+- 発注書を開いたり印刷したりしても、在庫・入荷予定・帳票は変わりません（表示専用の画面です）
+
 ---
 
 ## 5. マスタを変更するときの注意
@@ -170,7 +184,8 @@ JANコードは入力しながら自動整形されます（全角数字→半�
 ### 開発者向けメモ
 
 - 画面：`src/ProductMasterView.tsx` / `src/CategoryMasterView.tsx` / `src/WarehouseMasterView.tsx` /
-  `src/SupplierMasterView.tsx`（＋登録・編集ダイアログ `src/SupplierModal.tsx`）。すべて商品マスタタブに縦並び
+  `src/SupplierMasterView.tsx`（＋登録・編集ダイアログ `src/SupplierModal.tsx`、発注書 `src/PurchaseOrderModal.tsx`）。
+  すべて商品マスタタブに縦並び
 - 更新処理：`src/useInventory.ts` の `updateProduct` / `deleteProduct` / `add|update|deleteCategory` /
   `add|update|deleteWarehouse` / `add|update|deleteSupplier`
 - JANコードの整形・検証：`normalizeJanCode` / `isValidJanCode`
