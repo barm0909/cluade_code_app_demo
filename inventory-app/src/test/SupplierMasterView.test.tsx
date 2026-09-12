@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SupplierMasterView } from '../SupplierMasterView';
-import type { InboundPlan, Product, Supplier } from '../useInventory';
+import type { InboundPlan, Product, Supplier, Warehouse } from '../useInventory';
 import { DEFAULT_WAREHOUSE_ID } from '../useInventory';
 
 const d = (offset: number) => {
@@ -39,13 +39,17 @@ const PRODUCTS: Product[] = [
   { id: 'p1', name: '牛乳', sku: 'ML-001', categoryId: 'cat-dairy', lots: [], minQuantity: 0, price: 200, costPrice: 120, updatedAt: '2026-01-01T00:00:00.000Z' },
 ];
 
+const WAREHOUSES: Warehouse[] = [{ id: DEFAULT_WAREHOUSE_ID, name: '販売倉庫', color: '#4caf50' }];
+
 const defaultProps = {
   suppliers: SUPPLIERS,
   inboundPlans: PLANS,
   products: PRODUCTS,
+  warehouses: WAREHOUSES,
   onAdd: vi.fn(),
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
+  onAddInboundPlan: vi.fn(),
 };
 
 beforeEach(() => {
@@ -191,10 +195,16 @@ describe('SupplierMasterView — 削除', () => {
 });
 
 describe('SupplierMasterView — 発注書', () => {
-  it('入荷待ちがない仕入先は発注書ボタンが無効', () => {
+  it('入荷待ちがない仕入先でも発注書ボタンから開ける (新規発注を作るため)', async () => {
+    const user = userEvent.setup();
     render(<SupplierMasterView {...defaultProps} />);
+
     // 朝日ベーカリー (入荷予定なし)
-    expect(within(supplierRows()[1]).getByText('発注書')).toBeDisabled();
+    expect(within(supplierRows()[1]).getByText('発注書')).toBeEnabled();
+    await user.click(within(supplierRows()[1]).getByText('発注書'));
+
+    expect(screen.getByText('発注書 — 朝日ベーカリー')).toBeInTheDocument();
+    expect(screen.getByText('発注が必要な入荷予定がありません。')).toBeInTheDocument();
   });
 
   it('入荷待ちの予定から明細を組んだ発注書が開く', async () => {
@@ -220,5 +230,33 @@ describe('SupplierMasterView — 発注書', () => {
     await user.click(screen.getByText('閉じる'));
 
     expect(screen.queryByText('発注書 — 山田乳業')).not.toBeInTheDocument();
+  });
+
+  it('明細を追加すると onAddInboundPlan が呼ばれ、その場でプレビューに反映される', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<SupplierMasterView {...defaultProps} />);
+
+    // 朝日ベーカリー (もともと入荷予定なし) に新規の明細を追加する
+    await user.click(within(supplierRows()[1]).getByText('発注書'));
+    await user.type(screen.getByLabelText('数量'), '10');
+    await user.type(screen.getByLabelText(/仕入単価/), '50');
+    await user.click(screen.getByText('+ 明細を追加'));
+
+    expect(defaultProps.onAddInboundPlan).toHaveBeenCalledWith(expect.objectContaining({
+      productId: 'p1', quantity: 10, unitPrice: 50, supplierId: 'sup-asahi', lotNo: '', warehouseId: DEFAULT_WAREHOUSE_ID,
+    }));
+
+    // 実際のアプリでは onAddInboundPlan が inboundPlans を更新して再レンダーされる。
+    // ここではその結果を模して、追加された予定込みで再レンダーし、プレビューに出ることを確認する
+    const newPlan: InboundPlan = {
+      id: 'ip-new', productId: 'p1', expectedDate: d(2), quantity: 10, receivedQuantity: 0,
+      warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: '', supplierId: 'sup-asahi', unitPrice: 50, note: '',
+      createdAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-02T00:00:00.000Z',
+    };
+    rerender(<SupplierMasterView {...defaultProps} inboundPlans={[...PLANS, newPlan]} />);
+
+    expect(screen.queryByText('発注が必要な入荷予定がありません。')).not.toBeInTheDocument();
+    // 10 × 50円 = 500円 (明細行・合計行の両方に出る)
+    expect(screen.getAllByText('¥500')).toHaveLength(2);
   });
 });
