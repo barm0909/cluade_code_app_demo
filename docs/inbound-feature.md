@@ -25,8 +25,10 @@ interface InboundPlan {
   lotNo: string;             // 予定ロットNo (入荷時の既定値)。発注時点で未定なら空文字
   expiryDate?: string;       // 予定賞味期限
   supplierId: string;        // 仕入先マスタの id ('' なら未設定)
+  unitPrice: number;         // 仕入単価 (円)。0 は未入力 (cost-history-feature.md 参照)
   note: string;
   canceledAt?: string;       // キャンセル日時。未設定なら有効
+  printedAt?: string;        // 発注書として印刷した日時。未設定なら未印刷 (supplier-feature.md 参照)
   createdAt: string;
   updatedAt: string;
 }

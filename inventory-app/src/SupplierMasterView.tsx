@@ -14,6 +14,7 @@ interface Props {
   onUpdate: (id: string, data: SupplierInput) => void;
   onDelete: (id: string) => void;
   onAddInboundPlan: (data: InboundPlanInput) => void;
+  onMarkPrinted: (ids: string[]) => void;
 }
 
 /**
@@ -21,7 +22,7 @@ interface Props {
  * 一覧の絞り込みと入荷予定の集計は純粋関数 supplierRows に任せ、この画面は表示と
  * 操作の受け渡しだけを持つ (他のマスタ・一覧画面と同じ構成)。
  */
-export function SupplierMasterView({ suppliers, inboundPlans, products, warehouses, onAdd, onUpdate, onDelete, onAddInboundPlan }: Props) {
+export function SupplierMasterView({ suppliers, inboundPlans, products, warehouses, onAdd, onUpdate, onDelete, onAddInboundPlan, onMarkPrinted }: Props) {
   const [keyword, setKeyword] = useState('');
   const [showInactive, setShowInactive] = useState(true);
   // 編集対象は id で持ち、常に最新の仕入先を引き直す
@@ -167,6 +168,7 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, warehous
           products={products}
           warehouses={warehouses}
           onAddPlan={onAddInboundPlan}
+          onMarkPrinted={onMarkPrinted}
           onClose={() => setPoSupplierId(null)}
         />
       )}

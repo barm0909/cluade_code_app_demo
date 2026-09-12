@@ -93,6 +93,7 @@ interface InboundPlan {
   unitPrice: number;
   note: string;
   canceledAt?: string;
+  printedAt?: string; // 発注書として印刷した日時。未設定なら未印刷
   createdAt: string;
   updatedAt: string;
 }
@@ -133,6 +134,7 @@ interface InboundPlanRow {
   unit_price: number;
   note: string;
   canceled_at: string | null;
+  printed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -173,7 +175,7 @@ async function readState(db: D1Database) {
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
     db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id FROM stock_transactions ORDER BY date DESC'),
-    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
+    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
   ]);
 
@@ -241,11 +243,12 @@ async function readState(db: D1Database) {
     unitPrice: r.unit_price,
     note: r.note,
     ...(r.canceled_at != null ? { canceledAt: r.canceled_at } : {}),
+    ...(r.printed_at != null ? { printedAt: r.printed_at } : {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
 
-  const suppliers: Supplier[] = (suppliersRes.results as unknown as SupplierRow[]).map(r => ({
+  const suppliers: Supplier[] =(suppliersRes.results as unknown as SupplierRow[]).map(r => ({
     id: r.id,
     name: r.name,
     code: r.code,
@@ -322,10 +325,10 @@ async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
 async function replaceInboundPlans(db: D1Database, plans: InboundPlan[]) {
   const stmts = [db.prepare('DELETE FROM inbound_plans')];
   const insert = db.prepare(
-    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const p of plans) {
-    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.unitPrice ?? 0, p.note, p.canceledAt ?? null, p.createdAt, p.updatedAt));
+    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.unitPrice ?? 0, p.note, p.canceledAt ?? null, p.printedAt ?? null, p.createdAt, p.updatedAt));
   }
   await db.batch(stmts);
 }

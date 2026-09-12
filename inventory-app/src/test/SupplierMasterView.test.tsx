@@ -50,11 +50,13 @@ const defaultProps = {
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
   onAddInboundPlan: vi.fn(),
+  onMarkPrinted: vi.fn(),
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  vi.spyOn(window, 'print').mockImplementation(() => {});
 });
 
 const supplierRows = () => within(screen.getByRole('table')).getAllByRole('row').slice(1);
@@ -309,5 +311,41 @@ describe('SupplierMasterView — 発注書のチェックボックス選択', ()
     expect(screen.getByText('印刷')).toBeEnabled();
     expect(screen.getByText('25')).toBeInTheDocument();
     expect(screen.getByText('¥2,900')).toBeInTheDocument();
+  });
+});
+
+describe('SupplierMasterView — 発注書の印刷済みロック', () => {
+  it('印刷を押すと、選択中の明細の id で onMarkPrinted が呼ばれてから window.print が呼ばれる', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書')); // 山田乳業 (予定は ip1 の1件)
+    await user.click(screen.getByText('印刷'));
+
+    expect(defaultProps.onMarkPrinted).toHaveBeenCalledWith(['ip1']);
+    expect(window.print).toHaveBeenCalled();
+  });
+
+  it('printedAt が付いた明細はチェックできず、合計・「すべて選択」の対象からも外れる', async () => {
+    const user = userEvent.setup();
+    const printedPlan: InboundPlan = { ...PLANS[0], printedAt: '2026-02-01T00:00:00.000Z' };
+    const pendingPlan: InboundPlan = {
+      id: 'ip2', productId: 'p1', expectedDate: d(3), quantity: 5, receivedQuantity: 0,
+      warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: '', supplierId: 'sup-yamada', unitPrice: 100, note: '',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[printedPlan, pendingPlan]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書'));
+
+    const lockedCheckbox = screen.getByRole('checkbox', { name: /印刷済みのため選択できません/ });
+    expect(lockedCheckbox).toBeDisabled();
+    expect(lockedCheckbox).not.toBeChecked();
+    expect(screen.getByText('印刷済み（2026-02-01）')).toBeInTheDocument();
+
+    // 合計・「すべて選択」は未印刷の予定5 (¥500) だけが対象 (印刷済みの残20・¥2,400は含まれない)
+    expect(screen.getByRole('checkbox', { name: 'すべて選択' })).toBeChecked();
+    expect(screen.getAllByText('5')).toHaveLength(2); // 明細行・合計行
+    expect(screen.getAllByText('¥500')).toHaveLength(2);
   });
 });

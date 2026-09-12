@@ -214,6 +214,13 @@ describe('purchaseOrderRows / purchaseOrderTotals', () => {
     expect(rows).toEqual([]);
   });
 
+  it('printedAt が付いていても除外しない (画面側でチェック不可にする判断に使う)', () => {
+    const rows = purchaseOrderRows([
+      plan({ id: '1', supplierId: 'sup-yamada', printedAt: '2026-01-05T00:00:00.000Z' }),
+    ], products, 'sup-yamada');
+    expect(rows.map(r => r.plan.id)).toEqual(['1']);
+  });
+
   it('件数・数量・金額を合計する', () => {
     const rows = purchaseOrderRows([
       plan({ id: '1', productId: 'p1', quantity: 10, unitPrice: 100, supplierId: 'sup-yamada' }),
@@ -349,6 +356,28 @@ describe('useInventory — 入荷予定の作成・編集', () => {
     act(() => { result.current.deleteInboundPlan(target.id); });
 
     expect(result.current.inboundPlans.find(p => p.id === target.id)).toBeUndefined();
+  });
+
+  it('markInboundPlansPrinted で指定した予定にだけ printedAt が付く', () => {
+    const { result } = renderHook(() => useInventory());
+    act(() => { result.current.addInboundPlan(INPUT); });
+    act(() => { result.current.addInboundPlan(INPUT); });
+    const [target, other] = result.current.inboundPlans.slice(-2);
+    expect(target.printedAt).toBeUndefined();
+
+    act(() => { result.current.markInboundPlansPrinted([target.id]); });
+
+    expect(result.current.inboundPlans.find(p => p.id === target.id)!.printedAt).toEqual(expect.any(String));
+    expect(result.current.inboundPlans.find(p => p.id === other.id)!.printedAt).toBeUndefined();
+  });
+
+  it('markInboundPlansPrinted は空配列なら何もしない', () => {
+    const { result } = renderHook(() => useInventory());
+    const before = result.current.inboundPlans;
+
+    act(() => { result.current.markInboundPlansPrinted([]); });
+
+    expect(result.current.inboundPlans).toBe(before);
   });
 
   it('addInboundPlans は複数の予定をまとめて追加し、数量0の入力は落とす', () => {

@@ -39,6 +39,7 @@ interface Props {
   products: Product[];
   warehouses: Warehouse[];
   onAddPlan: (data: InboundPlanInput) => void;
+  onMarkPrinted: (ids: string[]) => void;
   onClose: () => void;
 }
 
@@ -54,6 +55,12 @@ interface Props {
  * している。選択状態は「外した id の集合」として持つ（新しく増えた行や明細追加で作った行が
  * 自動的にチェック済みになるように — 何もしなければ全部選択されているのが基本）。
  *
+ * 「印刷」を押すと、そのとき選択されている明細の id を `onMarkPrinted`（＝
+ * `markInboundPlansPrinted`）に渡して `plan.printedAt` を記録してから `window.print()` を呼ぶ。
+ * `printedAt` が付いた明細は次に発注書を開いたときチェックできない（二重発注の防止）。
+ * 実際に印刷ダイアログで印刷したか・キャンセルしたかまでは検知できないので、
+ * 「印刷ボタンを押した = 発注書として出した」という簡略化した扱いにしている。
+ *
  * ブラウザの印刷機能 (window.print) を使い、`.po-print-area` だけを印刷するよう
  * App.css の @media print で他の要素を隠す。PDF化はブラウザの「PDFに保存」を使う想定なので、
  * 専用ライブラリは追加しない。
@@ -61,7 +68,7 @@ interface Props {
  * 他のモーダルと違い document.body に直接ポータルする。印刷時は #root ごと隠すので、
  * アプリ本体の中に留めると（非表示でも高さは残るため）印刷が無駄に複数ページに分かれてしまう。
  */
-export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAddPlan, onClose }: Props) {
+export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAddPlan, onMarkPrinted, onClose }: Props) {
   const [sender, setSender] = useState<SenderInfo>(loadSenderInfo);
   const [orderDate, setOrderDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [newLine, setNewLine] = useState(() => ({
@@ -90,11 +97,17 @@ export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAdd
     });
   };
 
-  const excludedInRows = rows.filter(r => excludedIds.has(r.plan.id));
-  const allSelected = rows.length > 0 && excludedInRows.length === 0;
-  const toggleAll = () => setExcludedIds(allSelected ? new Set(rows.map(r => r.plan.id)) : new Set());
+  // 発注書として印刷済みの明細はチェックできない (二重発注の防止)。「すべて選択」も
+  // 印刷済み以外の行だけを対象にする
+  const selectableRows = rows.filter(r => !r.plan.printedAt);
+  const excludedInSelectable = selectableRows.filter(r => excludedIds.has(r.plan.id));
+  const allSelected = selectableRows.length > 0 && excludedInSelectable.length === 0;
+  const toggleAll = () => setExcludedIds(allSelected ? new Set(selectableRows.map(r => r.plan.id)) : new Set());
 
-  const selectedRows = useMemo(() => rows.filter(r => !excludedIds.has(r.plan.id)), [rows, excludedIds]);
+  const selectedRows = useMemo(
+    () => rows.filter(r => !r.plan.printedAt && !excludedIds.has(r.plan.id)),
+    [rows, excludedIds],
+  );
   const totals = useMemo(() => purchaseOrderTotals(selectedRows), [selectedRows]);
 
   const canAddLine = newLine.productId !== '' && newLine.quantity > 0 && newLine.warehouseId !== '';
@@ -112,6 +125,12 @@ export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAdd
       note: '',
     });
     setNewLine(l => ({ ...l, quantity: 0 })); // 商品・倉庫・単価・日付は続けて追加しやすいよう残す
+  };
+
+  const handlePrint = () => {
+    if (selectedRows.length === 0) return;
+    onMarkPrinted(selectedRows.map(r => r.plan.id));
+    window.print();
   };
 
   return createPortal(
@@ -221,15 +240,27 @@ export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAdd
                 </thead>
                 <tbody>
                   {rows.map(r => {
-                    const excluded = excludedIds.has(r.plan.id);
+                    const locked = !!r.plan.printedAt;
+                    const checked = !locked && !excludedIds.has(r.plan.id);
                     return (
-                      <tr key={r.plan.id} className={excluded ? 'po-row-excluded no-print' : ''}>
+                      <tr key={r.plan.id} className={checked ? '' : 'po-row-excluded no-print'}>
                         <td className="po-check-col no-print">
-                          <input type="checkbox" checked={!excluded} onChange={() => toggleRow(r.plan.id)} aria-label={`${r.productName}（${r.plan.expectedDate}）を印刷対象にする`} />
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={locked}
+                            onChange={() => toggleRow(r.plan.id)}
+                            aria-label={locked
+                              ? `${r.productName}（${r.plan.expectedDate}）はすでに発注書で印刷済みのため選択できません`
+                              : `${r.productName}（${r.plan.expectedDate}）を印刷対象にする`}
+                          />
                         </td>
                         <td>{r.productName}</td>
                         <td className="mono">{r.productSku}</td>
-                        <td className="mono">{r.plan.expectedDate}</td>
+                        <td className="mono">
+                          {r.plan.expectedDate}
+                          {locked && <span className="label-hint"> 印刷済み（{r.plan.printedAt!.slice(0, 10)}）</span>}
+                        </td>
                         <td style={{ textAlign: 'right' }}>{r.quantity.toLocaleString()}</td>
                         <td style={{ textAlign: 'right' }}>{r.unitPrice > 0 ? `¥${r.unitPrice.toLocaleString()}` : '—'}</td>
                         <td style={{ textAlign: 'right' }}>{r.amount > 0 ? `¥${r.amount.toLocaleString()}` : '—'}</td>
@@ -253,7 +284,7 @@ export function PurchaseOrderModal({ supplier, rows, products, warehouses, onAdd
 
         <div className="modal-actions no-print">
           <button type="button" className="btn-secondary" onClick={onClose}>閉じる</button>
-          <button type="button" className="btn-primary" disabled={selectedRows.length === 0} onClick={() => window.print()}>印刷</button>
+          <button type="button" className="btn-primary" disabled={selectedRows.length === 0} onClick={handlePrint}>印刷</button>
         </div>
       </div>
     </div>,

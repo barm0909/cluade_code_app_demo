@@ -107,6 +107,7 @@ export interface InboundPlan {
   unitPrice: number; // 仕入単価 (円)。0 は未入力
   note: string;
   canceledAt?: string; // キャンセル日時 (ISO)。未設定なら有効な予定
+  printedAt?: string; // 発注書として印刷した日時 (ISO)。未設定なら未印刷
   createdAt: string;
   updatedAt: string;
 }
@@ -2342,6 +2343,20 @@ export function useInventory() {
     });
   }, []);
 
+  // 発注書として印刷したことを記録する (PurchaseOrderModal の「印刷」ボタンから、
+  // 選択中の明細の id をまとめて渡す)。印刷済みの明細は次に発注書を開いたとき
+  // チェックできなくする (purchaseOrderRows 自体は前回印刷したかを見ないため)。
+  // 在庫は動かないので帳票には何も記録しない
+  const markInboundPlansPrinted = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setInboundPlans(prev => {
+      const idSet = new Set(ids);
+      const now = new Date().toISOString();
+      const next = prev.map(p => idSet.has(p.id) ? { ...p, printedAt: now, updatedAt: now } : p);
+      saveInboundPlans(next); return next;
+    });
+  }, []);
+
   /**
    * 入荷予定にもとづく入荷。予定のロットへ在庫を積み、帳票に 入荷 を1件記録する。
    * 引当先の決定は planReceipt (純粋関数) に任せ、ここでは在庫・予定・帳票の更新だけを行う。
@@ -2687,5 +2702,5 @@ export function useInventory() {
     saveInboundPlans(freshPlans);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, markInboundPlansPrinted, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier };
 }
