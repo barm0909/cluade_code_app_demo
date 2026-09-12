@@ -161,7 +161,16 @@ JANコードは入力しながら自動整形されます（全角数字→半�
 行の「発注書」ボタンを押すと、その仕入先あての発注書のプレビューが開きます。
 入荷待ちの予定が1件もない仕入先でも、新しく発注を組むために押せます。
 
-- 明細はその仕入先の**未入荷・一部入荷の入荷予定**（入荷予定日の早い順）で、数量は残数（まだ入荷していない分）です
+- 明細候補はその仕入先の**未入荷・一部入荷の入荷予定**（入荷予定日の早い順）**全部**で、数量は残数（まだ入荷していない分）です
+- 各行にチェックボックスがあり、**チェックが入っている行だけが印刷・合計の対象**です。開いた直後は
+  （まだ印刷していない明細が）全行チェック済みで、外したい行だけチェックを外してください。
+  ヘッダーの「すべて選択」で一括切替もできます。1件もチェックしていないと「印刷」ボタンは押せません
+- **一度「印刷」した明細は、次に発注書を開いてもチェックできなくなります**（行に「印刷済み
+  （日付）」と表示され、チェックボックスも押せません）。同じ発注をうっかり二重に印刷してしまうのを防ぐためで、
+  解除する操作はありません。「印刷ボタンを押した」時点で印刷済みとして扱うため、印刷ダイアログを
+  キャンセルした場合も印刷済みになります
+- 印刷した内容は**発注履歴タブ**にも記録され、あとから同じ内容を再表示・再印刷できます。詳しくは
+  [purchase-order-history.md](purchase-order-history.md) を参照してください
 - 宛先（仕入先名・住所・連絡先）は仕入先マスタの内容がそのまま入ります
 - 発注元（自社名・住所・電話・担当者）と発注日は画面上で入力・変更できます。
   自社の情報は**この端末のブラウザに保存**され、次回発注書を開いたときも残ります
@@ -194,7 +203,8 @@ JANコードは入力しながら自動整形されます（全角数字→半�
   `src/SupplierMasterView.tsx`（＋登録・編集ダイアログ `src/SupplierModal.tsx`、発注書 `src/PurchaseOrderModal.tsx`）。
   すべて商品マスタタブに縦並び
 - 更新処理：`src/useInventory.ts` の `updateProduct` / `deleteProduct` / `add|update|deleteCategory` /
-  `add|update|deleteWarehouse` / `add|update|deleteSupplier`
+  `add|update|deleteWarehouse` / `add|update|deleteSupplier` / `printPurchaseOrder`（発注書の印刷。
+  印刷済みロックと発注履歴への記録を1回で行う。詳しくは [purchase-order-history.md](purchase-order-history.md)）
 - JANコードの整形・検証：`normalizeJanCode` / `isValidJanCode`
 - 仕入先の入力チェック：`supplierValidationError`（画面と更新処理が共有）。仕様の詳細は
   [../supplier-feature.md](../supplier-feature.md)

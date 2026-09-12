@@ -1,9 +1,10 @@
 -- 開発用サンプルデータ (useInventory.ts の SAMPLE_DATA / SAMPLE_INBOUND_PLANS / DEFAULT_CATEGORIES /
 -- DEFAULT_SUPPLIERS と同期)
 -- アプリ同様に賞味期限を実行日からの相対日付で生成する (date('now', ...) は SQLite 組み込み)
--- 再実行できるよう、投入前に既存の商品・ロット・帳票・カテゴリ・入荷予定・仕入先を全削除する
+-- 再実行できるよう、投入前に既存の商品・ロット・帳票・カテゴリ・入荷予定・仕入先・発注履歴を全削除する
 
 DELETE FROM stock_transactions;
+DELETE FROM purchase_order_prints;
 DELETE FROM inbound_plans;
 DELETE FROM lots;
 DELETE FROM products;

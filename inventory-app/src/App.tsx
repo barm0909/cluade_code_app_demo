@@ -9,6 +9,7 @@ import { InboundPlanView } from './InboundPlanView';
 import { LedgerView } from './LedgerView';
 import { LotTraceView } from './LotTraceView';
 import { CostHistoryView } from './CostHistoryView';
+import { PurchaseOrderHistoryView } from './PurchaseOrderHistoryView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
@@ -155,7 +156,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -168,7 +169,7 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger' | 'trace' | 'cost'>('inventory');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger' | 'trace' | 'cost' | 'poHistory'>('inventory');
   // ロット追跡タブで追跡中のロット。在庫一覧の「追跡」ボタンからも指定される
   const [traceTarget, setTraceTarget] = useState<LotTraceKey | null>(null);
   const { confirm, confirmDialog } = useConfirm();
@@ -293,6 +294,7 @@ export default function App() {
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
         <button className={activeTab === 'trace' ? 'tab active' : 'tab'} onClick={() => setActiveTab('trace')}>ロット追跡</button>
         <button className={activeTab === 'cost' ? 'tab active' : 'tab'} onClick={() => setActiveTab('cost')}>原価履歴</button>
+        <button className={activeTab === 'poHistory' ? 'tab active' : 'tab'} onClick={() => setActiveTab('poHistory')}>発注履歴</button>
       </div>
 
       {activeTab === 'dashboard' ? (
@@ -330,13 +332,15 @@ export default function App() {
         />
       ) : activeTab === 'cost' ? (
         <CostHistoryView ledger={ledger} suppliers={suppliers} />
+      ) : activeTab === 'poHistory' ? (
+        <PurchaseOrderHistoryView prints={purchaseOrderPrints} suppliers={suppliers} />
       ) : activeTab === 'stocktake' ? (
         <StocktakeView products={products} categories={categories} warehouses={warehouses} onApply={applyStocktake} />
       ) : activeTab === 'master' ? (<>
         <ProductMasterView products={products} categories={categories} onUpdate={updateProduct} onDelete={deleteProduct} onAddClick={() => setEditingProduct('new')} />
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
         <WarehouseMasterView warehouses={warehouses} products={products} inboundPlans={inboundPlans} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
-        <SupplierMasterView suppliers={suppliers} inboundPlans={inboundPlans} products={products} warehouses={warehouses} onAdd={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} onAddInboundPlan={addInboundPlan} />
+        <SupplierMasterView suppliers={suppliers} inboundPlans={inboundPlans} products={products} warehouses={warehouses} onAdd={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} onAddInboundPlan={addInboundPlan} onPrint={printPurchaseOrder} />
       </>) : (<>
 
       <div className="controls">

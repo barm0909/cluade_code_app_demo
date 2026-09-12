@@ -9,6 +9,7 @@
 //   PUT /api/ledger       → stock_transactions テーブルを全置換
 //   PUT /api/inbound-plans → inbound_plans テーブルを全置換
 //   PUT /api/suppliers    → suppliers テーブルを全置換
+//   PUT /api/purchase-order-prints → purchase_order_prints テーブルを全置換
 
 export interface Env {
   DB: D1Database;
@@ -93,8 +94,34 @@ interface InboundPlan {
   unitPrice: number;
   note: string;
   canceledAt?: string;
+  printedAt?: string; // 発注書として印刷した日時。未設定なら未印刷
   createdAt: string;
   updatedAt: string;
+}
+
+// 発注書の印刷履歴。1回の印刷操作 (= 1枚の発注書) につき、印刷した明細の数だけ行を持つ
+// (stock_transactions と同じ「1件1行、必要な情報をそのまま持たせる」方針)
+interface PurchaseOrderPrintItem {
+  id: string;
+  printGroupId: string;
+  printedAt: string;
+  supplierId: string;
+  supplierName: string;
+  supplierAddress: string;
+  supplierContact: string;
+  supplierPhone: string;
+  orderDate: string;
+  senderName: string;
+  senderAddress: string;
+  senderPhone: string;
+  senderContact: string;
+  inboundPlanId: string;
+  productName: string;
+  productSku: string;
+  expectedDate: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
 }
 
 interface ProductRow {
@@ -133,6 +160,7 @@ interface InboundPlanRow {
   unit_price: number;
   note: string;
   canceled_at: string | null;
+  printed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -148,6 +176,29 @@ interface SupplierRow {
   lead_time_days: number;
   note: string;
   active: number;
+}
+
+interface PurchaseOrderPrintRow {
+  id: string;
+  print_group_id: string;
+  printed_at: string;
+  supplier_id: string;
+  supplier_name: string;
+  supplier_address: string;
+  supplier_contact: string;
+  supplier_phone: string;
+  order_date: string;
+  sender_name: string;
+  sender_address: string;
+  sender_phone: string;
+  sender_contact: string;
+  inbound_plan_id: string;
+  product_name: string;
+  product_sku: string;
+  expected_date: string;
+  quantity: number;
+  unit_price: number;
+  amount: number;
 }
 
 interface TransactionRow {
@@ -167,14 +218,15 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
     db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id FROM stock_transactions ORDER BY date DESC'),
-    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
+    db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
+    db.prepare('SELECT id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount FROM purchase_order_prints ORDER BY printed_at DESC'),
   ]);
 
   const lotsByProduct = new Map<string, Lot[]>();
@@ -241,11 +293,12 @@ async function readState(db: D1Database) {
     unitPrice: r.unit_price,
     note: r.note,
     ...(r.canceled_at != null ? { canceledAt: r.canceled_at } : {}),
+    ...(r.printed_at != null ? { printedAt: r.printed_at } : {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
 
-  const suppliers: Supplier[] = (suppliersRes.results as unknown as SupplierRow[]).map(r => ({
+  const suppliers: Supplier[] =(suppliersRes.results as unknown as SupplierRow[]).map(r => ({
     id: r.id,
     name: r.name,
     code: r.code,
@@ -258,7 +311,30 @@ async function readState(db: D1Database) {
     active: r.active !== 0,
   }));
 
-  return { products, warehouses, categories, ledger, inboundPlans, suppliers };
+  const purchaseOrderPrints: PurchaseOrderPrintItem[] = (poPrintsRes.results as unknown as PurchaseOrderPrintRow[]).map(r => ({
+    id: r.id,
+    printGroupId: r.print_group_id,
+    printedAt: r.printed_at,
+    supplierId: r.supplier_id,
+    supplierName: r.supplier_name,
+    supplierAddress: r.supplier_address,
+    supplierContact: r.supplier_contact,
+    supplierPhone: r.supplier_phone,
+    orderDate: r.order_date,
+    senderName: r.sender_name,
+    senderAddress: r.sender_address,
+    senderPhone: r.sender_phone,
+    senderContact: r.sender_contact,
+    inboundPlanId: r.inbound_plan_id,
+    productName: r.product_name,
+    productSku: r.product_sku,
+    expectedDate: r.expected_date,
+    quantity: r.quantity,
+    unitPrice: r.unit_price,
+    amount: r.amount,
+  }));
+
+  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -322,10 +398,10 @@ async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
 async function replaceInboundPlans(db: D1Database, plans: InboundPlan[]) {
   const stmts = [db.prepare('DELETE FROM inbound_plans')];
   const insert = db.prepare(
-    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const p of plans) {
-    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.unitPrice ?? 0, p.note, p.canceledAt ?? null, p.createdAt, p.updatedAt));
+    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.unitPrice ?? 0, p.note, p.canceledAt ?? null, p.printedAt ?? null, p.createdAt, p.updatedAt));
   }
   await db.batch(stmts);
 }
@@ -339,6 +415,23 @@ async function replaceSuppliers(db: D1Database, suppliers: Supplier[]) {
   );
   for (const s of suppliers) {
     stmts.push(insert.bind(s.id, s.name, s.code, s.contact, s.phone, s.email, s.address, s.leadTimeDays, s.note, s.active ? 1 : 0));
+  }
+  await db.batch(stmts);
+}
+
+// purchase_order_prints を全置換。追記専用の履歴だが、他のスライスと同じ
+// 「全量取得→全量保存」の方式に合わせている (products / suppliers と同じ理由で外部キーは張らない)
+async function replacePurchaseOrderPrints(db: D1Database, prints: PurchaseOrderPrintItem[]) {
+  const stmts = [db.prepare('DELETE FROM purchase_order_prints')];
+  const insert = db.prepare(
+    'INSERT INTO purchase_order_prints (id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const p of prints) {
+    stmts.push(insert.bind(
+      p.id, p.printGroupId, p.printedAt, p.supplierId, p.supplierName, p.supplierAddress, p.supplierContact, p.supplierPhone,
+      p.orderDate, p.senderName, p.senderAddress, p.senderPhone, p.senderContact,
+      p.inboundPlanId, p.productName, p.productSku, p.expectedDate, p.quantity, p.unitPrice, p.amount,
+    ));
   }
   await db.batch(stmts);
 }
@@ -367,6 +460,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/suppliers':
           await replaceSuppliers(env.DB, await request.json<Supplier[]>());
+          return Response.json({ ok: true });
+        case '/api/purchase-order-prints':
+          await replacePurchaseOrderPrints(env.DB, await request.json<PurchaseOrderPrintItem[]>());
           return Response.json({ ok: true });
       }
     }

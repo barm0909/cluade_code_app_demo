@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import type { InboundPlan, InboundPlanInput, Product, Supplier, SupplierInput, Warehouse } from './useInventory';
-import { csvExportHint, csvExportLabel, exportSupplierCsv, purchaseOrderRows, purchaseOrderTotals, supplierRows } from './useInventory';
+import type { InboundPlan, InboundPlanInput, PrintPurchaseOrderInput, Product, Supplier, SupplierInput, Warehouse } from './useInventory';
+import { csvExportHint, csvExportLabel, exportSupplierCsv, purchaseOrderRows, supplierRows } from './useInventory';
 import { SupplierModal } from './SupplierModal';
 import { PurchaseOrderModal } from './PurchaseOrderModal';
 import { useConfirm } from './useConfirm';
@@ -14,6 +14,7 @@ interface Props {
   onUpdate: (id: string, data: SupplierInput) => void;
   onDelete: (id: string) => void;
   onAddInboundPlan: (data: InboundPlanInput) => void;
+  onPrint: (input: PrintPurchaseOrderInput) => void;
 }
 
 /**
@@ -21,7 +22,7 @@ interface Props {
  * 一覧の絞り込みと入荷予定の集計は純粋関数 supplierRows に任せ、この画面は表示と
  * 操作の受け渡しだけを持つ (他のマスタ・一覧画面と同じ構成)。
  */
-export function SupplierMasterView({ suppliers, inboundPlans, products, warehouses, onAdd, onUpdate, onDelete, onAddInboundPlan }: Props) {
+export function SupplierMasterView({ suppliers, inboundPlans, products, warehouses, onAdd, onUpdate, onDelete, onAddInboundPlan, onPrint }: Props) {
   const [keyword, setKeyword] = useState('');
   const [showInactive, setShowInactive] = useState(true);
   // 編集対象は id で持ち、常に最新の仕入先を引き直す
@@ -41,7 +42,6 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, warehous
     () => poSupplier ? purchaseOrderRows(inboundPlans, products, poSupplier.id) : [],
     [inboundPlans, products, poSupplier],
   );
-  const poTotals = useMemo(() => purchaseOrderTotals(poRows), [poRows]);
 
   return (
     <section className="supplier-master">
@@ -165,10 +165,10 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, warehous
         <PurchaseOrderModal
           supplier={poSupplier}
           rows={poRows}
-          totals={poTotals}
           products={products}
           warehouses={warehouses}
           onAddPlan={onAddInboundPlan}
+          onPrint={onPrint}
           onClose={() => setPoSupplierId(null)}
         />
       )}

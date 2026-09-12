@@ -214,6 +214,13 @@ describe('purchaseOrderRows / purchaseOrderTotals', () => {
     expect(rows).toEqual([]);
   });
 
+  it('printedAt が付いていても除外しない (画面側でチェック不可にする判断に使う)', () => {
+    const rows = purchaseOrderRows([
+      plan({ id: '1', supplierId: 'sup-yamada', printedAt: '2026-01-05T00:00:00.000Z' }),
+    ], products, 'sup-yamada');
+    expect(rows.map(r => r.plan.id)).toEqual(['1']);
+  });
+
   it('件数・数量・金額を合計する', () => {
     const rows = purchaseOrderRows([
       plan({ id: '1', productId: 'p1', quantity: 10, unitPrice: 100, supplierId: 'sup-yamada' }),
@@ -349,6 +356,60 @@ describe('useInventory — 入荷予定の作成・編集', () => {
     act(() => { result.current.deleteInboundPlan(target.id); });
 
     expect(result.current.inboundPlans.find(p => p.id === target.id)).toBeUndefined();
+  });
+
+  it('printPurchaseOrder で選択した予定にだけ printedAt が付き、purchaseOrderPrints に履歴が追加される', () => {
+    const { result } = renderHook(() => useInventory());
+    act(() => { result.current.addInboundPlan(INPUT); });
+    act(() => { result.current.addInboundPlan(INPUT); });
+    const [target, other] = result.current.inboundPlans.slice(-2);
+    const rows = purchaseOrderRows(result.current.inboundPlans, result.current.products, 'sup-yamada')
+      .filter(r => r.plan.id === target.id);
+
+    act(() => {
+      result.current.printPurchaseOrder({
+        supplier: supplier('sup-yamada', '山田商店'),
+        orderDate: '2026-03-01',
+        sender: { name: '自社商店', address: '東京都', phone: '03-0000-0000', contact: '担当太郎' },
+        rows,
+      });
+    });
+
+    expect(result.current.inboundPlans.find(p => p.id === target.id)!.printedAt).toEqual(expect.any(String));
+    expect(result.current.inboundPlans.find(p => p.id === other.id)!.printedAt).toBeUndefined();
+
+    expect(result.current.purchaseOrderPrints).toHaveLength(1);
+    expect(result.current.purchaseOrderPrints[0]).toMatchObject({
+      supplierId: 'sup-yamada',
+      supplierName: '山田商店',
+      orderDate: '2026-03-01',
+      senderName: '自社商店',
+      senderAddress: '東京都',
+      inboundPlanId: target.id,
+      productName: '牛乳',
+      productSku: 'ML-001',
+      quantity: 12,
+      unitPrice: 125,
+      amount: 1500,
+    });
+  });
+
+  it('printPurchaseOrder は明細が空なら何もしない', () => {
+    const { result } = renderHook(() => useInventory());
+    const beforePlans = result.current.inboundPlans;
+    const beforePrints = result.current.purchaseOrderPrints;
+
+    act(() => {
+      result.current.printPurchaseOrder({
+        supplier: supplier('sup-yamada', '山田商店'),
+        orderDate: '2026-03-01',
+        sender: { name: '', address: '', phone: '', contact: '' },
+        rows: [],
+      });
+    });
+
+    expect(result.current.inboundPlans).toBe(beforePlans);
+    expect(result.current.purchaseOrderPrints).toBe(beforePrints);
   });
 
   it('addInboundPlans は複数の予定をまとめて追加し、数量0の入力は落とす', () => {

@@ -50,11 +50,13 @@ const defaultProps = {
   onUpdate: vi.fn(),
   onDelete: vi.fn(),
   onAddInboundPlan: vi.fn(),
+  onPrint: vi.fn(),
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  vi.spyOn(window, 'print').mockImplementation(() => {});
 });
 
 const supplierRows = () => within(screen.getByRole('table')).getAllByRole('row').slice(1);
@@ -257,6 +259,98 @@ describe('SupplierMasterView — 発注書', () => {
 
     expect(screen.queryByText('発注が必要な入荷予定がありません。')).not.toBeInTheDocument();
     // 10 × 50円 = 500円 (明細行・合計行の両方に出る)
+    expect(screen.getAllByText('¥500')).toHaveLength(2);
+  });
+});
+
+describe('SupplierMasterView — 発注書のチェックボックス選択', () => {
+  const PLAN2: InboundPlan = {
+    id: 'ip2', productId: 'p1', expectedDate: d(3), quantity: 5, receivedQuantity: 0,
+    warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: '', supplierId: 'sup-yamada', unitPrice: 100, note: '',
+    createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('デフォルトは全行選択済みで、合計は全行分になる', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[...PLANS, PLAN2]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書')); // 山田乳業
+
+    // 残20 (単価120→¥2,400) + 予定5 (単価100→¥500) = 数量25・金額¥2,900
+    expect(screen.getByRole('checkbox', { name: 'すべて選択' })).toBeChecked();
+    expect(screen.getByText('25')).toBeInTheDocument();
+    expect(screen.getByText('¥2,900')).toBeInTheDocument();
+  });
+
+  it('行のチェックを外すとその行が合計から除かれ、印刷ボタンはそのまま有効', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[...PLANS, PLAN2]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書'));
+    await user.click(screen.getByRole('checkbox', { name: new RegExp(d(3)) })); // 2行目 (予定5) を除外
+
+    // 合計は1行目分だけになり、1行目自身の表示 (20 / ¥2,400) と合わせて2箇所ずつになる
+    expect(screen.getAllByText('20')).toHaveLength(2);
+    expect(screen.getAllByText('¥2,400')).toHaveLength(2);
+    expect(screen.getByRole('checkbox', { name: 'すべて選択' })).not.toBeChecked();
+    expect(screen.getByText('印刷')).toBeEnabled();
+  });
+
+  it('全部チェックを外すと印刷ボタンが無効になり、「すべて選択」で全部戻る', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[...PLANS, PLAN2]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書'));
+    await user.click(screen.getByRole('checkbox', { name: new RegExp(d(-1)) }));
+    await user.click(screen.getByRole('checkbox', { name: new RegExp(d(3)) }));
+
+    expect(screen.getByText('印刷')).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox', { name: 'すべて選択' }));
+
+    expect(screen.getByText('印刷')).toBeEnabled();
+    expect(screen.getByText('25')).toBeInTheDocument();
+    expect(screen.getByText('¥2,900')).toBeInTheDocument();
+  });
+});
+
+describe('SupplierMasterView — 発注書の印刷済みロック', () => {
+  it('印刷を押すと、選択中の明細・仕入先・発注元情報で onPrint が呼ばれてから window.print が呼ばれる', async () => {
+    const user = userEvent.setup();
+    render(<SupplierMasterView {...defaultProps} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書')); // 山田乳業 (予定は ip1 の1件)
+    await user.click(screen.getByText('印刷'));
+
+    expect(defaultProps.onPrint).toHaveBeenCalledWith(expect.objectContaining({
+      supplier: expect.objectContaining({ id: 'sup-yamada' }),
+      orderDate: expect.any(String),
+      sender: expect.objectContaining({ name: '', address: '', phone: '', contact: '' }),
+      rows: [expect.objectContaining({ plan: expect.objectContaining({ id: 'ip1' }) })],
+    }));
+    expect(window.print).toHaveBeenCalled();
+  });
+
+  it('printedAt が付いた明細はチェックできず、合計・「すべて選択」の対象からも外れる', async () => {
+    const user = userEvent.setup();
+    const printedPlan: InboundPlan = { ...PLANS[0], printedAt: '2026-02-01T00:00:00.000Z' };
+    const pendingPlan: InboundPlan = {
+      id: 'ip2', productId: 'p1', expectedDate: d(3), quantity: 5, receivedQuantity: 0,
+      warehouseId: DEFAULT_WAREHOUSE_ID, lotNo: '', supplierId: 'sup-yamada', unitPrice: 100, note: '',
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    render(<SupplierMasterView {...defaultProps} inboundPlans={[printedPlan, pendingPlan]} />);
+
+    await user.click(within(supplierRows()[0]).getByText('発注書'));
+
+    const lockedCheckbox = screen.getByRole('checkbox', { name: /印刷済みのため選択できません/ });
+    expect(lockedCheckbox).toBeDisabled();
+    expect(lockedCheckbox).not.toBeChecked();
+    expect(screen.getByText('印刷済み（2026-02-01）')).toBeInTheDocument();
+
+    // 合計・「すべて選択」は未印刷の予定5 (¥500) だけが対象 (印刷済みの残20・¥2,400は含まれない)
+    expect(screen.getByRole('checkbox', { name: 'すべて選択' })).toBeChecked();
+    expect(screen.getAllByText('5')).toHaveLength(2); // 明細行・合計行
     expect(screen.getAllByText('¥500')).toHaveLength(2);
   });
 });
