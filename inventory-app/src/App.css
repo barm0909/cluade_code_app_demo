@@ -541,3 +541,12 @@ tr:hover td { background: #fafbff; }
   .po-print-area { border: none; padding: 0; }
   .no-print { display: none !important; }
 }
+
+/* 在庫分析: ABCランクのバッジ。A=売れ筋(緑) → C=動きが鈍い(灰) の順に彩度を落とす */
+.abc-badge {
+  display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 10px;
+  font-size: 0.78rem; font-weight: 700; text-align: center;
+}
+.abc-badge.abc-a { background: #e6f4ea; color: #2e7d32; }
+.abc-badge.abc-b { background: #fff4e0; color: #b26a00; }
+.abc-badge.abc-c { background: #eeeeee; color: #757575; }

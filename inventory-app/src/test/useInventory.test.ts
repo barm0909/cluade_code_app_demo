@@ -443,6 +443,67 @@ describe('useInventory — disposeLots（一括廃棄）', () => {
   });
 });
 
+describe('useInventory — applyMinQuantities（発注点の一括更新）', () => {
+  // 発注点の違う商品を2件用意する
+  const setup = () => {
+    const hook = renderHook(() => useInventory());
+    act(() => {
+      hook.result.current.addProduct({ name: '発注点A', sku: 'MQ-001', categoryId: 'cat-food', minQuantity: 5, price: 100, costPrice: 50 });
+      hook.result.current.addProduct({ name: '発注点B', sku: 'MQ-002', categoryId: 'cat-food', minQuantity: 20, price: 100, costPrice: 50 });
+    });
+    const a = hook.result.current.products.find(p => p.sku === 'MQ-001')!;
+    const b = hook.result.current.products.find(p => p.sku === 'MQ-002')!;
+    return { result: hook.result, a, b };
+  };
+
+  it('複数商品の発注点をまとめて更新し、更新できた件数を返す', () => {
+    const { result, a, b } = setup();
+
+    let applied = 0;
+    act(() => {
+      applied = result.current.applyMinQuantities([
+        { productId: a.id, minQuantity: 17 },
+        { productId: b.id, minQuantity: 4 },
+      ]);
+    });
+
+    expect(applied).toBe(2);
+    expect(result.current.products.find(p => p.id === a.id)!.minQuantity).toBe(17);
+    expect(result.current.products.find(p => p.id === b.id)!.minQuantity).toBe(4);
+  });
+
+  it('在庫は動かないので帳票には何も書かれない', () => {
+    const { result, a } = setup();
+    const before = result.current.ledger.length;
+
+    act(() => { result.current.applyMinQuantities([{ productId: a.id, minQuantity: 9 }]); });
+
+    expect(result.current.ledger.length).toBe(before);
+  });
+
+  it('値が変わらない商品・存在しない商品は数えない', () => {
+    const { result, a } = setup();
+
+    let applied = 0;
+    act(() => {
+      applied = result.current.applyMinQuantities([
+        { productId: a.id, minQuantity: a.minQuantity }, // 同じ値
+        { productId: 'not-exist', minQuantity: 3 },
+      ]);
+    });
+
+    expect(applied).toBe(0);
+  });
+
+  it('負の値は無視する', () => {
+    const { result, a } = setup();
+
+    act(() => { result.current.applyMinQuantities([{ productId: a.id, minQuantity: -1 }]); });
+
+    expect(result.current.products.find(p => p.id === a.id)!.minQuantity).toBe(5);
+  });
+});
+
 describe('useInventory — resetToSample', () => {
   it('resetToSample でサンプルデータに戻る', () => {
     const { result } = renderHook(() => useInventory());
