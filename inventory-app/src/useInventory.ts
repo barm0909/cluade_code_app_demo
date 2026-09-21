@@ -483,6 +483,7 @@ export const CSV_EXPORTS = {
   supplier: { label: '仕入先一覧', description: '仕入先マスタと入荷予定の状況' },
   costHistory: { label: '原価履歴', description: '入荷時に記録された仕入単価の履歴' },
   purchaseOrderHistory: { label: '発注履歴', description: '発注書として印刷した明細の履歴' },
+  analysis: { label: '在庫分析', description: 'ABCランク・在庫回転率・滞留日数の商品別一覧' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -2166,6 +2167,368 @@ export function exportLotTraceCsv(trace: LotTrace, warehouses: Warehouse[]) {
   downloadCsv(csvFileName('trace'), lotTraceCsv(trace, warehouses));
 }
 
+// ---------------------------------------------------------------------------
+// 在庫分析 (ABC分析・在庫回転率・滞留在庫・発注点の見直し提案)
+// 専用の永続データは持たず、廃棄ロス集計・原価履歴と同じく「商品マスタ × 帳票」から
+// 組み立てる読み取り専用の集計。唯一の例外が発注点の見直し提案で、これだけは
+// Product.minQuantity を書き換えられる (在庫は動かないので帳票には何も書かない)。
+//
+// 金額はすべて原価ベース。現在庫は lotUnitCost (ロットの実原価) で評価するが、
+// 出庫金額は帳票に単価が残っていない区分があるため「出庫数 × 商品の現在の原価」の
+// 概算になる (廃棄ロス金額のフォールバックと同じ割り切り)。
+// ---------------------------------------------------------------------------
+
+/** 分析の対象期間 (日)。画面で切り替える */
+export const ANALYSIS_PERIODS = [30, 90, 180, 365] as const;
+export type AnalysisPeriod = typeof ANALYSIS_PERIODS[number];
+export const DEFAULT_ANALYSIS_PERIOD: AnalysisPeriod = 90;
+
+/** 「最終出庫からこの日数以上動いていなければ滞留」とみなすしきい値 (日)。画面で切り替える */
+export const STAGNANT_THRESHOLDS = [30, 60, 90] as const;
+export const DEFAULT_STAGNANT_DAYS = 60;
+
+/** ABC分析の境目 (出庫金額の累計構成比)。上位70%がA、90%までがB、残りがC */
+export const ABC_A_SHARE = 0.7;
+export const ABC_B_SHARE = 0.9;
+
+export type AbcRank = 'A' | 'B' | 'C';
+
+/**
+ * 分析期間の開始日 (ローカル日付 YYYY-MM-DD, この日を含む)。
+ * days = 90 なら「今日を含む直近90日」なので 89日前が開始日になる。
+ */
+export function analysisPeriodStart(days: number, today = new Date()): string {
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (Math.max(1, days) - 1));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+}
+
+/** ローカル日付キー (YYYY-MM-DD) 同士の日数差。to が後なら正 */
+function daysBetweenKeys(from: string, to: string): number {
+  return Math.round((Date.parse(to) - Date.parse(from)) / (1000 * 60 * 60 * 24));
+}
+
+/** 在庫分析の1行 = 1商品 */
+export interface StockAnalysisRow {
+  productId: string;
+  productName: string;
+  productSku: string;
+  categoryId: string;
+  quantity: number; // 現在庫数
+  stockValue: number; // 現在庫金額 (ロットの実原価ベース)
+  outboundQuantity: number; // 期間内の出庫数 (売上出庫 + 調整出庫 + 廃棄)
+  salesQuantity: number; // うち売上出庫の数
+  disposalQuantity: number; // うち廃棄の数
+  outboundValue: number; // 期間内の出庫金額 (原価ベースの概算)
+  share: number; // 出庫金額の構成比 (0〜1)
+  cumulativeShare: number; // 出庫金額の累計構成比 (0〜1)。この行までの合計
+  rank: AbcRank;
+  dailyOutbound: number; // 1日あたりの平均出庫数 = 期間出庫数 ÷ 期間日数
+  turnoverRate: number; // 期間の在庫回転率 = 期間出庫数 ÷ 現在庫数 (在庫0なら0)
+  daysOfStock: number | null; // 在庫日数 = 現在庫数 ÷ 1日あたり出庫数。出庫実績がなければ null (= 減らない)
+  lastOutboundAt: string; // 全期間での最終出庫日時 (ISO)。一度も出ていなければ空文字
+  stagnantDays: number | null; // 最終出庫からの経過日数。一度も出ていなければ null
+}
+
+export interface StockAnalysisOptions {
+  days?: number; // 集計期間 (既定 DEFAULT_ANALYSIS_PERIOD)
+  today?: Date; // 集計の基準日 (既定は今日)。テストで固定するために外から渡せる
+}
+
+/**
+ * 商品ごとに「どれだけ出たか (ABC)」「何日分の在庫を持っているか (回転)」
+ * 「最後に動いたのはいつか (滞留)」をまとめる。状態は変更しない。
+ *
+ * - 出庫数は売上出庫・調整出庫・廃棄の合計 (移動は総在庫を動かさないので数えない)。
+ * - 最終出庫日だけは期間で絞らず全期間の帳票から探す (滞留の判定に期間を切ると、
+ *   期間より前にしか動いていない商品が「出庫実績なし」と区別できなくなるため)。
+ * - 並びは出庫金額の大きい順 (ABCランクを振る順序そのもの)。
+ */
+export function stockAnalysisRows(
+  products: Product[],
+  ledger: StockTransaction[],
+  options: StockAnalysisOptions = {},
+): StockAnalysisRow[] {
+  const { days = DEFAULT_ANALYSIS_PERIOD, today = new Date() } = options;
+  const from = analysisPeriodStart(days, today);
+  const todayKey = localDateKey(today.toISOString());
+  const periodDays = Math.max(1, days);
+
+  const outbound = new Map<string, { total: number; sales: number; disposal: number; lastAt: string }>();
+  for (const t of ledger) {
+    if (transactionDirection(t.type) !== 'out') continue;
+    const entry = outbound.get(t.productId) ?? { total: 0, sales: 0, disposal: 0, lastAt: '' };
+    // 最終出庫日は期間外の記録も見る (滞留日数は「いつから動いていないか」なので期間に縛れない)
+    if (t.date > entry.lastAt) entry.lastAt = t.date;
+    if (localDateKey(t.date) >= from) {
+      entry.total += t.quantity;
+      if (t.type === '売上出庫') entry.sales += t.quantity;
+      if (t.type === '廃棄') entry.disposal += t.quantity;
+    }
+    outbound.set(t.productId, entry);
+  }
+
+  const rows = products.map(p => {
+    const entry = outbound.get(p.id);
+    const quantity = totalQuantity(p);
+    const outboundQuantity = entry?.total ?? 0;
+    const dailyOutbound = outboundQuantity / periodDays;
+    const lastOutboundAt = entry?.lastAt ?? '';
+    return {
+      productId: p.id,
+      productName: p.name,
+      productSku: p.sku,
+      categoryId: p.categoryId,
+      quantity,
+      stockValue: p.lots.reduce((s, l) => s + l.quantity * lotUnitCost(l, p), 0),
+      outboundQuantity,
+      salesQuantity: entry?.sales ?? 0,
+      disposalQuantity: entry?.disposal ?? 0,
+      outboundValue: outboundQuantity * p.costPrice,
+      share: 0,
+      cumulativeShare: 0,
+      rank: 'C' as AbcRank,
+      dailyOutbound,
+      turnoverRate: quantity > 0 ? outboundQuantity / quantity : 0,
+      daysOfStock: dailyOutbound > 0 ? quantity / dailyOutbound : null,
+      lastOutboundAt,
+      stagnantDays: lastOutboundAt ? Math.max(0, daysBetweenKeys(localDateKey(lastOutboundAt), todayKey)) : null,
+    };
+  });
+
+  rows.sort((a, b) =>
+    b.outboundValue - a.outboundValue
+    || b.outboundQuantity - a.outboundQuantity
+    || a.productName.localeCompare(b.productName));
+
+  // 累計構成比で A/B/C を振る。境目をまたぐ商品は上のランクに含める (ABC分析の慣習)
+  const total = rows.reduce((s, r) => s + r.outboundValue, 0);
+  let cumulative = 0;
+  for (const row of rows) {
+    const share = total > 0 ? row.outboundValue / total : 0;
+    const before = cumulative;
+    cumulative += share;
+    row.share = share;
+    row.cumulativeShare = cumulative;
+    // 出庫のなかった商品は構成比0なので、境目の手前にいても C に落とす
+    row.rank = row.outboundValue <= 0 ? 'C' : before < ABC_A_SHARE ? 'A' : before < ABC_B_SHARE ? 'B' : 'C';
+  }
+  return rows;
+}
+
+/** 在庫を抱えたまま thresholdDays 以上出庫のない商品か (出庫実績が一度もないものも滞留扱い) */
+export function isStagnant(row: StockAnalysisRow, thresholdDays: number = DEFAULT_STAGNANT_DAYS): boolean {
+  if (row.quantity <= 0) return false; // 在庫がなければ「滞留している在庫」ではない
+  return row.stagnantDays === null || row.stagnantDays >= thresholdDays;
+}
+
+/** 滞留在庫の一覧。金額の大きい順 (処分の検討はインパクトの大きいものから) */
+export function stagnantRows(rows: StockAnalysisRow[], thresholdDays: number = DEFAULT_STAGNANT_DAYS): StockAnalysisRow[] {
+  return rows
+    .filter(r => isStagnant(r, thresholdDays))
+    .sort((a, b) => b.stockValue - a.stockValue || (b.stagnantDays ?? Infinity) - (a.stagnantDays ?? Infinity));
+}
+
+export interface StockAnalysisTotals {
+  productCount: number;
+  stockValue: number; // 現在庫金額の合計
+  outboundQuantity: number;
+  outboundValue: number; // 期間内の出庫金額の合計
+  daysOfStock: number | null; // 全体の在庫日数 = 在庫金額 ÷ 1日あたり出庫金額。出庫がなければ null
+  rankCounts: Record<AbcRank, number>;
+  stagnantCount: number;
+  stagnantValue: number; // 滞留在庫の金額
+}
+
+export function stockAnalysisTotals(
+  rows: StockAnalysisRow[],
+  options: StockAnalysisOptions & { stagnantDays?: number } = {},
+): StockAnalysisTotals {
+  const { days = DEFAULT_ANALYSIS_PERIOD, stagnantDays = DEFAULT_STAGNANT_DAYS } = options;
+  const totals: StockAnalysisTotals = {
+    productCount: rows.length,
+    stockValue: 0,
+    outboundQuantity: 0,
+    outboundValue: 0,
+    daysOfStock: null,
+    rankCounts: { A: 0, B: 0, C: 0 },
+    stagnantCount: 0,
+    stagnantValue: 0,
+  };
+  for (const r of rows) {
+    totals.stockValue += r.stockValue;
+    totals.outboundQuantity += r.outboundQuantity;
+    totals.outboundValue += r.outboundValue;
+    totals.rankCounts[r.rank]++;
+    if (isStagnant(r, stagnantDays)) {
+      totals.stagnantCount++;
+      totals.stagnantValue += r.stockValue;
+    }
+  }
+  const dailyValue = totals.outboundValue / Math.max(1, days);
+  totals.daysOfStock = dailyValue > 0 ? totals.stockValue / dailyValue : null;
+  return totals;
+}
+
+/** 在庫分析の絞り込み条件。帳票と同じく「空文字はその条件では絞らない」 */
+export interface StockAnalysisFilter {
+  keyword: string; // 商品名・SKU の部分一致
+  categoryId: string;
+  rank: AbcRank | '';
+}
+
+export const EMPTY_STOCK_ANALYSIS_FILTER: StockAnalysisFilter = { keyword: '', categoryId: '', rank: '' };
+
+export function filterStockAnalysis(rows: StockAnalysisRow[], filter: StockAnalysisFilter): StockAnalysisRow[] {
+  const q = filter.keyword.trim().toLowerCase();
+  return rows.filter(r => {
+    if (q && !(r.productName.toLowerCase().includes(q) || r.productSku.toLowerCase().includes(q))) return false;
+    if (filter.categoryId && r.categoryId !== filter.categoryId) return false;
+    if (filter.rank && r.rank !== filter.rank) return false;
+    return true;
+  });
+}
+
+// ---- 発注点 (最低在庫数) の見直し提案 ----
+// 発注点はこれまで商品マスタの手入力だけで、実際の出庫ペースとは無関係だった。
+// 出庫実績から「リードタイム中に売れる数 + 安全在庫日数分」を計算して提案する。
+
+/** 安全在庫として何日分を上乗せするか。画面で切り替える */
+export const SAFETY_STOCK_DAYS_OPTIONS = [3, 7, 14] as const;
+export const DEFAULT_SAFETY_STOCK_DAYS = 7;
+
+/** 発注点の見直し提案の1行 = 1商品 */
+export interface MinQuantitySuggestion {
+  productId: string;
+  productName: string;
+  productSku: string;
+  currentMinQuantity: number;
+  suggestedMinQuantity: number;
+  diff: number; // 提案値 - 現在値 (正なら引き上げ、負なら引き下げ)
+  dailyOutbound: number;
+  leadTimeDays: number; // 直近の入荷予定から引き継いだ仕入先の標準リードタイム
+  safetyDays: number;
+  supplierName: string; // 引き継いだ仕入先。なければ空文字 (リードタイム0で計算)
+}
+
+export interface MinQuantityOptions {
+  safetyDays?: number;
+}
+
+/**
+ * 出庫ペースから発注点の見直しを提案する。状態は変更しない。
+ * 提案値 = ceil(1日あたり出庫数 × (標準リードタイム + 安全在庫日数))、最低1。
+ *
+ * リードタイムは発注提案 (reorderSuggestions) と同じく「直近に作った入荷予定の仕入先」から
+ * 引き継ぐ。期間内に一度も出ていない商品は提案しない — 出庫ペース0から機械的に計算すると
+ * 発注点が下がり、たまにしか動かない商品が欠品するため (滞留在庫として別に見る)。
+ * 現在値と同じになる商品も提案には出さない。
+ */
+export function minQuantitySuggestions(
+  rows: StockAnalysisRow[],
+  products: Product[],
+  inboundPlans: InboundPlan[],
+  suppliers: Supplier[],
+  options: MinQuantityOptions = {},
+): MinQuantitySuggestion[] {
+  const { safetyDays = DEFAULT_SAFETY_STOCK_DAYS } = options;
+
+  const latestPlan = new Map<string, InboundPlan>();
+  for (const plan of inboundPlans) {
+    if (plan.canceledAt) continue;
+    const current = latestPlan.get(plan.productId);
+    if (!current || plan.createdAt > current.createdAt) latestPlan.set(plan.productId, plan);
+  }
+  const productById = new Map(products.map(p => [p.id, p]));
+
+  const suggestions: MinQuantitySuggestion[] = [];
+  for (const row of rows) {
+    const product = productById.get(row.productId);
+    if (!product || row.dailyOutbound <= 0) continue;
+    // 取引停止・削除済みの仕入先のリードタイムは引き継がない (発注提案と同じ扱い)
+    const supplier = suppliers.find(s => s.id === latestPlan.get(row.productId)?.supplierId && s.active);
+    const leadTimeDays = supplier?.leadTimeDays ?? 0;
+    const suggestedMinQuantity = Math.max(1, Math.ceil(row.dailyOutbound * (leadTimeDays + safetyDays)));
+    if (suggestedMinQuantity === product.minQuantity) continue;
+    suggestions.push({
+      productId: row.productId,
+      productName: row.productName,
+      productSku: row.productSku,
+      currentMinQuantity: product.minQuantity,
+      suggestedMinQuantity,
+      diff: suggestedMinQuantity - product.minQuantity,
+      dailyOutbound: row.dailyOutbound,
+      leadTimeDays,
+      safetyDays,
+      supplierName: supplier?.name ?? '',
+    });
+  }
+  // ずれの大きい順 = 直す価値の大きい順
+  return suggestions.sort((a, b) =>
+    Math.abs(b.diff) - Math.abs(a.diff) || a.productName.localeCompare(b.productName));
+}
+
+/** 発注点の一括更新で渡す入力 */
+export interface MinQuantityUpdate {
+  productId: string;
+  minQuantity: number;
+}
+
+/**
+ * 選択された提案を一括更新の入力へ変換する。確認ダイアログのプレビューと実行が
+ * この1つの結果を共有する (発注提案の planReorder・一括廃棄の planDisposal と同じ作り)。
+ */
+export interface MinQuantityPlan {
+  targets: MinQuantitySuggestion[];
+  updates: MinQuantityUpdate[];
+  raised: number; // 引き上げる商品数
+  lowered: number; // 引き下げる商品数
+}
+
+export function planMinQuantities(
+  suggestions: MinQuantitySuggestion[],
+  productIds: Iterable<string>,
+): MinQuantityPlan {
+  const ids = new Set(productIds);
+  const targets = suggestions.filter(s => ids.has(s.productId));
+  return {
+    targets,
+    updates: targets.map(s => ({ productId: s.productId, minQuantity: s.suggestedMinQuantity })),
+    raised: targets.filter(s => s.diff > 0).length,
+    lowered: targets.filter(s => s.diff < 0).length,
+  };
+}
+
+export function stockAnalysisCsv(rows: StockAnalysisRow[], categories: Category[]): string {
+  const categoryName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
+  const header = 'ABCランク,商品名,SKU,カテゴリ,在庫数,在庫金額（原価）,期間出庫数,売上出庫数,廃棄数,'
+    + '出庫金額（原価）,構成比,累計構成比,1日あたり出庫数,在庫回転率,在庫日数,最終出庫日,滞留日数';
+  const body = rows.map(r => [
+    r.rank,
+    r.productName,
+    r.productSku,
+    categoryName(r.categoryId),
+    r.quantity,
+    Math.round(r.stockValue),
+    r.outboundQuantity,
+    r.salesQuantity,
+    r.disposalQuantity,
+    Math.round(r.outboundValue),
+    (r.share * 100).toFixed(1),
+    (r.cumulativeShare * 100).toFixed(1),
+    r.dailyOutbound.toFixed(2),
+    r.turnoverRate.toFixed(2),
+    r.daysOfStock == null ? '' : Math.round(r.daysOfStock),
+    r.lastOutboundAt ? localDateKey(r.lastOutboundAt) : '',
+    r.stagnantDays ?? '',
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportStockAnalysisCsv(rows: StockAnalysisRow[], categories: Category[]) {
+  downloadCsv(csvFileName('analysis'), stockAnalysisCsv(rows, categories));
+}
+
 /** 入荷予定の入力値 (id・入荷実績・日時は画面から編集しない) */
 export type InboundPlanInput = Omit<InboundPlan, 'id' | 'receivedQuantity' | 'canceledAt' | 'createdAt' | 'updatedAt'>;
 
@@ -2236,6 +2599,35 @@ export function useInventory() {
       save(next); return next;
     });
   }, []);
+
+  // 在庫分析の発注点提案からの一括更新。在庫は動かないので帳票には何も書かない。
+  // 棚卸 (applyStocktake) と同じく1回の state 更新・1回の保存でまとめて反映する。
+  const applyMinQuantities = useCallback((updates: MinQuantityUpdate[]): number => {
+    const byId = new Map<string, number>();
+    for (const u of updates) {
+      if (!Number.isFinite(u.minQuantity) || u.minQuantity < 0) continue;
+      byId.set(u.productId, Math.floor(u.minQuantity));
+    }
+    // 実際に値が変わる商品だけを数える (同じ値・存在しない商品は更新件数に含めない)
+    const changed = products.filter(p => {
+      const min = byId.get(p.id);
+      return min != null && min !== p.minQuantity;
+    }).length;
+    if (changed === 0) return 0;
+    setProducts(prev => {
+      const now = new Date().toISOString();
+      let dirty = false;
+      const next = prev.map(p => {
+        const min = byId.get(p.id);
+        if (min == null || min === p.minQuantity) return p;
+        dirty = true;
+        return { ...p, minQuantity: min, updatedAt: now };
+      });
+      if (!dirty) return prev;
+      save(next); return next;
+    });
+    return changed;
+  }, [products]);
 
   const deleteProduct = useCallback((id: string) => {
     const product = products.find(p => p.id === id);
@@ -2885,5 +3277,5 @@ export function useInventory() {
     savePurchaseOrderPrints([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder };
 }
