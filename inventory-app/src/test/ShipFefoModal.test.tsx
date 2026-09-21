@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ShipFefoModal } from '../ShipFefoModal';
-import type { Product } from '../useInventory';
+import type { Customer, Product } from '../useInventory';
 
 const MOCK_WAREHOUSES = [
   { id: 'wh-sales', name: '販売倉庫', color: '#4caf50' },
@@ -25,9 +25,14 @@ const PRODUCT: Product = {
   ],
 };
 
+const MOCK_CUSTOMERS: Customer[] = [
+  { id: 'cus-1', name: 'みどりストア', code: 'C-001', contact: '', phone: '', email: '', address: '', note: '', active: true },
+];
+
 const defaultProps = {
   product: PRODUCT,
   warehouses: MOCK_WAREHOUSES,
+  customers: MOCK_CUSTOMERS,
   onShip: vi.fn(),
   onClose: vi.fn(),
 };
@@ -110,6 +115,33 @@ describe('ShipFefoModal — 出庫の実行', () => {
 
     expect(defaultProps.onShip).toHaveBeenCalledWith(3, { warehouseId: undefined, includeExpired: false, type: '廃棄' });
     expect(defaultProps.onClose).toHaveBeenCalled();
+  });
+
+  it('売上出庫では実売単価と得意先も一緒に渡される', async () => {
+    const user = userEvent.setup();
+    render(<ShipFefoModal {...defaultProps} />);
+
+    // 販売単価の初期値は商品の販売定価。値引きして得意先を選んでから出庫する
+    const priceInput = screen.getByLabelText(/販売単価/);
+    expect(priceInput).toHaveValue(198);
+    await user.clear(priceInput);
+    await user.type(priceInput, '178');
+    await user.selectOptions(screen.getByLabelText(/得意先/), 'cus-1');
+    await user.click(screen.getByRole('button', { name: '出庫' }));
+
+    expect(defaultProps.onShip).toHaveBeenCalledWith(1, {
+      warehouseId: undefined, includeExpired: false, type: '売上出庫', unitPrice: 178, customerId: 'cus-1',
+    });
+  });
+
+  it('売上出庫以外では単価・得意先の入力欄を出さない', async () => {
+    const user = userEvent.setup();
+    render(<ShipFefoModal {...defaultProps} />);
+
+    await user.selectOptions(screen.getByLabelText('出庫区分'), '調整出庫');
+
+    expect(screen.queryByLabelText(/販売単価/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/得意先/)).not.toBeInTheDocument();
   });
 
   it('キャンセルでは出庫せずに閉じる', async () => {

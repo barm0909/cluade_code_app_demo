@@ -1,7 +1,7 @@
 -- 開発用サンプルデータ (useInventory.ts の SAMPLE_DATA / SAMPLE_INBOUND_PLANS / DEFAULT_CATEGORIES /
--- DEFAULT_SUPPLIERS と同期)
+-- DEFAULT_SUPPLIERS / DEFAULT_CUSTOMERS と同期)
 -- アプリ同様に賞味期限を実行日からの相対日付で生成する (date('now', ...) は SQLite 組み込み)
--- 再実行できるよう、投入前に既存の商品・ロット・帳票・カテゴリ・入荷予定・仕入先・発注履歴を全削除する
+-- 再実行できるよう、投入前に既存の商品・ロット・帳票・カテゴリ・入荷予定・仕入先・得意先・発注履歴を全削除する
 
 DELETE FROM stock_transactions;
 DELETE FROM purchase_order_prints;
@@ -10,6 +10,7 @@ DELETE FROM lots;
 DELETE FROM products;
 DELETE FROM categories;
 DELETE FROM suppliers;
+DELETE FROM customers;
 
 INSERT INTO categories (id, name) VALUES
   ('cat-dairy', '乳製品'),
@@ -20,6 +21,11 @@ INSERT INTO suppliers (id, name, code, contact, phone, email, address, lead_time
   ('sup-yamada',      '山田乳業',       'S-001', '山田 太郎', '03-1234-5678', 'order@yamada-dairy.example.jp',   '東京都千代田区1-1-1', 2, '定期便（火・金）', 1),
   ('sup-asahi',       '朝日ベーカリー', 'S-002', '朝日 花子', '06-2345-6789', 'contact@asahi-bakery.example.jp', '大阪府大阪市北区2-2-2', 1, '',                 1),
   ('sup-osaka-print', '大阪印刷',       'S-003', '',          '06-3456-7890', '',                                '大阪府堺市3-3-3',     7, 'ラベル・資材',     1);
+
+INSERT INTO customers (id, name, code, contact, phone, email, address, note, active) VALUES
+  ('cus-midori', 'みどりストア',     'C-001', '緑川 一郎', '03-2222-3333', 'order@midori-store.example.jp', '東京都世田谷区4-4-4',     '毎朝配送', 1),
+  ('cus-sakura', 'さくらカフェ',     'C-002', '佐倉 美咲', '06-4444-5555', 'cafe@sakura.example.jp',        '大阪府大阪市中央区5-5-5', '',         1),
+  ('cus-kita',   '北町給食センター', 'C-003', '',          '011-666-7777', '',                              '北海道札幌市北区6-6-6',   '月末締め', 1);
 
 INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at) VALUES
   ('1', '牛乳',           'ML-001', '4901234567894', 'cat-dairy', 5,   198, 130, datetime('now')),
@@ -48,3 +54,14 @@ INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_qua
 INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id) VALUES
   ('tx-cost-1', datetime('now', '-30 days'), '入荷', '1', '牛乳', 'ML-001', replace(date('now', '-30 days'), '-', ''), 10, '入荷予定（山田乳業）', NULL, 'wh-sales', 118, 'sup-yamada'),
   ('tx-cost-2', datetime('now', '-10 days'), '入荷', '1', '牛乳', 'ML-001', replace(date('now', '-10 days'), '-', ''), 10, '入荷予定（山田乳業）', NULL, 'wh-sales', 120, 'sup-yamada');
+
+-- 売上管理のサンプル: 直近の売上出庫。実売単価 (unit_price) は定価どおりの日と値引きした日を混ぜ、
+-- 出庫した時点のロット原価 (cost_unit_price) も一緒に残してある (粗利が計算できるように)。
+-- tx-sale-old だけは実売単価・原価・得意先を持たない古い記録で、売上管理タブでは
+-- 商品の販売定価・現在原価で代用した「概算」として表示される。
+INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, customer_id, cost_unit_price) VALUES
+  ('tx-sale-1',   datetime('now', '-6 days'), '売上出庫', '1', '牛乳',   'ML-001', replace(date('now', '-30 days'), '-', ''), 6, '売上登録', 'wh-sales', NULL, 198,  'cus-midori', 118),
+  ('tx-sale-2',   datetime('now', '-5 days'), '売上出庫', '2', '食パン', 'BR-001', replace(date('now', '+1 days'),  '-', ''), 4, '売上登録', 'wh-sales', NULL, 150,  'cus-sakura', 90),
+  ('tx-sale-3',   datetime('now', '-3 days'), '売上出庫', '4', 'チーズ', 'CS-001', replace(date('now', '+14 days'), '-', ''), 2, '売上登録', 'wh-sales', NULL, 320,  'cus-kita',   220),
+  ('tx-sale-4',   datetime('now', '-1 days'), '売上出庫', '1', '牛乳',   'ML-001', replace(date('now', '-10 days'), '-', ''), 8, '売上登録', 'wh-sales', NULL, 178,  'cus-midori', 120),
+  ('tx-sale-old', datetime('now', '-20 days'), '売上出庫', '1', '牛乳',  'ML-001', replace(date('now', '-30 days'), '-', ''), 3, 'FEFO出庫', 'wh-sales', NULL, NULL, NULL,         NULL);

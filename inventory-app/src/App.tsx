@@ -1,11 +1,12 @@
 import { Fragment, useState, useMemo } from 'react';
-import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
-import type { Product, Lot, LotTraceKey, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
+import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
+import type { Customer, Product, Lot, LotTraceKey, SaleFields, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { ShipFefoModal } from './ShipFefoModal';
 import { DashboardView } from './DashboardView';
 import { InboundPlanView } from './InboundPlanView';
+import { SalesView } from './SalesView';
 import { LedgerView } from './LedgerView';
 import { LotTraceView } from './LotTraceView';
 import { CostHistoryView } from './CostHistoryView';
@@ -15,6 +16,7 @@ import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
 import { SupplierMasterView } from './SupplierMasterView';
+import { CustomerMasterView } from './CustomerMasterView';
 import { StocktakeView } from './StocktakeView';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
@@ -95,24 +97,29 @@ interface StockIoModalProps {
   lot: Lot;
   product: Product;
   warehouses: Warehouse[];
+  customers: Customer[];
   direction: 'in' | 'out';
-  onSubmit: (quantity: number, type: TransactionType) => void;
+  onSubmit: (quantity: number, type: TransactionType, sale?: SaleFields) => void;
   onClose: () => void;
 }
 
-function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }: StockIoModalProps) {
+function StockIoModal({ lot, product, warehouses, customers, direction, onSubmit, onClose }: StockIoModalProps) {
   const label = direction === 'in' ? '入庫' : '出庫';
   const types = direction === 'in' ? INBOUND_TYPES : OUTBOUND_TYPES;
   const maxQty = direction === 'in' ? undefined : lot.quantity;
   const [type, setType] = useState<TransactionType>(types[0]);
   const [qty, setQty] = useState(1);
+  // 売上出庫のときだけ実売単価と得意先を受け取る (売上管理タブの集計に使われる)
+  const [unitPrice, setUnitPrice] = useState(product.price);
+  const [customerId, setCustomerId] = useState('');
+  const isSale = type === '売上出庫';
 
   const valid = qty > 0 && (maxQty === undefined || qty <= maxQty);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid) return;
-    onSubmit(qty, type);
+    onSubmit(qty, type, isSale ? { unitPrice, customerId } : undefined);
     onClose();
   };
 
@@ -146,6 +153,21 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
               onValueChange={setQty}
             />
           </label>
+          {isSale && (<>
+            <label htmlFor="io-price">
+              販売単価 <span className="label-hint">（円。既定は販売定価）</span>
+              <NumberInput id="io-price" min={0} value={unitPrice} onValueChange={setUnitPrice} />
+            </label>
+            <label htmlFor="io-customer">
+              得意先 <span className="label-hint">（任意）</span>
+              <select id="io-customer" value={customerId} onChange={e => setCustomerId(e.target.value)}>
+                <option value="">得意先なし</option>
+                {selectableCustomers(customers, customerId).map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+          </>)}
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>
             <button type="submit" className="btn-primary" disabled={!valid}>{label}</button>
@@ -157,7 +179,7 @@ function StockIoModal({ lot, product, warehouses, direction, onSubmit, onClose }
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -170,13 +192,15 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'master' | 'stocktake' | 'ledger' | 'trace' | 'cost' | 'poHistory' | 'analysis'>('inventory');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'sales' | 'master' | 'stocktake' | 'ledger' | 'trace' | 'cost' | 'poHistory' | 'analysis'>('inventory');
   // ロット追跡タブで追跡中のロット。在庫一覧の「追跡」ボタンからも指定される
   const [traceTarget, setTraceTarget] = useState<LotTraceKey | null>(null);
   const { confirm, confirmDialog } = useConfirm();
   const { notify, notifyDialog } = useNotify();
 
   const categoryNameById = useMemo(() => new Map(categories.map(c => [c.id, c.name])), [categories]);
+  // 得意先マスタの売上実績 (売上管理タブと同じ純粋関数で組み立てる)
+  const sales = useMemo(() => salesRows(ledger, products, customers), [ledger, products, customers]);
 
   const filtered = useMemo(() => {
     let list = products.filter(p => {
@@ -290,6 +314,7 @@ export default function App() {
         <button className={activeTab === 'dashboard' ? 'tab active' : 'tab'} onClick={() => setActiveTab('dashboard')}>ダッシュボード</button>
         <button className={activeTab === 'inventory' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inventory')}>在庫一覧</button>
         <button className={activeTab === 'inbound' ? 'tab active' : 'tab'} onClick={() => setActiveTab('inbound')}>入荷予定</button>
+        <button className={activeTab === 'sales' ? 'tab active' : 'tab'} onClick={() => setActiveTab('sales')}>売上管理</button>
         <button className={activeTab === 'master' ? 'tab active' : 'tab'} onClick={() => setActiveTab('master')}>商品マスタ</button>
         <button className={activeTab === 'stocktake' ? 'tab active' : 'tab'} onClick={() => setActiveTab('stocktake')}>棚卸</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
@@ -322,6 +347,14 @@ export default function App() {
           onDelete={deleteInboundPlan}
           onReceive={receiveInboundPlan}
         />
+      ) : activeTab === 'sales' ? (
+        <SalesView
+          ledger={ledger}
+          products={products}
+          customers={customers}
+          warehouses={warehouses}
+          onRecordSale={recordSale}
+        />
       ) : activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
       ) : activeTab === 'trace' ? (
@@ -352,6 +385,7 @@ export default function App() {
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
         <WarehouseMasterView warehouses={warehouses} products={products} inboundPlans={inboundPlans} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
         <SupplierMasterView suppliers={suppliers} inboundPlans={inboundPlans} products={products} warehouses={warehouses} onAdd={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} onAddInboundPlan={addInboundPlan} onPrint={printPurchaseOrder} />
+        <CustomerMasterView customers={customers} sales={sales} onAdd={addCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} />
       </>) : (<>
 
       <div className="controls">
@@ -521,8 +555,9 @@ export default function App() {
           lot={ioLot.lot}
           product={ioLot.product}
           warehouses={warehouses}
+          customers={customers}
           direction={ioLot.direction}
-          onSubmit={(qty, type) => adjustLotQuantity(ioLot.product.id, ioLot.lot.id, ioLot.direction === 'in' ? qty : -qty, type)}
+          onSubmit={(qty, type, sale) => adjustLotQuantity(ioLot.product.id, ioLot.lot.id, ioLot.direction === 'in' ? qty : -qty, type, sale)}
           onClose={() => setIoLot(null)}
         />
       )}
@@ -530,6 +565,7 @@ export default function App() {
         <ShipFefoModal
           product={fefoTarget}
           warehouses={warehouses}
+          customers={customers}
           onShip={(qty, options) => {
             const plan = shipFefo(fefoTarget.id, qty, options);
             const lots = plan.allocations.map(a => `${a.lotNo}: ${a.quantity}`).join('、');

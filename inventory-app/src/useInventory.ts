@@ -33,6 +33,24 @@ export interface Supplier {
 /** 仕入先の入力値 (id は採番するので含まない) */
 export type SupplierInput = Omit<Supplier, 'id'>;
 
+// 得意先 (販売先) マスタ。売上出庫の帳票が id で参照するので、改名しても過去の売上の紐づけは
+// 切れない (仕入先マスタと同じ方針)。取引が終わった得意先は削除せず active=false にすることで、
+// 過去の売上を残したまま売上登録の選択肢から外せる。
+export interface Customer {
+  id: string;
+  name: string; // 得意先名 (必須・重複不可)
+  code: string; // 得意先コード (任意・重複不可)
+  contact: string; // 担当者名
+  phone: string;
+  email: string;
+  address: string;
+  note: string;
+  active: boolean; // 取引中か (false = 取引停止)
+}
+
+/** 得意先の入力値 (id は採番するので含まない) */
+export type CustomerInput = Omit<Customer, 'id'>;
+
 export interface Lot {
   id: string;
   lotNo: string;
@@ -83,10 +101,24 @@ export interface StockTransaction {
   note: string;
   fromWarehouseId?: string;
   toWarehouseId?: string;
-  /** 仕入単価 (円)。入荷予定からの「入荷」だけが持つ。それ以外の区分では未設定 */
+  /**
+   * 単価 (円)。区分によって意味が変わる (区分ごとに1つしか単価を持たないため):
+   * - 入荷: 仕入単価 (入荷予定からの入荷だけが持つ)
+   * - 廃棄: 廃棄したロットの原価 (一括廃棄だけが持つ)
+   * - 売上出庫: 実売単価 (売上登録・FEFO出庫・ロット出庫で入力されたときだけ持つ)
+   * それ以外の区分では未設定。
+   */
   unitPrice?: number;
   /** 仕入先マスタの id。unitPrice と同じく「入荷予定からの入荷」だけが持つ */
   supplierId?: string;
+  /** 得意先マスタの id。「売上出庫」だけが持つ (未設定 = 得意先なしの売上) */
+  customerId?: string;
+  /**
+   * 出庫した時点のロット原価 (円)。「売上出庫」だけが持つ。
+   * 売れたロットは在庫から減って原価が分からなくなるため、粗利 (売上金額 - 原価) を
+   * あとから再計算できるようその場で写し取る (廃棄ロスが unitPrice を持つのと同じ理由)。
+   */
+  costUnitPrice?: number;
 }
 
 // 入荷予定 (発注済み・入荷待ちの在庫)。実際の在庫はまだ持たず、入荷して初めてロットになる。
@@ -250,6 +282,7 @@ interface ServerState {
   inboundPlans?: InboundPlan[]; // 入荷予定を持たない旧サーバーからのレスポンスも読めるよう任意扱い
   suppliers?: Supplier[]; // 仕入先マスタも同様 (未導入のサーバーからは返ってこない)
   purchaseOrderPrints?: PurchaseOrderPrintItem[]; // 発注書の印刷履歴も同様 (未導入のサーバーからは返ってこない)
+  customers?: Customer[]; // 得意先マスタも同様 (未導入のサーバーからは返ってこない)
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -262,7 +295,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -303,6 +336,24 @@ const DEFAULT_SUPPLIERS: Supplier[] = [
   {
     id: 'sup-osaka-print', name: '大阪印刷', code: 'S-003', contact: '', phone: '06-3456-7890',
     email: '', address: '大阪府堺市3-3-3', leadTimeDays: 7, note: 'ラベル・資材', active: true,
+  },
+];
+
+// 得意先のサンプル (seed.sql と同期)。売上出庫の帳票が id で参照する
+const DEFAULT_CUSTOMERS: Customer[] = [
+  {
+    id: 'cus-midori', name: 'みどりストア', code: 'C-001', contact: '緑川 一郎',
+    phone: '03-2222-3333', email: 'order@midori-store.example.jp', address: '東京都世田谷区4-4-4',
+    note: '毎朝配送', active: true,
+  },
+  {
+    id: 'cus-sakura', name: 'さくらカフェ', code: 'C-002', contact: '佐倉 美咲',
+    phone: '06-4444-5555', email: 'cafe@sakura.example.jp', address: '大阪府大阪市中央区5-5-5',
+    note: '', active: true,
+  },
+  {
+    id: 'cus-kita', name: '北町給食センター', code: 'C-003', contact: '', phone: '011-666-7777',
+    email: '', address: '北海道札幌市北区6-6-6', note: '月末締め', active: true,
   },
 ];
 
@@ -420,6 +471,10 @@ function saveSuppliers(suppliers: Supplier[]) {
   persist('suppliers', suppliers);
 }
 
+function saveCustomers(customers: Customer[]) {
+  persist('customers', customers);
+}
+
 function saveWarehouses(warehouses: Warehouse[]) {
   persist('warehouses', warehouses);
 }
@@ -484,6 +539,9 @@ export const CSV_EXPORTS = {
   costHistory: { label: '原価履歴', description: '入荷時に記録された仕入単価の履歴' },
   purchaseOrderHistory: { label: '発注履歴', description: '発注書として印刷した明細の履歴' },
   analysis: { label: '在庫分析', description: 'ABCランク・在庫回転率・滞留日数の商品別一覧' },
+  sales: { label: '売上明細', description: '絞り込み後の売上明細（売上金額・原価・粗利つき）' },
+  salesSummary: { label: '売上集計', description: '商品別・得意先別・日別に集計した売上' },
+  customer: { label: '得意先一覧', description: '得意先マスタと売上実績の状況' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -676,6 +734,8 @@ export interface FefoAllocation {
   availableQuantity: number;
   /** このロットから引き当てる数量 */
   quantity: number;
+  /** 引当時点のこのロットの原価 (lotUnitCost)。売上の粗利計算と帳票への記録に使う */
+  unitCost: number;
 }
 
 export interface FefoPlan {
@@ -686,6 +746,8 @@ export interface FefoPlan {
   shortage: number;
   /** 期限切れのため引当対象から除外した在庫数 (includeExpired 時は 0) */
   skippedExpired: number;
+  /** 引き当てたロットの原価合計 (Σ 引当数 × ロット原価)。売上の粗利プレビューに使う */
+  cost: number;
 }
 
 export interface FefoOptions {
@@ -694,6 +756,15 @@ export interface FefoOptions {
   /** 既定 false: 期限切れロットは引き当てない (食品は廃棄が原則のため) */
   includeExpired?: boolean;
 }
+
+/**
+ * shipFefo に渡すオプション。引当条件 (FefoOptions) に加えて、帳票へ何を残すかを持つ。
+ * 実売単価・得意先 (SaleFields) は区分が 売上出庫 のときだけ記録される。
+ */
+export type FefoShipOptions = FefoOptions & SaleFields & {
+  type?: OutboundTransactionType;
+  note?: string;
+};
 
 function isExpired(lot: Lot): boolean {
   return !!lot.expiryDate && daysUntilExpiry(lot.expiryDate) < 0;
@@ -748,11 +819,13 @@ export function planFefoShipment(product: Product, quantity: number, options: Fe
       warehouseId: lot.warehouseId,
       availableQuantity: lot.quantity,
       quantity: take,
+      unitCost: lotUnitCost(lot, product),
     });
     remaining -= take;
   }
 
-  return { allocations, allocated: requested - remaining, shortage: remaining, skippedExpired };
+  const cost = allocations.reduce((s, a) => s + a.unitCost * a.quantity, 0);
+  return { allocations, allocated: requested - remaining, shortage: remaining, skippedExpired, cost };
 }
 
 // ---------------------------------------------------------------------------
@@ -1814,6 +1887,416 @@ export function exportCostHistoryCsv(rows: CostHistoryRow[]) {
 }
 
 // ---------------------------------------------------------------------------
+// 売上管理 (実際の売上の記録と集計)
+// 出庫のうち「売上出庫」だけが、実際に売れた単価 (実売単価) と売り先 (得意先) を持てる。
+// 帳票へ書き写すのは 実売単価 (unitPrice) / 得意先 (customerId) / 出庫時点のロット原価
+// (costUnitPrice) の3つで、売上専用のテーブルは持たない。売上高・原価・粗利はすべて
+// 帳票から組み立てる (原価履歴・廃棄ロス・ロット追跡と同じ「帳票が唯一の情報源」方針)。
+//
+// 売れたロットは在庫から減るので、あとから原価を引き直すことはできない。だから粗利のもとに
+// なる原価は出庫したその場で帳票に写し取る (廃棄ロスが廃棄時の原価を残すのと同じ理由)。
+// ---------------------------------------------------------------------------
+
+/** 新規登録フォームの初期値。取引中 (active) で始める */
+export const EMPTY_CUSTOMER: CustomerInput = {
+  name: '', code: '', contact: '', phone: '', email: '', address: '', note: '', active: true,
+};
+
+/** 前後の空白を落とす (得意先は数値項目を持たないので整形はこれだけ) */
+export function normalizeCustomerInput(input: CustomerInput): CustomerInput {
+  return {
+    name: input.name.trim(),
+    code: input.code.trim(),
+    contact: input.contact.trim(),
+    phone: input.phone.trim(),
+    email: input.email.trim(),
+    address: input.address.trim(),
+    note: input.note.trim(),
+    active: input.active,
+  };
+}
+
+/**
+ * 入力チェック。問題がなければ空文字を返す。
+ * 画面 (CustomerModal) と登録処理 (addCustomer / updateCustomer) が同じ判定を共有するので、
+ * 画面に出るエラーと実際に弾かれる条件がずれない (supplierValidationError と同じ方針)。
+ */
+export function customerValidationError(input: CustomerInput, customers: Customer[], selfId?: string): string {
+  const c = normalizeCustomerInput(input);
+  if (!c.name) return '得意先名は必須です';
+  const others = customers.filter(x => x.id !== selfId);
+  if (others.some(x => x.name === c.name)) return '同じ名前の得意先がすでにあります';
+  if (c.code && others.some(x => x.code === c.code)) return '同じ得意先コードがすでにあります';
+  if (c.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email)) return 'メールアドレスの形式が正しくありません';
+  return '';
+}
+
+/** 表示用の得意先名。マスタにない (削除された) id は空文字 */
+export function customerName(customers: Customer[], id: string): string {
+  return customers.find(c => c.id === id)?.name ?? '';
+}
+
+/**
+ * 売上登録フォームに出す選択肢。取引停止の得意先は隠すが、
+ * すでにその得意先を指しているときだけは残す (selectableSuppliers と同じ方針)。
+ */
+export function selectableCustomers(customers: Customer[], currentId = ''): Customer[] {
+  return customers.filter(c => c.active || c.id === currentId);
+}
+
+/** 売上出庫のときだけ帳票に足す入力 (実売単価・得意先) */
+export interface SaleFields {
+  /** 実売単価 (円)。0 と未指定は「未入力」扱い (帳票には書かず、集計時に販売定価で代用する) */
+  unitPrice?: number;
+  /** 得意先マスタの id。空文字・未指定は「得意先なし」 */
+  customerId?: string;
+}
+
+/**
+ * 売上出庫の帳票に足す項目を組み立てる。
+ * 原価は出庫したそのロットの原価をそのまま写し取る (売れたロットは減るのであとから引き直せない)。
+ * 実売単価は 0 なら「未入力」として書かない (入荷予定の仕入単価と同じ扱い)。
+ */
+function saleFields(unitCost: number, unitPrice?: number, customerId?: string) {
+  return {
+    costUnitPrice: Math.round(unitCost),
+    ...(unitPrice != null && unitPrice > 0 ? { unitPrice: Math.round(unitPrice) } : {}),
+    ...(customerId ? { customerId } : {}),
+  };
+}
+
+/** 売上登録 (売上管理タブ) の入力。実際の出庫は FEFO で引き当てる */
+export interface SaleInput {
+  productId: string;
+  quantity: number;
+  /** 実売単価 (円)。0 は「未入力」扱いで、集計時に商品の販売定価で代用する */
+  unitPrice: number;
+  /** 得意先マスタの id。空文字は「得意先なし」 */
+  customerId: string;
+  /** 指定するとその倉庫のロットだけを引当対象にする (未指定は全倉庫) */
+  warehouseId?: string;
+  includeExpired?: boolean;
+  note?: string;
+}
+
+/** 売上登録でつく帳票の備考 (在庫一覧からの FEFO出庫 と区別するため) */
+export const SALE_NOTE = '売上登録';
+
+/** 売上明細の1行 = 帳票の「売上出庫」1件 */
+export interface SalesRow {
+  txnId: string;
+  date: string;
+  productId: string;
+  productName: string;
+  productSku: string;
+  lotNo: string;
+  warehouseId: string; // 出庫元倉庫 (fromWarehouseId)
+  customerId: string; // 空文字は得意先なし
+  customerName: string;
+  quantity: number;
+  unitPrice: number; // 実売単価 (未記録なら商品の販売定価)
+  amount: number; // unitPrice * quantity
+  unitCost: number; // 出庫時点のロット原価 (未記録なら商品の現在原価)
+  cost: number; // unitCost * quantity
+  profit: number; // amount - cost
+  profitRate: number; // profit / amount (売上0なら0)
+  note: string;
+  /** 実売単価が帳票になく、商品の販売定価で代用した行 (概算) */
+  estimatedPrice: boolean;
+  /** 出庫時点の原価が帳票になく、商品の現在原価で代用した行 (概算) */
+  estimatedCost: boolean;
+}
+
+/**
+ * 帳票の「売上出庫」を新しい順に売上明細へ整形する。
+ *
+ * 単価がこの機能より前の記録 (実売単価なし) や、単価を入力しなかった出庫では、
+ * 商品の販売定価 / 現在原価で代用し estimatedPrice / estimatedCost を立てる
+ * (廃棄ロスが古い記録で現在原価にフォールバックするのと同じ概算)。
+ * 商品ごと削除されている場合は 0 円として扱う。
+ */
+export function salesRows(ledger: StockTransaction[], products: Product[], customers: Customer[]): SalesRow[] {
+  const productById = new Map(products.map(p => [p.id, p]));
+  const customerNameById = new Map(customers.map(c => [c.id, c.name]));
+  return ledger
+    .filter(t => t.type === '売上出庫')
+    .map(t => {
+      const product = productById.get(t.productId);
+      const estimatedPrice = t.unitPrice == null;
+      const estimatedCost = t.costUnitPrice == null;
+      const unitPrice = t.unitPrice ?? product?.price ?? 0;
+      const unitCost = t.costUnitPrice ?? product?.costPrice ?? 0;
+      const amount = unitPrice * t.quantity;
+      const cost = unitCost * t.quantity;
+      const customerId = t.customerId ?? '';
+      return {
+        txnId: t.id,
+        date: t.date,
+        productId: t.productId,
+        productName: t.productName,
+        productSku: t.productSku,
+        lotNo: t.lotNo,
+        warehouseId: t.fromWarehouseId ?? '',
+        customerId,
+        customerName: customerNameById.get(customerId) ?? '',
+        quantity: t.quantity,
+        unitPrice,
+        amount,
+        unitCost,
+        cost,
+        profit: amount - cost,
+        profitRate: amount > 0 ? (amount - cost) / amount : 0,
+        note: t.note,
+        estimatedPrice,
+        estimatedCost,
+      };
+    })
+    .sort((a, b) => b.date.localeCompare(a.date));
+}
+
+// 売上明細の絞り込み条件。帳票と同じ方針で「空文字はその条件では絞らない」
+export interface SalesFilter {
+  keyword: string; // 商品名・SKU・得意先名の部分一致
+  customerId: string; // '' = 全得意先。'none' は得意先なしの売上だけ
+  warehouseId: string;
+  from: string; // YYYY-MM-DD (この日を含む)
+  to: string; // YYYY-MM-DD (この日を含む)
+}
+
+export const EMPTY_SALES_FILTER: SalesFilter = { keyword: '', customerId: '', warehouseId: '', from: '', to: '' };
+
+/** 得意先の絞り込みで「得意先なし」を選ぶための値 (空文字は「全得意先」に使っているため) */
+export const NO_CUSTOMER = 'none';
+
+export function filterSales(rows: SalesRow[], filter: SalesFilter): SalesRow[] {
+  const q = filter.keyword.trim().toLowerCase();
+  return rows.filter(r => {
+    if (q && !(
+      r.productName.toLowerCase().includes(q)
+      || r.productSku.toLowerCase().includes(q)
+      || r.customerName.toLowerCase().includes(q)
+    )) return false;
+    if (filter.customerId === NO_CUSTOMER) {
+      if (r.customerId) return false;
+    } else if (filter.customerId && r.customerId !== filter.customerId) return false;
+    if (filter.warehouseId && r.warehouseId !== filter.warehouseId) return false;
+    if (filter.from || filter.to) {
+      const day = localDateKey(r.date);
+      if (filter.from && day < filter.from) return false;
+      if (filter.to && day > filter.to) return false;
+    }
+    return true;
+  });
+}
+
+export interface SalesTotals {
+  count: number; // 明細件数
+  quantity: number;
+  amount: number; // 売上高
+  cost: number; // 売上原価
+  profit: number; // 粗利
+  profitRate: number; // 粗利率 (売上0なら0)
+  averageUnitPrice: number; // 売上高 ÷ 数量
+}
+
+export function salesTotals(rows: SalesRow[]): SalesTotals {
+  const quantity = rows.reduce((s, r) => s + r.quantity, 0);
+  const amount = rows.reduce((s, r) => s + r.amount, 0);
+  const cost = rows.reduce((s, r) => s + r.cost, 0);
+  return {
+    count: rows.length,
+    quantity,
+    amount,
+    cost,
+    profit: amount - cost,
+    profitRate: amount > 0 ? (amount - cost) / amount : 0,
+    averageUnitPrice: quantity > 0 ? amount / quantity : 0,
+  };
+}
+
+/** 集計の1行 (商品別・得意先別・日別で同じ形。画面は同じ表で3つの切り口を描く) */
+export interface SalesSummary {
+  key: string; // 商品id / 得意先id ('' = 得意先なし) / 日付 (YYYY-MM-DD)
+  label: string; // 商品名 / 得意先名 / 日付
+  sub: string; // SKU など補足 (なければ空文字)
+  count: number; // 明細件数
+  quantity: number;
+  amount: number;
+  cost: number;
+  profit: number;
+  profitRate: number;
+  share: number; // 売上高の構成比 (全体の売上高が0なら0)
+}
+
+/** 集計の共通処理。キーごとに足し上げ、売上高の多い順に並べて構成比を付ける */
+function summarize(rows: SalesRow[], keyOf: (r: SalesRow) => { key: string; label: string; sub: string }): SalesSummary[] {
+  const byKey = new Map<string, SalesSummary>();
+  for (const r of rows) {
+    const { key, label, sub } = keyOf(r);
+    const current = byKey.get(key) ?? { key, label, sub, count: 0, quantity: 0, amount: 0, cost: 0, profit: 0, profitRate: 0, share: 0 };
+    current.count++;
+    current.quantity += r.quantity;
+    current.amount += r.amount;
+    current.cost += r.cost;
+    byKey.set(key, current);
+  }
+  const total = rows.reduce((s, r) => s + r.amount, 0);
+  return [...byKey.values()]
+    .map(s => ({
+      ...s,
+      profit: s.amount - s.cost,
+      profitRate: s.amount > 0 ? (s.amount - s.cost) / s.amount : 0,
+      share: total > 0 ? s.amount / total : 0,
+    }))
+    .sort((a, b) => b.amount - a.amount || a.label.localeCompare(b.label));
+}
+
+/** 商品別の売上集計 (売上高の多い順) */
+export function salesProductSummaries(rows: SalesRow[]): SalesSummary[] {
+  return summarize(rows, r => ({ key: r.productId, label: r.productName, sub: r.productSku }));
+}
+
+/** 得意先別の売上集計 (売上高の多い順)。得意先なしの売上は1つにまとめる */
+export function salesCustomerSummaries(rows: SalesRow[]): SalesSummary[] {
+  return summarize(rows, r => ({
+    key: r.customerId,
+    label: r.customerName || (r.customerId ? '（削除された得意先）' : '得意先なし'),
+    sub: '',
+  }));
+}
+
+/** 日別の売上集計。表示はこれだけ売上高順ではなく新しい日付順 (売上の推移を見るため) */
+export function salesDailySummaries(rows: SalesRow[]): SalesSummary[] {
+  const day = (r: SalesRow) => localDateKey(r.date);
+  return summarize(rows, r => ({ key: day(r), label: day(r), sub: '' }))
+    .sort((a, b) => b.key.localeCompare(a.key));
+}
+
+export function salesCsv(rows: SalesRow[], warehouses: Warehouse[]): string {
+  const whName = (id: string) => id ? (warehouses.find(w => w.id === id)?.name ?? id) : '';
+  const header = '日時,商品名,SKU,ロットNo,倉庫,得意先,数量,売上単価,売上金額,原価単価,原価金額,粗利,粗利率,概算,備考';
+  const body = rows.map(r => [
+    formatLedgerDateTime(r.date),
+    r.productName,
+    r.productSku,
+    r.lotNo,
+    whName(r.warehouseId),
+    r.customerName,
+    r.quantity,
+    r.unitPrice,
+    r.amount,
+    r.unitCost,
+    r.cost,
+    r.profit,
+    `${(r.profitRate * 100).toFixed(1)}%`,
+    r.estimatedPrice || r.estimatedCost ? '概算' : '',
+    r.note,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportSalesCsv(rows: SalesRow[], warehouses: Warehouse[]) {
+  downloadCsv(csvFileName('sales'), salesCsv(rows, warehouses));
+}
+
+/** 集計表の CSV。1列目の見出し (商品名 / 得意先 / 日付) だけが切り口で変わる */
+export function salesSummaryCsv(summaries: SalesSummary[], columnLabel: string): string {
+  const header = `${columnLabel},補足,件数,数量,売上金額,原価,粗利,粗利率,構成比`;
+  const body = summaries.map(s => [
+    s.label,
+    s.sub,
+    s.count,
+    s.quantity,
+    s.amount,
+    s.cost,
+    s.profit,
+    `${(s.profitRate * 100).toFixed(1)}%`,
+    `${(s.share * 100).toFixed(1)}%`,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportSalesSummaryCsv(summaries: SalesSummary[], columnLabel: string) {
+  downloadCsv(csvFileName('salesSummary'), salesSummaryCsv(summaries, columnLabel));
+}
+
+/** 得意先ごとの売上実績 (削除可否の判定と一覧表示に使う) */
+export interface CustomerUsage {
+  saleCount: number; // 売上明細の件数
+  quantity: number;
+  amount: number; // 売上金額
+  profit: number;
+  lastSaleAt: string; // 直近の売上日時 (ISO)。実績なしは空文字
+}
+
+const EMPTY_CUSTOMER_USAGE: CustomerUsage = { saleCount: 0, quantity: 0, amount: 0, profit: 0, lastSaleAt: '' };
+
+/** customerId → 売上実績。得意先なし ('') の分もキー '' に集計する */
+export function customerUsage(rows: SalesRow[]): Map<string, CustomerUsage> {
+  const byId = new Map<string, CustomerUsage>();
+  for (const r of rows) {
+    const usage = byId.get(r.customerId) ?? { ...EMPTY_CUSTOMER_USAGE };
+    usage.saleCount++;
+    usage.quantity += r.quantity;
+    usage.amount += r.amount;
+    usage.profit += r.profit;
+    if (r.date > usage.lastSaleAt) usage.lastSaleAt = r.date;
+    byId.set(r.customerId, usage);
+  }
+  return byId;
+}
+
+/** 得意先マスタの1行 = 1得意先 + その得意先の売上実績 */
+export interface CustomerRow {
+  customer: Customer;
+  usage: CustomerUsage;
+}
+
+/**
+ * 絞り込み済みの得意先一覧。キーワードは得意先名・コード・担当者・電話・メールの部分一致。
+ * 並びは 取引中が先 → 得意先名 (supplierRows と同じ)。includeInactive=false なら取引停止を除く。
+ */
+export function customerRows(
+  customers: Customer[],
+  sales: SalesRow[],
+  keyword = '',
+  includeInactive = true,
+): CustomerRow[] {
+  const q = keyword.trim().toLowerCase();
+  const usageById = customerUsage(sales);
+  return customers
+    .filter(c => includeInactive || c.active)
+    .filter(c => !q || [c.name, c.code, c.contact, c.phone, c.email].some(v => v.toLowerCase().includes(q)))
+    .map(c => ({ customer: c, usage: usageById.get(c.id) ?? { ...EMPTY_CUSTOMER_USAGE } }))
+    .sort((a, b) =>
+      Number(b.customer.active) - Number(a.customer.active) || a.customer.name.localeCompare(b.customer.name));
+}
+
+export function customerCsv(rows: CustomerRow[]): string {
+  const header = '得意先名,得意先コード,担当者,電話番号,メールアドレス,住所,取引状態,売上件数,売上数量,売上金額,粗利,最終売上日,備考';
+  const body = rows.map(r => [
+    r.customer.name,
+    r.customer.code,
+    r.customer.contact,
+    r.customer.phone,
+    r.customer.email,
+    r.customer.address,
+    r.customer.active ? '取引中' : '取引停止',
+    r.usage.saleCount,
+    r.usage.quantity,
+    r.usage.amount,
+    r.usage.profit,
+    r.usage.lastSaleAt ? localDateKey(r.usage.lastSaleAt) : '',
+    r.customer.note,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportCustomerCsv(rows: CustomerRow[]) {
+  downloadCsv(csvFileName('customer'), customerCsv(rows));
+}
+
+// ---------------------------------------------------------------------------
 // 発注履歴 (発注書として印刷した明細の履歴)
 // ---------------------------------------------------------------------------
 
@@ -2541,6 +3024,7 @@ export function useInventory() {
   const [inboundPlans, setInboundPlans] = useState<InboundPlan[]>(SAMPLE_INBOUND_PLANS);
   const [suppliers, setSuppliers] = useState<Supplier[]>(DEFAULT_SUPPLIERS);
   const [purchaseOrderPrints, setPurchaseOrderPrints] = useState<PurchaseOrderPrintItem[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>(DEFAULT_CUSTOMERS);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
@@ -2564,6 +3048,7 @@ export function useInventory() {
       setLedger(txns);
       if (changed) saveLedger(txns);
       setPurchaseOrderPrints(state.purchaseOrderPrints ?? []);
+      setCustomers(state.customers ?? []);
     });
     return () => { cancelled = true; };
   }, []);
@@ -2723,7 +3208,7 @@ export function useInventory() {
     }
   }, [addTransaction, products]);
 
-  const adjustLotQuantity = useCallback((productId: string, lotId: string, delta: number, type?: TransactionType) => {
+  const adjustLotQuantity = useCallback((productId: string, lotId: string, delta: number, type?: TransactionType, sale?: SaleFields) => {
     const product = products.find(p => p.id === productId);
     const lot = product?.lots.find(l => l.id === lotId);
     const actualDelta = lot ? (delta > 0 ? delta : -Math.min(-delta, lot.quantity)) : 0;
@@ -2748,6 +3233,8 @@ export function useInventory() {
         ...(transactionDirection(txnType) === 'out'
           ? { fromWarehouseId: lot.warehouseId }
           : { toWarehouseId: lot.warehouseId }),
+        // 売上出庫のときだけ実売単価・得意先・そのロットの原価も残す (FEFO出庫と同じ)
+        ...(txnType === '売上出庫' ? saleFields(lotUnitCost(lot, product), sale?.unitPrice, sale?.customerId) : {}),
       });
     }
   }, [addTransaction, products]);
@@ -2755,9 +3242,9 @@ export function useInventory() {
   // FEFO 出庫: 商品と数量だけを受け取り、賞味期限の近いロットから順に引き落とす。
   // 引当先の決定は planFefoShipment (純粋関数) に任せ、ここでは在庫の反映と帳票への記録だけを行う。
   // 在庫が足りないときは引ける分だけ引き当て、不足数を shortage として返す (呼び出し側が通知する)。
-  const shipFefo = useCallback((productId: string, quantity: number, options: FefoOptions & { type?: OutboundTransactionType; note?: string } = {}): FefoPlan => {
+  const shipFefo = useCallback((productId: string, quantity: number, options: FefoShipOptions = {}): FefoPlan => {
     const product = products.find(p => p.id === productId);
-    if (!product) return { allocations: [], allocated: 0, shortage: Math.max(0, Math.floor(quantity)), skippedExpired: 0 };
+    if (!product) return { allocations: [], allocated: 0, shortage: Math.max(0, Math.floor(quantity)), skippedExpired: 0, cost: 0 };
 
     const plan = planFefoShipment(product, quantity, options);
     if (plan.allocations.length === 0) return plan;
@@ -2777,8 +3264,10 @@ export function useInventory() {
     });
 
     // 引き当てたロットごとに1件ずつ記録する (どのロットを何個出したかが帳票に残るように)
+    const type = (options.type ?? '売上出庫') as TransactionType;
+    const isSale = type === '売上出庫';
     addTransactions(plan.allocations.map(a => ({
-      type: (options.type ?? '売上出庫') as TransactionType,
+      type,
       productId,
       productName: product.name,
       productSku: product.sku,
@@ -2786,10 +3275,26 @@ export function useInventory() {
       quantity: a.quantity,
       note: options.note ?? 'FEFO出庫',
       fromWarehouseId: a.warehouseId,
+      // 売上だけが実売単価・得意先・出庫時点の原価を持つ (売上高と粗利をあとから集計するため)。
+      // 単価 0 は入荷予定の仕入単価と同じく「未入力」扱いで、帳票には書かない
+      ...(isSale ? saleFields(a.unitCost, options.unitPrice, options.customerId) : {}),
     })));
 
     return plan;
   }, [addTransactions, products]);
+
+  /**
+   * 売上登録 (売上管理タブ)。実際の出庫は FEFO 出庫そのもので、区分を 売上出庫 に固定し、
+   * 実売単価と得意先を一緒に帳票へ残すだけの薄いラッパー。引当結果 (不足の有無) を返す。
+   */
+  const recordSale = useCallback((input: SaleInput): FefoPlan => shipFefo(input.productId, input.quantity, {
+    warehouseId: input.warehouseId,
+    includeExpired: input.includeExpired,
+    type: '売上出庫',
+    note: input.note?.trim() || SALE_NOTE,
+    unitPrice: input.unitPrice,
+    customerId: input.customerId,
+  }), [shipFefo]);
 
   /**
    * 選んだロットをまとめて廃棄する。引当先の決定は planDisposal (純粋関数) に任せ、
@@ -3187,6 +3692,37 @@ export function useInventory() {
     });
   }, [inboundPlans]);
 
+  // ---- 得意先マスタ ----
+  // 売上出庫の帳票が id で参照するだけなので、マスタ自体は在庫を動かさない (帳票にも記録しない)。
+  // 画面と同じ customerValidationError で弾くので、画面に出るエラーと実際の拒否条件がずれない。
+
+  const addCustomer = useCallback((input: CustomerInput) => {
+    setCustomers(prev => {
+      if (customerValidationError(input, prev)) return prev;
+      const next = [...prev, { ...normalizeCustomerInput(input), id: crypto.randomUUID() }];
+      saveCustomers(next); return next;
+    });
+  }, []);
+
+  const updateCustomer = useCallback((id: string, input: CustomerInput) => {
+    setCustomers(prev => {
+      if (!prev.some(c => c.id === id)) return prev;
+      if (customerValidationError(input, prev, id)) return prev;
+      const next = prev.map(c => c.id === id ? { ...normalizeCustomerInput(input), id } : c);
+      saveCustomers(next); return next;
+    });
+  }, []);
+
+  // 売上の記録から参照されている得意先は削除しない (過去の売上の得意先が消えてしまうため)。
+  // 取引が終わっただけなら削除ではなく active=false にしてもらう (仕入先と同じ)
+  const deleteCustomer = useCallback((id: string) => {
+    if (ledger.some(t => t.type === '売上出庫' && t.customerId === id)) return;
+    setCustomers(prev => {
+      const next = prev.filter(c => c.id !== id);
+      saveCustomers(next); return next;
+    });
+  }, [ledger]);
+
   const moveLot = useCallback((productId: string, lotId: string, targetWarehouseId: string, quantity: number) => {
     const product = products.find(p => p.id === productId);
     const lot = product?.lots.find(l => l.id === lotId);
@@ -3265,6 +3801,8 @@ export function useInventory() {
     saveCategories(DEFAULT_CATEGORIES);
     setSuppliers(DEFAULT_SUPPLIERS);
     saveSuppliers(DEFAULT_SUPPLIERS);
+    setCustomers(DEFAULT_CUSTOMERS);
+    saveCustomers(DEFAULT_CUSTOMERS);
     update(fresh);
     setLedger([]);
     saveLedger([]);
@@ -3277,5 +3815,5 @@ export function useInventory() {
     savePurchaseOrderPrints([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale };
 }

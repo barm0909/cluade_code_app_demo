@@ -2,7 +2,7 @@
 // ローカル開発 (wrangler dev) では .wrangler/state のローカルD1、デプロイ後はリモートD1 に同じコードで接続される
 //
 // API 設計はフロント (useInventory.ts) の「スライス単位で全量保存」に合わせている:
-//   GET /api/state        → { products, warehouses, categories, ledger, inboundPlans, suppliers } をまとめて返す
+//   GET /api/state        → { products, warehouses, categories, ledger, inboundPlans, suppliers, customers } をまとめて返す
 //   PUT /api/products     → products + lots テーブルを全置換
 //   PUT /api/warehouses   → warehouses テーブルを全置換
 //   PUT /api/categories   → categories テーブルを全置換
@@ -10,6 +10,7 @@
 //   PUT /api/inbound-plans → inbound_plans テーブルを全置換
 //   PUT /api/suppliers    → suppliers テーブルを全置換
 //   PUT /api/purchase-order-prints → purchase_order_prints テーブルを全置換
+//   PUT /api/customers    → customers テーブルを全置換
 
 export interface Env {
   DB: D1Database;
@@ -38,6 +39,19 @@ interface Supplier {
   email: string;
   address: string;
   leadTimeDays: number;
+  note: string;
+  active: boolean;
+}
+
+// 得意先マスタ。売上出庫の記録が customer_id で参照する (仕入先と対になるマスタ)
+interface Customer {
+  id: string;
+  name: string;
+  code: string;
+  contact: string;
+  phone: string;
+  email: string;
+  address: string;
   note: string;
   active: boolean;
 }
@@ -78,6 +92,8 @@ interface StockTransaction {
   toWarehouseId?: string;
   unitPrice?: number;
   supplierId?: string;
+  customerId?: string; // 売上出庫の売り先
+  costUnitPrice?: number; // 売上出庫したロットの原価 (粗利の計算に使う)
 }
 
 interface InboundPlan {
@@ -165,6 +181,18 @@ interface InboundPlanRow {
   updated_at: string;
 }
 
+interface CustomerRow {
+  id: string;
+  name: string;
+  code: string;
+  contact: string;
+  phone: string;
+  email: string;
+  address: string;
+  note: string;
+  active: number;
+}
+
 interface SupplierRow {
   id: string;
   name: string;
@@ -215,18 +243,21 @@ interface TransactionRow {
   to_warehouse_id: string | null;
   unit_price: number | null;
   supplier_id: string | null;
+  customer_id: string | null;
+  cost_unit_price: number | null;
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
-    db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id FROM stock_transactions ORDER BY date DESC'),
+    db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id, customer_id, cost_unit_price FROM stock_transactions ORDER BY date DESC'),
     db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
     db.prepare('SELECT id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount FROM purchase_order_prints ORDER BY printed_at DESC'),
+    db.prepare('SELECT id, name, code, contact, phone, email, address, note, active FROM customers ORDER BY name'),
   ]);
 
   const lotsByProduct = new Map<string, Lot[]>();
@@ -275,6 +306,8 @@ async function readState(db: D1Database) {
     ...(r.to_warehouse_id != null ? { toWarehouseId: r.to_warehouse_id } : {}),
     ...(r.unit_price != null ? { unitPrice: r.unit_price } : {}),
     ...(r.supplier_id != null ? { supplierId: r.supplier_id } : {}),
+    ...(r.customer_id != null ? { customerId: r.customer_id } : {}),
+    ...(r.cost_unit_price != null ? { costUnitPrice: r.cost_unit_price } : {}),
   }));
 
   const inboundPlans: InboundPlan[] = (plansRes.results as unknown as InboundPlanRow[]).map(r => ({
@@ -334,7 +367,19 @@ async function readState(db: D1Database) {
     amount: r.amount,
   }));
 
-  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints };
+  const customers: Customer[] = (customersRes.results as unknown as CustomerRow[]).map(r => ({
+    id: r.id,
+    name: r.name,
+    code: r.code,
+    contact: r.contact,
+    phone: r.phone,
+    email: r.email,
+    address: r.address,
+    note: r.note,
+    active: r.active !== 0,
+  }));
+
+  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -385,10 +430,10 @@ async function replaceCategories(db: D1Database, categories: Category[]) {
 async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
   const stmts = [db.prepare('DELETE FROM stock_transactions')];
   const insert = db.prepare(
-    'INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id, customer_id, cost_unit_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const t of ledger) {
-    stmts.push(insert.bind(t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null, t.unitPrice ?? null, t.supplierId ?? null));
+    stmts.push(insert.bind(t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null, t.unitPrice ?? null, t.supplierId ?? null, t.customerId ?? null, t.costUnitPrice ?? null));
   }
   await db.batch(stmts);
 }
@@ -415,6 +460,19 @@ async function replaceSuppliers(db: D1Database, suppliers: Supplier[]) {
   );
   for (const s of suppliers) {
     stmts.push(insert.bind(s.id, s.name, s.code, s.contact, s.phone, s.email, s.address, s.leadTimeDays, s.note, s.active ? 1 : 0));
+  }
+  await db.batch(stmts);
+}
+
+// customers を全置換。stock_transactions が customer_id で参照するが外部キーは張っていないので
+// (suppliers と同じ理由)、そのまま削除→再挿入できる
+async function replaceCustomers(db: D1Database, customers: Customer[]) {
+  const stmts = [db.prepare('DELETE FROM customers')];
+  const insert = db.prepare(
+    'INSERT INTO customers (id, name, code, contact, phone, email, address, note, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const c of customers) {
+    stmts.push(insert.bind(c.id, c.name, c.code, c.contact, c.phone, c.email, c.address, c.note, c.active ? 1 : 0));
   }
   await db.batch(stmts);
 }
@@ -460,6 +518,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/suppliers':
           await replaceSuppliers(env.DB, await request.json<Supplier[]>());
+          return Response.json({ ok: true });
+        case '/api/customers':
+          await replaceCustomers(env.DB, await request.json<Customer[]>());
           return Response.json({ ok: true });
         case '/api/purchase-order-prints':
           await replacePurchaseOrderPrints(env.DB, await request.json<PurchaseOrderPrintItem[]>());
