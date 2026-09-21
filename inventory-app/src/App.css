@@ -550,3 +550,22 @@ tr:hover td { background: #fafbff; }
 .abc-badge.abc-a { background: #e6f4ea; color: #2e7d32; }
 .abc-badge.abc-b { background: #fff4e0; color: #b26a00; }
 .abc-badge.abc-c { background: #eeeeee; color: #757575; }
+
+/* 売上管理: 明細 / 商品別 / 得意先別 / 日別 の切り替え。タブの中のもう一段の切り替えなので、
+   上部のタブ (.tab) より小さく、ボタン群として見えるようにしている */
+.sales-modes { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.sales-mode {
+  background: white; color: #888; border: 1px solid #ddd;
+  padding: 7px 16px; border-radius: 999px; cursor: pointer;
+  font-size: 0.85rem; font-weight: 600;
+}
+.sales-mode:hover { color: #4f6ef7; border-color: #4f6ef7; }
+.sales-mode.active { background: #4f6ef7; color: white; border-color: #4f6ef7; }
+
+/* 売上登録・FEFO出庫モーダルの売上金額/原価/粗利プレビュー */
+.sale-preview {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  background: #f5f7ff; border-radius: 8px; padding: 10px 14px;
+  font-size: 0.9rem; color: #555;
+}
+.sale-preview strong { color: #333; font-size: 1.05rem; }
