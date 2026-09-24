@@ -250,7 +250,7 @@ export function LotTraceView({ products, warehouses, ledger, target, onTargetCha
                   <td><strong>{c.productName}</strong></td>
                   <td className="mono">{c.productSku}</td>
                   <td className="mono">{c.lotNo}</td>
-                  <td><ExpiryBadge expiryDate={c.expiryDate} /></td>
+                  <td><ExpiryBadge expiryDate={c.expiryDate} quantity={c.stockQuantity} /></td>
                   <td style={{ textAlign: 'right' }}>
                     {c.stockQuantity === 0
                       ? <span className="badge badge-out">在庫なし</span>

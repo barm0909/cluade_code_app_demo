@@ -179,7 +179,7 @@ export function StocktakeView({ products, categories, warehouses, onApply }: Pro
                   <td><strong>{r.productName}</strong></td>
                   <td className="mono">{r.productSku}</td>
                   <td className="mono">{r.lotNo}</td>
-                  <td><ExpiryBadge expiryDate={r.expiryDate} /></td>
+                  <td><ExpiryBadge expiryDate={r.expiryDate} quantity={r.bookQuantity} /></td>
                   <td><WarehouseDot warehouse={warehouses.find(w => w.id === r.warehouseId)} /></td>
                   <td style={{ textAlign: 'right' }}>{r.bookQuantity}</td>
                   <td style={{ textAlign: 'right' }}>
