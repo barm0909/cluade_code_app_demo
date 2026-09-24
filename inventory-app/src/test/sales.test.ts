@@ -16,6 +16,12 @@ import {
   NO_CUSTOMER,
   SALE_NOTE,
   DEFAULT_WAREHOUSE_ID,
+  taxAmount,
+  withTax,
+  saleAmounts,
+  productTaxRate,
+  defaultTaxRateForCategory,
+  taxRateLabel,
 } from '../useInventory';
 import type { Customer, Product, StockTransaction, Warehouse } from '../useInventory';
 
@@ -159,7 +165,13 @@ describe('salesTotals', () => {
   });
 
   it('0件なら全て0（粗利率も0）', () => {
-    expect(salesTotals([])).toEqual({ count: 0, quantity: 0, amount: 0, cost: 0, profit: 0, profitRate: 0, averageUnitPrice: 0 });
+    expect(salesTotals([])).toEqual({
+      count: 0, quantity: 0, amount: 0, tax: 0, amountWithTax: 0, cost: 0, profit: 0, profitRate: 0, averageUnitPrice: 0,
+      byTaxRate: [
+        { taxRate: 8, amount: 0, tax: 0, amountWithTax: 0 },
+        { taxRate: 10, amount: 0, tax: 0, amountWithTax: 0 },
+      ],
+    });
   });
 });
 
@@ -209,7 +221,9 @@ describe('salesDailySummaries', () => {
 describe('salesCsv / salesSummaryCsv', () => {
   it('明細CSVは見出し + 絞り込み後の行を出す', () => {
     const lines = salesCsv(ROWS.slice(0, 1), WAREHOUSES).split('\n');
-    expect(lines[0]).toBe('日時,商品名,SKU,ロットNo,倉庫,得意先,数量,売上単価,売上金額,原価単価,原価金額,粗利,粗利率,概算,備考');
+    expect(lines[0]).toBe('日時,商品名,SKU,ロットNo,倉庫,得意先,数量,売上単価(税抜),売上金額(税抜),税率,消費税,売上金額(税込),原価単価,原価金額,粗利,粗利率,概算,備考');
+    // t3: 4×140=560 → 8% で消費税 45 (44.8 を四捨五入)、税込 605
+    expect(lines[1]).toContain(',560,8%,45,605,');
     expect(lines[1]).toContain('食パン');
     expect(lines[1]).toContain('販売倉庫');
     expect(lines[1]).toContain('さくらカフェ');
@@ -223,7 +237,7 @@ describe('salesCsv / salesSummaryCsv', () => {
 
   it('集計CSVは切り口の名前を1列目の見出しにする', () => {
     const lines = salesSummaryCsv(salesCustomerSummaries(ROWS), '得意先').split('\n');
-    expect(lines[0]).toBe('得意先,補足,件数,数量,売上金額,原価,粗利,粗利率,構成比');
+    expect(lines[0]).toBe('得意先,補足,件数,数量,売上金額(税抜),消費税,売上金額(税込),原価,粗利,粗利率,構成比');
     expect(lines).toHaveLength(4);
   });
 });
@@ -353,5 +367,153 @@ describe('useInventory — 売上以外の出庫', () => {
 
     expect(result.current.ledger[0].costUnitPrice).toBeUndefined();
     expect(result.current.ledger[0].unitPrice).toBeUndefined();
+  });
+});
+
+// ────────────────────────────────────────────────────────────
+// 消費税 (単価は税抜、税率は商品ごと、明細1行ごとに四捨五入)
+// ────────────────────────────────────────────────────────────
+describe('消費税の計算', () => {
+  it('税抜金額 × 税率を1円未満四捨五入する', () => {
+    expect(taxAmount(105, 8)).toBe(8); // 8.4 → 8
+    expect(taxAmount(1062, 8)).toBe(85); // 84.96 → 85
+    expect(taxAmount(5, 10)).toBe(1); // 0.5 → 1
+    expect(taxAmount(0, 10)).toBe(0);
+    expect(withTax(198, 8)).toBe(214); // 15.84 → 16
+    expect(withTax(1000, 10)).toBe(1100);
+  });
+
+  it('税率未設定の商品は軽減税率 8% として扱う', () => {
+    expect(productTaxRate(PRODUCTS[0])).toBe(8);
+    expect(productTaxRate({ taxRate: 10 })).toBe(10);
+    expect(taxRateLabel(8)).toBe('8%（軽減）');
+    expect(taxRateLabel(10)).toBe('10%');
+  });
+
+  it('saleAmounts は引当 (帳票の1行) ごとに四捨五入して足し上げる', () => {
+    // 105円×1個 を2ロットから → 8.4→8 が2行で 16 (まとめて計算すると 16.8→17 になる)
+    expect(saleAmounts([1, 1], 105, 8)).toEqual({ amount: 210, tax: 16, amountWithTax: 226 });
+    expect(saleAmounts([2], 105, 8)).toEqual({ amount: 210, tax: 17, amountWithTax: 227 });
+    expect(saleAmounts([], 105, 8)).toEqual({ amount: 0, tax: 0, amountWithTax: 0 });
+  });
+
+  it('新しい商品の税率はカテゴリ内で一番多い税率を初期値にする', () => {
+    const products: Product[] = [
+      { ...PRODUCTS[0], id: 'a', categoryId: 'cat-label', taxRate: 10 },
+      { ...PRODUCTS[0], id: 'b', categoryId: 'cat-label', taxRate: 10 },
+      { ...PRODUCTS[0], id: 'c', categoryId: 'cat-label', taxRate: 8 },
+      { ...PRODUCTS[0], id: 'd', categoryId: 'cat-dairy', taxRate: 8 },
+    ];
+    expect(defaultTaxRateForCategory(products, 'cat-label')).toBe(10);
+    expect(defaultTaxRateForCategory(products, 'cat-dairy')).toBe(8);
+    expect(defaultTaxRateForCategory(products, 'cat-empty')).toBe(8); // 商品がなければ既定値
+  });
+});
+
+describe('salesRows / salesTotals — 消費税', () => {
+  const products: Product[] = [
+    { ...PRODUCTS[0], taxRate: 8 },
+    { ...PRODUCTS[1], id: 'p3', name: '値札ラベル', sku: 'LB-R01', price: 5, costPrice: 2, taxRate: 10 },
+  ];
+  const ledger: StockTransaction[] = [
+    txn({ id: 's-label', productId: 'p3', productName: '値札ラベル', productSku: 'LB-R01', quantity: 101, unitPrice: 5, costUnitPrice: 2, taxRate: 10 }),
+    txn({ id: 's-milk', quantity: 3, unitPrice: 198, costUnitPrice: 118, taxRate: 8 }),
+    txn({ id: 's-old', quantity: 1, unitPrice: 200, costUnitPrice: 118 }), // 消費税の導入前の記録 (税率なし)
+  ];
+  const rows = salesRows(ledger, products, CUSTOMERS);
+  const byId = (id: string) => rows.find(r => r.txnId === id)!;
+
+  it('明細1行ごとに消費税と税込金額を持つ', () => {
+    // 5×101=505 → 10% で 50.5 → 51
+    expect(byId('s-label')).toMatchObject({ amount: 505, taxRate: 10, tax: 51, amountWithTax: 556 });
+    // 198×3=594 → 8% で 47.52 → 48
+    expect(byId('s-milk')).toMatchObject({ amount: 594, taxRate: 8, tax: 48, amountWithTax: 642 });
+  });
+
+  it('粗利は税抜の売上金額から計算する (消費税は粗利に含めない)', () => {
+    expect(byId('s-milk').profit).toBe(594 - 3 * 118);
+  });
+
+  it('帳票に税率がない古い売上は商品の現在の税率を使い、概算の印はつけない', () => {
+    expect(byId('s-old')).toMatchObject({ taxRate: 8, tax: 16, estimatedPrice: false, estimatedCost: false });
+  });
+
+  it('帳票に記録された税率が商品の現在の税率より優先される', () => {
+    const changed = products.map(p => p.id === 'p1' ? { ...p, taxRate: 10 as const } : p);
+    const row = salesRows(ledger, changed, CUSTOMERS).find(r => r.txnId === 's-milk')!;
+    expect(row.taxRate).toBe(8);
+    expect(row.tax).toBe(48);
+  });
+
+  it('合計は明細ごとの消費税の足し上げで、税率別の内訳も出す', () => {
+    const totals = salesTotals(rows);
+    expect(totals.amount).toBe(505 + 594 + 200);
+    expect(totals.tax).toBe(51 + 48 + 16);
+    expect(totals.amountWithTax).toBe(totals.amount + totals.tax);
+    expect(totals.byTaxRate).toEqual([
+      { taxRate: 8, amount: 794, tax: 64, amountWithTax: 858 },
+      { taxRate: 10, amount: 505, tax: 51, amountWithTax: 556 },
+    ]);
+  });
+
+  it('集計にも消費税・税込金額が乗る (構成比は税抜の売上高で計算)', () => {
+    const milk = salesProductSummaries(rows).find(s => s.key === 'p1')!;
+    expect(milk).toMatchObject({ amount: 794, tax: 64, amountWithTax: 858 });
+    expect(milk.share).toBeCloseTo(794 / 1299);
+  });
+});
+
+// SAMPLE_DATA: 牛乳(id:1) は軽減税率 8%、値札ラベル(id:3) は標準税率 10%
+describe('useInventory — 売上出庫に税率を残す', () => {
+  it('売上登録は引き当てたロットごとの帳票に出庫時点の税率を書く', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => { result.current.recordSale({ productId: '1', quantity: 12, unitPrice: 180, customerId: '' }); });
+    act(() => { result.current.recordSale({ productId: '3', quantity: 10, unitPrice: 5, customerId: '' }); });
+
+    const milk = result.current.ledger.filter(t => t.productId === '1');
+    expect(milk).toHaveLength(2);
+    expect(milk.every(t => t.taxRate === 8)).toBe(true);
+    expect(result.current.ledger.find(t => t.productId === '3')!.taxRate).toBe(10);
+  });
+
+  it('ロット行の売上出庫にも税率が残り、それ以外の出庫には残らない', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => { result.current.adjustLotQuantity('1', 'l1', -1, '売上出庫', { unitPrice: 198 }); });
+    act(() => { result.current.adjustLotQuantity('1', 'l1', -1, '調整出庫'); });
+
+    const [adj, sale] = result.current.ledger;
+    expect(sale.type).toBe('売上出庫');
+    expect(sale.taxRate).toBe(8);
+    expect(adj.type).toBe('調整出庫');
+    expect(adj.taxRate).toBeUndefined();
+  });
+
+  it('あとで商品の税率を変えても、過去の売上の消費税は変わらない', () => {
+    const { result } = renderHook(() => useInventory());
+
+    act(() => { result.current.recordSale({ productId: '1', quantity: 1, unitPrice: 1000, customerId: '' }); });
+    const milk = result.current.products.find(p => p.id === '1')!;
+    act(() => { result.current.updateProduct('1', { ...milk, taxRate: 10 }); });
+
+    const row = salesRows(result.current.ledger, result.current.products, result.current.customers)[0];
+    expect(row.taxRate).toBe(8);
+    expect(row.tax).toBe(80);
+  });
+
+  it('プレビュー (saleAmounts) と記録された売上の消費税が一致する', () => {
+    const { result } = renderHook(() => useInventory());
+    const milk = result.current.products.find(p => p.id === '1')!;
+    // 105円で12個 → l1 から10個 (1050→84)、l2 から2個 (210→16.8→17)
+    const plan = planFefoShipment(milk, 12);
+    const preview = saleAmounts(plan.allocations.map(a => a.quantity), 105, productTaxRate(milk));
+
+    act(() => { result.current.recordSale({ productId: '1', quantity: 12, unitPrice: 105, customerId: '' }); });
+
+    const totals = salesTotals(salesRows(result.current.ledger, result.current.products, result.current.customers));
+    expect(preview).toEqual({ amount: 1260, tax: 101, amountWithTax: 1361 });
+    expect(totals.tax).toBe(preview.tax);
+    expect(totals.amountWithTax).toBe(preview.amountWithTax);
   });
 });

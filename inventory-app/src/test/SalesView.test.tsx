@@ -87,6 +87,23 @@ describe('SalesView — 明細', () => {
     expect(screen.getByText('¥1,068')).toBeInTheDocument();
   });
 
+  it('税込売上高・消費税・税率別の内訳を出す', () => {
+    render(<SalesView {...defaultProps} />);
+    // 消費税は明細ごとに四捨五入: 1,900→152 / 560→45 (44.8) / 400→32 = 229。税率未設定の商品は 8%
+    expect(screen.getByText('¥3,089')).toBeInTheDocument();
+    expect(screen.getByText('うち消費税 ¥229')).toBeInTheDocument();
+    expect(screen.getByText('8%（軽減）対象 ¥2,860（税 ¥229）')).toBeInTheDocument();
+    expect(screen.getByText('10%対象 ¥0（税 ¥0）')).toBeInTheDocument();
+  });
+
+  it('明細に税率・消費税・税込金額の列が出る', () => {
+    render(<SalesView {...defaultProps} />);
+    const breadRow = within(screen.getByRole('table')).getAllByRole('row')[1]; // 食パン 560円
+    expect(within(breadRow).getByText('8%')).toBeInTheDocument();
+    expect(within(breadRow).getByText('¥45')).toBeInTheDocument();
+    expect(within(breadRow).getByText('¥605')).toBeInTheDocument();
+  });
+
   it('単価が記録されていない売上は概算として印をつける', () => {
     render(<SalesView {...defaultProps} />);
     expect(screen.getByText('うち概算 1件')).toBeInTheDocument();
@@ -229,6 +246,8 @@ describe('SalesView — 売上登録', () => {
     await user.type(qty, '3');
     await user.click(screen.getByRole('button', { name: '売上を登録' }));
 
-    expect(await screen.findByText(/売上金額 ¥600 \/ 原価 ¥354 \/ 粗利 ¥246/)).toBeInTheDocument();
+    // 200円×3=600 (税抜)。テストの牛乳は税率未設定なので既定の 8% で消費税 48
+    expect(await screen.findByText(/売上金額 ¥600（税抜）\+ 消費税 ¥48 = 税込 ¥648/)).toBeInTheDocument();
+    expect(screen.getByText(/原価 ¥354 \/ 粗利 ¥246/)).toBeInTheDocument();
   });
 });

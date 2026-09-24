@@ -69,8 +69,10 @@ export interface Product {
   categoryId: string;
   lots: Lot[];
   minQuantity: number;
-  price: number;
+  price: number; // 販売定価 (税抜)
   costPrice: number;
+  /** 消費税率 (%)。食品は軽減税率 8%、ラベル等の資材は標準税率 10%。未設定は productTaxRate で既定値を使う */
+  taxRate?: TaxRate;
   updatedAt: string;
 }
 
@@ -119,6 +121,11 @@ export interface StockTransaction {
    * あとから再計算できるようその場で写し取る (廃棄ロスが unitPrice を持つのと同じ理由)。
    */
   costUnitPrice?: number;
+  /**
+   * 出庫した時点の商品の消費税率 (%)。「売上出庫」だけが持つ。
+   * 商品の税率はあとから変えられるので、売上の消費税が過去にさかのぼって変わらないようその場で写し取る。
+   */
+  taxRate?: TaxRate;
 }
 
 // 入荷予定 (発注済み・入荷待ちの在庫)。実際の在庫はまだ持たず、入荷して初めてロットになる。
@@ -252,6 +259,85 @@ export function lotUnitCost(lot: Lot, product: Product): number {
   return lot.unitPrice ?? product.costPrice;
 }
 
+// ---- 消費税 ----
+// 単価 (販売定価・実売単価・原価) はすべて税抜で持ち、消費税と税込金額は計算で出す。
+// 税率は商品ごとに 8% (軽減税率: 飲食料品) か 10% (標準税率) のどちらか。
+
+export type TaxRate = 8 | 10;
+export const REDUCED_TAX_RATE: TaxRate = 8;
+export const STANDARD_TAX_RATE: TaxRate = 10;
+export const TAX_RATES: TaxRate[] = [REDUCED_TAX_RATE, STANDARD_TAX_RATE];
+/** 税率未設定の商品に使う既定値。食品在庫のアプリなので軽減税率 */
+export const DEFAULT_TAX_RATE: TaxRate = REDUCED_TAX_RATE;
+
+export function isTaxRate(value: unknown): value is TaxRate {
+  return value === REDUCED_TAX_RATE || value === STANDARD_TAX_RATE;
+}
+
+/** 画面・CSV 用の税率表記 (8% は軽減税率であることが分かるように) */
+export function taxRateLabel(rate: TaxRate): string {
+  return rate === REDUCED_TAX_RATE ? '8%（軽減）' : `${rate}%`;
+}
+
+export function productTaxRate(product: Pick<Product, 'taxRate'>): TaxRate {
+  return isTaxRate(product.taxRate) ? product.taxRate : DEFAULT_TAX_RATE;
+}
+
+/**
+ * 税抜金額にかかる消費税 (円)。1円未満は四捨五入。
+ * 売上明細1行 (数量 × 単価) ごとに計算し、合計はその足し上げにする (明細ごとの端数処理)。
+ */
+export function taxAmount(amountExcludingTax: number, rate: TaxRate): number {
+  return Math.round(amountExcludingTax * rate / 100);
+}
+
+/** 税抜金額 → 税込金額 */
+export function withTax(amountExcludingTax: number, rate: TaxRate): number {
+  return amountExcludingTax + taxAmount(amountExcludingTax, rate);
+}
+
+export interface SaleAmounts {
+  amount: number; // 税抜
+  tax: number;
+  amountWithTax: number;
+}
+
+/**
+ * 売上登録・FEFO出庫のプレビュー用の金額。売上は引き当てたロットごとに帳票へ1行ずつ記録され、
+ * 消費税もその1行ごとに四捨五入される (salesRows) ので、プレビューも同じ単位で計算する。
+ * quantities は引当ごとの数量 (FefoPlan.allocations の quantity)。
+ */
+export function saleAmounts(quantities: number[], unitPrice: number, rate: TaxRate): SaleAmounts {
+  let amount = 0;
+  let tax = 0;
+  for (const q of quantities) {
+    amount += unitPrice * q;
+    tax += taxAmount(unitPrice * q, rate);
+  }
+  return { amount, tax, amountWithTax: amount + tax };
+}
+
+/**
+ * 新しい商品の税率の初期値。同じカテゴリの商品で一番多い税率を引き継ぐ
+ * (乳製品なら 8%、ラベルなら 10% のように、カテゴリ内で税率はふつう揃っているため)。
+ * カテゴリに商品が無ければ既定値。同数なら軽減税率を優先する。
+ */
+export function defaultTaxRateForCategory(products: Product[], categoryId: string): TaxRate {
+  const counts = new Map<TaxRate, number>();
+  for (const p of products) {
+    if (p.categoryId !== categoryId) continue;
+    const rate = productTaxRate(p);
+    counts.set(rate, (counts.get(rate) ?? 0) + 1);
+  }
+  let best: TaxRate = DEFAULT_TAX_RATE;
+  let bestCount = 0;
+  for (const rate of TAX_RATES) {
+    const count = counts.get(rate) ?? 0;
+    if (count > bestCount) { best = rate; bestCount = count; }
+  }
+  return best;
+}
+
 // JANコード入力の正規化: 全角数字を半角へ直し、ハイフン・空白などの区切り文字を除去する
 // (IME オンのままの入力やバーコード表記のハイフンで検証に落ちないようにするため)
 export function normalizeJanCode(value: string): string {
@@ -365,7 +451,7 @@ const d = (offset: number) => {
 
 const SAMPLE_DATA: Product[] = [
   {
-    id: '1', name: '牛乳', sku: 'ML-001', janCode: '4901234567894', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130,
+    id: '1', name: '牛乳', sku: 'ML-001', janCode: '4901234567894', categoryId: 'cat-dairy', minQuantity: 5, price: 198, costPrice: 130, taxRate: 8,
     lots: [
       { id: 'l1', lotNo: d(3).replace(/-/g, ''), expiryDate: d(3), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 118 },
       { id: 'l2', lotNo: d(7).replace(/-/g, ''), expiryDate: d(7), quantity: 10, warehouseId: DEFAULT_WAREHOUSE_ID, unitPrice: 120 },
@@ -373,21 +459,21 @@ const SAMPLE_DATA: Product[] = [
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '2', name: '食パン', sku: 'BR-001', janCode: '4912345678904', categoryId: 'cat-bread', minQuantity: 5, price: 150, costPrice: 90,
+    id: '2', name: '食パン', sku: 'BR-001', janCode: '4912345678904', categoryId: 'cat-bread', minQuantity: 5, price: 150, costPrice: 90, taxRate: 8,
     lots: [
       { id: 'l3', lotNo: d(1).replace(/-/g, ''), expiryDate: d(1), quantity: 3, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', categoryId: 'cat-label', minQuantity: 100, price: 5, costPrice: 2,
+    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', categoryId: 'cat-label', minQuantity: 100, price: 5, costPrice: 2, taxRate: 10,
     lots: [
       { id: 'l4', lotNo: '20260101', quantity: 500, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '4', name: 'チーズ', sku: 'CS-001', janCode: '4901987654322', categoryId: 'cat-dairy', minQuantity: 4, price: 350, costPrice: 220,
+    id: '4', name: 'チーズ', sku: 'CS-001', janCode: '4901987654322', categoryId: 'cat-dairy', minQuantity: 4, price: 350, costPrice: 220, taxRate: 8,
     lots: [
       { id: 'l5', lotNo: d(-2).replace(/-/g, ''), expiryDate: d(-2), quantity: 2, warehouseId: 'wh-hold' },
       { id: 'l6', lotNo: d(14).replace(/-/g, ''), expiryDate: d(14), quantity: 4, warehouseId: DEFAULT_WAREHOUSE_ID },
@@ -418,6 +504,7 @@ const SAMPLE_INBOUND_PLANS: InboundPlan[] = [
 // 旧データの後方互換:
 // - warehouseId がないロットにデフォルトを付与
 // - categoryId がない商品 (旧 category 文字列) はカテゴリマスタへ名前で対応付け、なければカテゴリを作成
+// - 税率がない商品 (消費税の導入前) は既定の税率 (軽減税率 8%) にする
 function migrateProducts(products: Product[], categories: Category[]): { products: Product[]; categories: Category[] } {
   const cats = [...categories];
   const idByName = new Map(cats.map(c => [c.name, c.id]));
@@ -436,6 +523,7 @@ function migrateProducts(products: Product[], categories: Category[]): { product
     return {
       ...p,
       categoryId,
+      taxRate: productTaxRate(p),
       lots: p.lots.map(l => ({ ...l, warehouseId: l.warehouseId ?? DEFAULT_WAREHOUSE_ID })),
     };
   });
@@ -1946,7 +2034,7 @@ export function selectableCustomers(customers: Customer[], currentId = ''): Cust
 
 /** 売上出庫のときだけ帳票に足す入力 (実売単価・得意先) */
 export interface SaleFields {
-  /** 実売単価 (円)。0 と未指定は「未入力」扱い (帳票には書かず、集計時に販売定価で代用する) */
+  /** 実売単価 (税抜・円)。0 と未指定は「未入力」扱い (帳票には書かず、集計時に販売定価で代用する) */
   unitPrice?: number;
   /** 得意先マスタの id。空文字・未指定は「得意先なし」 */
   customerId?: string;
@@ -1954,12 +2042,14 @@ export interface SaleFields {
 
 /**
  * 売上出庫の帳票に足す項目を組み立てる。
- * 原価は出庫したそのロットの原価をそのまま写し取る (売れたロットは減るのであとから引き直せない)。
- * 実売単価は 0 なら「未入力」として書かない (入荷予定の仕入単価と同じ扱い)。
+ * 原価は出庫したそのロットの原価を、税率はその時点の商品の税率をそのまま写し取る
+ * (売れたロットは減るのであとから引き直せない / 商品の税率はあとで変わりうる)。
+ * 実売単価 (税抜) は 0 なら「未入力」として書かない (入荷予定の仕入単価と同じ扱い)。
  */
-function saleFields(unitCost: number, unitPrice?: number, customerId?: string) {
+function saleFields(product: Product, unitCost: number, unitPrice?: number, customerId?: string) {
   return {
     costUnitPrice: Math.round(unitCost),
+    taxRate: productTaxRate(product),
     ...(unitPrice != null && unitPrice > 0 ? { unitPrice: Math.round(unitPrice) } : {}),
     ...(customerId ? { customerId } : {}),
   };
@@ -1969,7 +2059,7 @@ function saleFields(unitCost: number, unitPrice?: number, customerId?: string) {
 export interface SaleInput {
   productId: string;
   quantity: number;
-  /** 実売単価 (円)。0 は「未入力」扱いで、集計時に商品の販売定価で代用する */
+  /** 実売単価 (税抜・円)。0 は「未入力」扱いで、集計時に商品の販売定価で代用する */
   unitPrice: number;
   /** 得意先マスタの id。空文字は「得意先なし」 */
   customerId: string;
@@ -1994,8 +2084,11 @@ export interface SalesRow {
   customerId: string; // 空文字は得意先なし
   customerName: string;
   quantity: number;
-  unitPrice: number; // 実売単価 (未記録なら商品の販売定価)
-  amount: number; // unitPrice * quantity
+  unitPrice: number; // 実売単価 (税抜。未記録なら商品の販売定価)
+  amount: number; // unitPrice * quantity (税抜の売上金額)
+  taxRate: TaxRate; // 出庫時点の税率 (未記録なら商品の現在の税率)
+  tax: number; // amount にかかる消費税 (この明細1行で四捨五入)
+  amountWithTax: number; // amount + tax
   unitCost: number; // 出庫時点のロット原価 (未記録なら商品の現在原価)
   cost: number; // unitCost * quantity
   profit: number; // amount - cost
@@ -2026,7 +2119,11 @@ export function salesRows(ledger: StockTransaction[], products: Product[], custo
       const estimatedCost = t.costUnitPrice == null;
       const unitPrice = t.unitPrice ?? product?.price ?? 0;
       const unitCost = t.costUnitPrice ?? product?.costPrice ?? 0;
+      // 消費税の導入前の記録は税率を持たないので、商品の現在の税率を使う。商品の税率が変わることは
+      // まずなく、全件を「概算」扱いにすると印だらけになるため、単価・原価と違って印はつけない
+      const taxRate = isTaxRate(t.taxRate) ? t.taxRate : product ? productTaxRate(product) : DEFAULT_TAX_RATE;
       const amount = unitPrice * t.quantity;
+      const tax = taxAmount(amount, taxRate);
       const cost = unitCost * t.quantity;
       const customerId = t.customerId ?? '';
       return {
@@ -2042,6 +2139,9 @@ export function salesRows(ledger: StockTransaction[], products: Product[], custo
         quantity: t.quantity,
         unitPrice,
         amount,
+        taxRate,
+        tax,
+        amountWithTax: amount + tax,
         unitCost,
         cost,
         profit: amount - cost,
@@ -2089,28 +2189,50 @@ export function filterSales(rows: SalesRow[], filter: SalesFilter): SalesRow[] {
   });
 }
 
+/** 税率ごとの売上 (適格請求書と同じく 8% 対象 / 10% 対象を分けて見るため) */
+export interface SalesTaxBreakdown {
+  taxRate: TaxRate;
+  amount: number; // 税抜の売上金額
+  tax: number; // 消費税 (明細ごとに四捨五入した額の合計)
+  amountWithTax: number;
+}
+
 export interface SalesTotals {
   count: number; // 明細件数
   quantity: number;
-  amount: number; // 売上高
+  amount: number; // 売上高 (税抜)
+  tax: number; // 消費税
+  amountWithTax: number; // 税込売上高
   cost: number; // 売上原価
-  profit: number; // 粗利
+  profit: number; // 粗利 (税抜の売上高 − 原価)
   profitRate: number; // 粗利率 (売上0なら0)
-  averageUnitPrice: number; // 売上高 ÷ 数量
+  averageUnitPrice: number; // 売上高 (税抜) ÷ 数量
+  /** 税率別の内訳 (軽減税率が先)。売上の無い税率も 0 円で含める */
+  byTaxRate: SalesTaxBreakdown[];
 }
 
 export function salesTotals(rows: SalesRow[]): SalesTotals {
   const quantity = rows.reduce((s, r) => s + r.quantity, 0);
   const amount = rows.reduce((s, r) => s + r.amount, 0);
+  const tax = rows.reduce((s, r) => s + r.tax, 0);
   const cost = rows.reduce((s, r) => s + r.cost, 0);
+  const byTaxRate = TAX_RATES.map(taxRate => {
+    const ofRate = rows.filter(r => r.taxRate === taxRate);
+    const rateAmount = ofRate.reduce((s, r) => s + r.amount, 0);
+    const rateTax = ofRate.reduce((s, r) => s + r.tax, 0);
+    return { taxRate, amount: rateAmount, tax: rateTax, amountWithTax: rateAmount + rateTax };
+  });
   return {
     count: rows.length,
     quantity,
     amount,
+    tax,
+    amountWithTax: amount + tax,
     cost,
     profit: amount - cost,
     profitRate: amount > 0 ? (amount - cost) / amount : 0,
     averageUnitPrice: quantity > 0 ? amount / quantity : 0,
+    byTaxRate,
   };
 }
 
@@ -2121,11 +2243,13 @@ export interface SalesSummary {
   sub: string; // SKU など補足 (なければ空文字)
   count: number; // 明細件数
   quantity: number;
-  amount: number;
+  amount: number; // 税抜
+  tax: number;
+  amountWithTax: number;
   cost: number;
   profit: number;
   profitRate: number;
-  share: number; // 売上高の構成比 (全体の売上高が0なら0)
+  share: number; // 売上高 (税抜) の構成比 (全体の売上高が0なら0)
 }
 
 /** 集計の共通処理。キーごとに足し上げ、売上高の多い順に並べて構成比を付ける */
@@ -2133,10 +2257,13 @@ function summarize(rows: SalesRow[], keyOf: (r: SalesRow) => { key: string; labe
   const byKey = new Map<string, SalesSummary>();
   for (const r of rows) {
     const { key, label, sub } = keyOf(r);
-    const current = byKey.get(key) ?? { key, label, sub, count: 0, quantity: 0, amount: 0, cost: 0, profit: 0, profitRate: 0, share: 0 };
+    const current = byKey.get(key)
+      ?? { key, label, sub, count: 0, quantity: 0, amount: 0, tax: 0, amountWithTax: 0, cost: 0, profit: 0, profitRate: 0, share: 0 };
     current.count++;
     current.quantity += r.quantity;
     current.amount += r.amount;
+    current.tax += r.tax;
+    current.amountWithTax += r.amountWithTax;
     current.cost += r.cost;
     byKey.set(key, current);
   }
@@ -2174,7 +2301,7 @@ export function salesDailySummaries(rows: SalesRow[]): SalesSummary[] {
 
 export function salesCsv(rows: SalesRow[], warehouses: Warehouse[]): string {
   const whName = (id: string) => id ? (warehouses.find(w => w.id === id)?.name ?? id) : '';
-  const header = '日時,商品名,SKU,ロットNo,倉庫,得意先,数量,売上単価,売上金額,原価単価,原価金額,粗利,粗利率,概算,備考';
+  const header = '日時,商品名,SKU,ロットNo,倉庫,得意先,数量,売上単価(税抜),売上金額(税抜),税率,消費税,売上金額(税込),原価単価,原価金額,粗利,粗利率,概算,備考';
   const body = rows.map(r => [
     formatLedgerDateTime(r.date),
     r.productName,
@@ -2185,6 +2312,9 @@ export function salesCsv(rows: SalesRow[], warehouses: Warehouse[]): string {
     r.quantity,
     r.unitPrice,
     r.amount,
+    `${r.taxRate}%`,
+    r.tax,
+    r.amountWithTax,
     r.unitCost,
     r.cost,
     r.profit,
@@ -2201,13 +2331,15 @@ export function exportSalesCsv(rows: SalesRow[], warehouses: Warehouse[]) {
 
 /** 集計表の CSV。1列目の見出し (商品名 / 得意先 / 日付) だけが切り口で変わる */
 export function salesSummaryCsv(summaries: SalesSummary[], columnLabel: string): string {
-  const header = `${columnLabel},補足,件数,数量,売上金額,原価,粗利,粗利率,構成比`;
+  const header = `${columnLabel},補足,件数,数量,売上金額(税抜),消費税,売上金額(税込),原価,粗利,粗利率,構成比`;
   const body = summaries.map(s => [
     s.label,
     s.sub,
     s.count,
     s.quantity,
     s.amount,
+    s.tax,
+    s.amountWithTax,
     s.cost,
     s.profit,
     `${(s.profitRate * 100).toFixed(1)}%`,
@@ -3234,7 +3366,7 @@ export function useInventory() {
           ? { fromWarehouseId: lot.warehouseId }
           : { toWarehouseId: lot.warehouseId }),
         // 売上出庫のときだけ実売単価・得意先・そのロットの原価も残す (FEFO出庫と同じ)
-        ...(txnType === '売上出庫' ? saleFields(lotUnitCost(lot, product), sale?.unitPrice, sale?.customerId) : {}),
+        ...(txnType === '売上出庫' ? saleFields(product, lotUnitCost(lot, product), sale?.unitPrice, sale?.customerId) : {}),
       });
     }
   }, [addTransaction, products]);
@@ -3277,7 +3409,7 @@ export function useInventory() {
       fromWarehouseId: a.warehouseId,
       // 売上だけが実売単価・得意先・出庫時点の原価を持つ (売上高と粗利をあとから集計するため)。
       // 単価 0 は入荷予定の仕入単価と同じく「未入力」扱いで、帳票には書かない
-      ...(isSale ? saleFields(a.unitCost, options.unitPrice, options.customerId) : {}),
+      ...(isSale ? saleFields(product, a.unitCost, options.unitPrice, options.customerId) : {}),
     })));
 
     return plan;
@@ -3516,12 +3648,13 @@ export function useInventory() {
 
   const exportCsv = useCallback(() => {
     const categoryName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
-    const header = '商品名,SKU,JANコード,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数';
-    const rows = products.flatMap(p =>
-      p.lots.length > 0
-        ? p.lots.map(l => [p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
-        : [[p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, '', '', 0].join(',')]
-    );
+    const header = '商品名,SKU,JANコード,カテゴリ,販売定価(税抜),原価,税率,ロットNo,賞味期限,在庫数';
+    const rows = products.flatMap(p => {
+      const head = [p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, `${productTaxRate(p)}%`];
+      return p.lots.length > 0
+        ? p.lots.map(l => [...head, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
+        : [[...head, '', '', 0].join(',')];
+    });
     downloadCsv(csvFileName('inventory'), header + '\n' + rows.join('\n'));
   }, [products, categories]);
 

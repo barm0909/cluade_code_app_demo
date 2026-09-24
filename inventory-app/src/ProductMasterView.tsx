@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react';
-import { isValidJanCode, normalizeJanCode } from './useInventory';
+import { TAX_RATES, isValidJanCode, normalizeJanCode, productTaxRate, taxRateLabel, withTax } from './useInventory';
 import type { Category, Product } from './useInventory';
 import { useConfirm } from './useConfirm';
 import { NumberInput } from './NumberInput';
@@ -16,6 +16,7 @@ type MasterForm = Omit<Product, 'id' | 'updatedAt' | 'lots'>;
 
 const toForm = (p: Product): MasterForm => ({
   name: p.name, sku: p.sku, janCode: p.janCode ?? '', categoryId: p.categoryId, minQuantity: p.minQuantity, price: p.price, costPrice: p.costPrice,
+  taxRate: productTaxRate(p),
 });
 
 export function ProductMasterView({ products, categories, onUpdate, onDelete, onAddClick }: Props) {
@@ -54,8 +55,9 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
             <th>JANコード</th>
             <th>カテゴリ</th>
             <th>最低在庫数</th>
-            <th>販売定価</th>
-            <th>原価</th>
+            <th>税率</th>
+            <th>販売定価(税抜)</th>
+            <th>原価(税抜)</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -73,6 +75,11 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
                 </select>
               </td>
               <td><NumberInput className="master-input" aria-label="最低在庫数" min={0} value={form.minQuantity} onValueChange={v => set('minQuantity', v)} /></td>
+              <td>
+                <select className="master-input" aria-label="税率" value={productTaxRate(form)} onChange={e => set('taxRate', Number(e.target.value))}>
+                  {TAX_RATES.map(r => <option key={r} value={r}>{taxRateLabel(r)}</option>)}
+                </select>
+              </td>
               <td><NumberInput className="master-input" aria-label="販売定価" min={0} value={form.price} onValueChange={v => set('price', v)} /></td>
               <td><NumberInput className="master-input" aria-label="原価" min={0} value={form.costPrice} onValueChange={v => set('costPrice', v)} /></td>
               <td>
@@ -82,7 +89,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
                 </div>
               </td>
             </tr>
-            {error && <tr className="master-editing-row"><td colSpan={8}><span className="field-error" role="alert">{error}</span></td></tr>}
+            {error && <tr className="master-editing-row"><td colSpan={9}><span className="field-error" role="alert">{error}</span></td></tr>}
             </Fragment>
           ) : (
             <tr key={p.id}>
@@ -91,7 +98,8 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
               <td className="mono">{p.janCode || '—'}</td>
               <td><span className="badge">{categories.find(c => c.id === p.categoryId)?.name ?? '—'}</span></td>
               <td>{p.minQuantity}</td>
-              <td>¥{p.price.toLocaleString()}</td>
+              <td>{taxRateLabel(productTaxRate(p))}</td>
+              <td>¥{p.price.toLocaleString()}<br /><small className="label-hint">税込 ¥{withTax(p.price, productTaxRate(p)).toLocaleString()}</small></td>
               <td>¥{p.costPrice.toLocaleString()}</td>
               <td>
                 <div className="row-actions">
@@ -104,7 +112,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
               </td>
             </tr>
           ))}
-          {products.length === 0 && <tr><td colSpan={8} className="empty">商品がありません</td></tr>}
+          {products.length === 0 && <tr><td colSpan={9} className="empty">商品がありません</td></tr>}
         </tbody>
       </table>
     </div>

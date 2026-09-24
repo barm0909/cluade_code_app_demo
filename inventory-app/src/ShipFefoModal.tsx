@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { Customer, FefoPlan, FefoShipOptions, OutboundTransactionType, Product, Warehouse } from './useInventory';
-import { OUTBOUND_TYPES, planFefoShipment, selectableCustomers, totalQuantity, totalQuantityByWarehouse } from './useInventory';
+import { OUTBOUND_TYPES, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
 
@@ -35,6 +35,8 @@ export function ShipFefoModal({ product, warehouses, customers, onShip, onClose 
 
   const stock = warehouseId ? totalQuantityByWarehouse(product, warehouseId) : totalQuantity(product);
   const valid = qty > 0 && plan.shortage === 0;
+  const taxRate = productTaxRate(product);
+  const sale = saleAmounts(plan.allocations.map(a => a.quantity), unitPrice, taxRate);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,7 +82,7 @@ export function ShipFefoModal({ product, warehouses, customers, onShip, onClose 
           </label>
           {isSale && (<>
             <label htmlFor="fefo-price">
-              販売単価 <span className="label-hint">（円。既定は販売定価）</span>
+              販売単価 <span className="label-hint">（税抜・円／税率 {taxRateLabel(taxRate)}。既定は販売定価）</span>
               <NumberInput id="fefo-price" min={0} value={unitPrice} onValueChange={setUnitPrice} />
             </label>
             <label htmlFor="fefo-customer">
@@ -133,10 +135,12 @@ export function ShipFefoModal({ product, warehouses, customers, onShip, onClose 
             )}
             {isSale && plan.allocations.length > 0 && (
               <div className="sale-preview">
-                <span>売上金額 <strong>¥{(unitPrice * plan.allocated).toLocaleString()}</strong></span>
+                <span>売上金額（税抜） <strong>¥{sale.amount.toLocaleString()}</strong></span>
+                <span>消費税 ¥{sale.tax.toLocaleString()}</span>
+                <span>税込 <strong>¥{sale.amountWithTax.toLocaleString()}</strong></span>
                 <span>原価 ¥{Math.round(plan.cost).toLocaleString()}</span>
-                <span className={unitPrice * plan.allocated - plan.cost >= 0 ? 'qty-in' : 'qty-out'}>
-                  粗利 ¥{Math.round(unitPrice * plan.allocated - plan.cost).toLocaleString()}
+                <span className={sale.amount - plan.cost >= 0 ? 'qty-in' : 'qty-out'}>
+                  粗利 ¥{Math.round(sale.amount - plan.cost).toLocaleString()}
                 </span>
               </div>
             )}

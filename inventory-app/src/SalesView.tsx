@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  DEFAULT_TAX_RATE,
   EMPTY_SALES_FILTER,
   NO_CUSTOMER,
   csvExportHint,
@@ -8,11 +9,14 @@ import {
   exportSalesSummaryCsv,
   filterSales,
   formatLedgerDateTime,
+  productTaxRate,
+  saleAmounts,
   salesCustomerSummaries,
   salesDailySummaries,
   salesProductSummaries,
   salesRows,
   salesTotals,
+  taxRateLabel,
 } from './useInventory';
 import type {
   Customer,
@@ -33,7 +37,7 @@ interface Props {
   customers: Customer[];
   warehouses: Warehouse[];
   /** 売上登録 (FEFO出庫 + 実売単価・得意先の記録)。引当結果を返す */
-  onRecordSale: (input: SaleInput) => { allocated: number; shortage: number; cost: number };
+  onRecordSale: (input: SaleInput) => { allocated: number; shortage: number; cost: number; allocations?: { quantity: number }[] };
 }
 
 /** 集計の切り口。1列目の見出しだけが変わるので、表そのものは1つで描ける */
@@ -89,10 +93,16 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
       await notify('在庫が引き当てられなかったため、売上は登録されませんでした。', '売上登録');
       return;
     }
-    const amount = input.unitPrice * plan.allocated;
+    // 帳票にはロットごとに1行ずつ記録され、消費税もその行ごとに四捨五入されるので引当単位で計算する
+    const { amount, tax, amountWithTax } = saleAmounts(
+      plan.allocations?.map(a => a.quantity) ?? [plan.allocated],
+      input.unitPrice,
+      product ? productTaxRate(product) : DEFAULT_TAX_RATE,
+    );
     await notify(
       `${product?.name ?? '商品'}を${plan.allocated}個 出庫し、売上として記録しました。`
-      + `\n売上金額 ${yen(amount)} / 原価 ${yen(plan.cost)} / 粗利 ${yen(amount - plan.cost)}`
+      + `\n売上金額 ${yen(amount)}（税抜）+ 消費税 ${yen(tax)} = 税込 ${yen(amountWithTax)}`
+      + `\n原価 ${yen(plan.cost)} / 粗利 ${yen(amount - plan.cost)}`
       + (plan.shortage > 0 ? `\n（在庫不足のため ${plan.shortage} は出庫できていません）` : ''),
       '売上登録',
     );
@@ -102,9 +112,19 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
     <div className="dashboard">
       <div className="stats-row dashboard-stats">
         <div className="stat-card">
-          <div className="stat-label">売上高</div>
+          <div className="stat-label">売上高（税抜）</div>
           <div className="stat-value">{yen(totals.amount)}</div>
           <div className="stat-sub">{totals.count}件 / {totals.quantity.toLocaleString()}個</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">税込売上高</div>
+          <div className="stat-value">{yen(totals.amountWithTax)}</div>
+          <div className="stat-sub">うち消費税 {yen(totals.tax)}</div>
+          <div className="stat-sub" aria-label="税率別内訳">
+            {totals.byTaxRate.map(b => (
+              <span key={b.taxRate} className="tax-breakdown">{taxRateLabel(b.taxRate)}対象 {yen(b.amount)}（税 {yen(b.tax)}）</span>
+            ))}
+          </div>
         </div>
         <div className="stat-card">
           <div className="stat-label">売上原価</div>
@@ -114,7 +134,7 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
         <div className="stat-card">
           <div className="stat-label">粗利</div>
           <div className={totals.profit < 0 ? 'stat-value alert' : 'stat-value'}>{yen(totals.profit)}</div>
-          <div className="stat-sub">売上高 − 売上原価</div>
+          <div className="stat-sub">売上高（税抜）− 売上原価</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">粗利率</div>
@@ -220,8 +240,11 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
                   <th>倉庫</th>
                   <th>得意先</th>
                   <th style={{ textAlign: 'right' }}>数量</th>
-                  <th style={{ textAlign: 'right' }}>売上単価</th>
-                  <th style={{ textAlign: 'right' }}>売上金額</th>
+                  <th style={{ textAlign: 'right' }}>売上単価(税抜)</th>
+                  <th style={{ textAlign: 'right' }}>売上金額(税抜)</th>
+                  <th style={{ textAlign: 'right' }}>税率</th>
+                  <th style={{ textAlign: 'right' }}>消費税</th>
+                  <th style={{ textAlign: 'right' }}>税込金額</th>
                   <th style={{ textAlign: 'right' }}>原価</th>
                   <th style={{ textAlign: 'right' }}>粗利</th>
                   <th style={{ textAlign: 'right' }}>粗利率</th>
@@ -242,6 +265,9 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
                       {r.estimatedPrice && <span className="stat-sub" title="実売単価が記録されていないため、商品の販売定価で代用しています">（概算）</span>}
                     </td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>{yen(r.amount)}</td>
+                    <td style={{ textAlign: 'right' }}>{r.taxRate}%</td>
+                    <td style={{ textAlign: 'right' }}>{yen(r.tax)}</td>
+                    <td style={{ textAlign: 'right' }}>{yen(r.amountWithTax)}</td>
                     <td style={{ textAlign: 'right' }}>
                       {yen(r.cost)}
                       {r.estimatedCost && <span className="stat-sub" title="出庫時点の原価が記録されていないため、商品の現在原価で代用しています">（概算）</span>}
@@ -259,7 +285,9 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
                   <th>{SUMMARY_MODES[mode]}</th>
                   <th style={{ textAlign: 'right' }}>件数</th>
                   <th style={{ textAlign: 'right' }}>数量</th>
-                  <th style={{ textAlign: 'right' }}>売上金額</th>
+                  <th style={{ textAlign: 'right' }}>売上金額(税抜)</th>
+                  <th style={{ textAlign: 'right' }}>消費税</th>
+                  <th style={{ textAlign: 'right' }}>税込金額</th>
                   <th style={{ textAlign: 'right' }}>原価</th>
                   <th style={{ textAlign: 'right' }}>粗利</th>
                   <th style={{ textAlign: 'right' }}>粗利率</th>
@@ -276,6 +304,8 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
                     <td style={{ textAlign: 'right' }}>{s.count.toLocaleString()}</td>
                     <td style={{ textAlign: 'right' }}>{s.quantity.toLocaleString()}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>{yen(s.amount)}</td>
+                    <td style={{ textAlign: 'right' }}>{yen(s.tax)}</td>
+                    <td style={{ textAlign: 'right' }}>{yen(s.amountWithTax)}</td>
                     <td style={{ textAlign: 'right' }}>{yen(s.cost)}</td>
                     <td style={{ textAlign: 'right' }} className={s.profit >= 0 ? 'qty-in' : 'qty-out'}>{yen(s.profit)}</td>
                     <td style={{ textAlign: 'right' }}>{percent(s.profitRate)}</td>

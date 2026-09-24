@@ -380,3 +380,23 @@ describe('App — 商品マスタタブ', () => {
     expect(screen.getByText('商品を追加')).toBeInTheDocument();
   });
 });
+
+describe('ProductMasterView — 消費税率', () => {
+  it('税率と税込の販売定価が表示される (未設定は軽減税率 8%)', () => {
+    const products = [makeProduct(), makeProduct({ id: '3', name: '値札ラベル', sku: 'LB-R01', price: 5, taxRate: 10 })];
+    render(<ProductMasterView {...defaultProps} products={products} />);
+    expect(screen.getByText('8%（軽減）')).toBeInTheDocument();
+    expect(screen.getByText('税込 ¥214')).toBeInTheDocument(); // 198 + 15.84→16
+    expect(screen.getByText('10%')).toBeInTheDocument();
+    expect(screen.getByText('税込 ¥6')).toBeInTheDocument(); // 5 + 0.5→1
+  });
+
+  it('インライン編集で税率を変えると onUpdate に渡る', async () => {
+    const user = userEvent.setup();
+    render(<ProductMasterView {...defaultProps} />);
+    await user.click(screen.getByRole('button', { name: '編集' }));
+    await user.selectOptions(screen.getByLabelText('税率'), '10');
+    await user.click(screen.getByRole('button', { name: '保存' }));
+    expect(defaultProps.onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ taxRate: 10 }));
+  });
+});

@@ -128,3 +128,40 @@ describe('ProductModal — キャンセル', () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe('ProductModal — 消費税率', () => {
+  const makeProduct = (id: string, categoryId: string, taxRate: 8 | 10) =>
+    ({ id, name: id, sku: id, categoryId, minQuantity: 0, price: 0, costPrice: 0, taxRate, lots: [], updatedAt: '' });
+
+  it('新規追加の税率はカテゴリを選ぶと同じカテゴリの商品の税率が初期値になる', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const products = [makeProduct('a', 'cat-food', 10), makeProduct('b', 'cat-dairy', 8)];
+    render(<ProductModal {...defaultProps} products={products} onSave={onSave} />);
+
+    expect(screen.getByLabelText('消費税率')).toHaveValue('8'); // 既定は軽減税率
+    await user.selectOptions(screen.getByLabelText(/カテゴリ/), 'cat-food');
+    expect(screen.getByLabelText('消費税率')).toHaveValue('10');
+
+    await user.type(screen.getByLabelText(/商品名/), '資材');
+    await user.type(screen.getByLabelText(/SKU/), 'M-001');
+    await user.click(screen.getByText('保存'));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ taxRate: 10 }));
+  });
+
+  it('税率を手で選んだあとはカテゴリを変えても上書きしない', async () => {
+    const user = userEvent.setup();
+    const products = [makeProduct('a', 'cat-food', 10)];
+    render(<ProductModal {...defaultProps} products={products} />);
+
+    await user.selectOptions(screen.getByLabelText('消費税率'), '8');
+    await user.selectOptions(screen.getByLabelText(/カテゴリ/), 'cat-food');
+    expect(screen.getByLabelText('消費税率')).toHaveValue('8');
+  });
+
+  it('既存商品の税率が表示され、販売定価の税込額が出る', () => {
+    render(<ProductModal {...defaultProps} product={{ ...makeProduct('x', 'cat-food', 10), price: 1000 }} />);
+    expect(screen.getByLabelText('消費税率')).toHaveValue('10');
+    expect(screen.getByText('税込 ¥1,100')).toBeInTheDocument();
+  });
+});
