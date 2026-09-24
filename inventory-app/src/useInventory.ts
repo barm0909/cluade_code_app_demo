@@ -3300,9 +3300,8 @@ export function useInventory() {
    * 選んだロットをまとめて廃棄する。引当先の決定は planDisposal (純粋関数) に任せ、
    * ここでは在庫の反映と帳票への記録だけを行う。ロットごとに 廃棄 を1件記録する。
    *
-   * 廃棄したロットは在庫0にするのではなく取り除く。中身が無くなったロットを残すと
-   * 画面上部の「期限切れロットあり」バナー (在庫0のロットも数える) が消えないためで、
-   * 何をいくつ廃棄したかは帳票に残る。
+   * 廃棄したロットは在庫0にするのではなく取り除く。中身の無くなったロットを一覧に
+   * 残さないためで、何をいくつ廃棄したかは帳票に残る。
    */
   const disposeLots = useCallback((lotIds: string[], note: string = DISPOSAL_NOTE): DisposalPlan => {
     const plan = planDisposal(products, lotIds);

@@ -24,7 +24,7 @@ import { useConfirm, useNotify } from './useConfirm';
 import './App.css';
 
 function lotRowClass(lot: Lot) {
-  if (!lot.expiryDate) return '';
+  if (!lot.expiryDate || lot.quantity <= 0) return '';
   const d = daysUntilExpiry(lot.expiryDate);
   if (d < 0) return 'lot-expired';
   if (d <= 7) return 'lot-expiring';
@@ -220,8 +220,8 @@ export default function App() {
   }, [products, search, categoryFilter, warehouseFilter, sortField, sortOrder, categoryNameById]);
 
   const allLots = products.flatMap(p => p.lots);
-  const expired = allLots.filter(l => l.expiryDate && daysUntilExpiry(l.expiryDate) < 0);
-  const expiringSoon = allLots.filter(l => l.expiryDate && daysUntilExpiry(l.expiryDate) >= 0 && daysUntilExpiry(l.expiryDate) <= 7);
+  const expired = allLots.filter(l => l.quantity > 0 && l.expiryDate && daysUntilExpiry(l.expiryDate) < 0);
+  const expiringSoon = allLots.filter(l => l.quantity > 0 && l.expiryDate && daysUntilExpiry(l.expiryDate) >= 0 && daysUntilExpiry(l.expiryDate) <= 7);
   const lowStock = products.filter(p => totalQuantity(p) <= p.minQuantity);
 
   const toggleExpand = (id: string) => {
@@ -241,8 +241,8 @@ export default function App() {
   const totalValue = products.reduce((s, p) => s + totalQuantity(p) * p.price, 0);
 
   const productRowClass = (p: Product) => {
-    const hasExpired = p.lots.some(l => l.expiryDate && daysUntilExpiry(l.expiryDate) < 0);
-    const hasExpiring = p.lots.some(l => l.expiryDate && daysUntilExpiry(l.expiryDate) >= 0 && daysUntilExpiry(l.expiryDate) <= 7);
+    const hasExpired = p.lots.some(l => l.quantity > 0 && l.expiryDate && daysUntilExpiry(l.expiryDate) < 0);
+    const hasExpiring = p.lots.some(l => l.quantity > 0 && l.expiryDate && daysUntilExpiry(l.expiryDate) >= 0 && daysUntilExpiry(l.expiryDate) <= 7);
     if (hasExpired) return 'row-expired';
     if (hasExpiring) return 'row-expiring';
     if (totalQuantity(p) <= p.minQuantity) return 'row-alert';
@@ -476,7 +476,7 @@ export default function App() {
                                   {lots.map(l => (
                                     <tr key={l.id} className={lotRowClass(l)}>
                                       <td className="mono">{l.lotNo}</td>
-                                      <td><ExpiryBadge expiryDate={l.expiryDate} /></td>
+                                      <td><ExpiryBadge expiryDate={l.expiryDate} quantity={l.quantity} /></td>
                                       <td><WarehouseDot warehouse={warehouses.find(w => w.id === l.warehouseId)} /></td>
                                       <td>
                                         <span className={l.quantity === 0 ? 'qty-low' : ''}>{l.quantity}</span>
