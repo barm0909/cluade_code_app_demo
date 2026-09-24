@@ -251,3 +251,23 @@ describe('SalesView — 売上登録', () => {
     expect(screen.getByText(/原価 ¥354 \/ 粗利 ¥246/)).toBeInTheDocument();
   });
 });
+
+describe('SalesView — 資材', () => {
+  const LABEL: Product = {
+    id: 'p-label', name: '値札ラベル', sku: 'LB-R01', categoryId: 'cat-label', minQuantity: 0, price: 5, costPrice: 2,
+    kind: '資材', lots: [{ id: 'l-label', lotNo: 'L1', quantity: 100, warehouseId: DEFAULT_WAREHOUSE_ID }],
+    updatedAt: new Date().toISOString(),
+  };
+
+  it('売上登録の商品の選択肢に資材は出ない', async () => {
+    const user = userEvent.setup();
+    render(<SalesView {...defaultProps} products={[...PRODUCTS, LABEL]} />);
+    await user.click(screen.getByRole('button', { name: '+ 売上を登録' }));
+    expect(within(screen.getByLabelText('商品')).queryByRole('option', { name: /値札ラベル/ })).not.toBeInTheDocument();
+  });
+
+  it('資材しかないときは売上を登録できない', () => {
+    render(<SalesView {...defaultProps} products={[LABEL]} />);
+    expect(screen.getByRole('button', { name: '+ 売上を登録' })).toBeDisabled();
+  });
+});

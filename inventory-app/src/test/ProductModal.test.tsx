@@ -165,3 +165,28 @@ describe('ProductModal — 消費税率', () => {
     expect(screen.getByText('税込 ¥1,100')).toBeInTheDocument();
   });
 });
+
+describe('ProductModal — 区分', () => {
+  it('資材にすると販売定価・消費税率の欄が消え、区分つきで保存される', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(<ProductModal {...defaultProps} onSave={onSave} />);
+
+    expect(screen.getByLabelText(/販売定価/)).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('区分'), '資材');
+    expect(screen.queryByLabelText(/販売定価/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('消費税率')).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/商品名/), '値札ラベル');
+    await user.type(screen.getByLabelText(/SKU/), 'LB-R02');
+    await user.selectOptions(screen.getByLabelText(/カテゴリ/), 'cat-food');
+    await user.click(screen.getByText('保存'));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ kind: '資材' }));
+  });
+
+  it('既存の資材を開くと区分が資材で表示される', () => {
+    const product = { id: '3', name: 'ラベル', sku: 'LB', categoryId: 'cat-food', minQuantity: 0, price: 5, costPrice: 2, kind: '資材' as const, lots: [], updatedAt: '' };
+    render(<ProductModal {...defaultProps} product={product} />);
+    expect(screen.getByLabelText('区分')).toHaveValue('資材');
+  });
+});

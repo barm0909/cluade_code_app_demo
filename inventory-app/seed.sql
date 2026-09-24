@@ -27,12 +27,13 @@ INSERT INTO customers (id, name, code, contact, phone, email, address, note, act
   ('cus-sakura', 'さくらカフェ',     'C-002', '佐倉 美咲', '06-4444-5555', 'cafe@sakura.example.jp',        '大阪府大阪市中央区5-5-5', '',         1),
   ('cus-kita',   '北町給食センター', 'C-003', '',          '011-666-7777', '',                              '北海道札幌市北区6-6-6',   '月末締め', 1);
 
--- price (販売定価) は税抜。tax_rate は食品が軽減税率 8%、資材 (ラベル) が標準税率 10%
-INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, updated_at) VALUES
-  ('1', '牛乳',           'ML-001', '4901234567894', 'cat-dairy', 5,   198, 130, 8,  datetime('now')),
-  ('2', '食パン',         'BR-001', '4912345678904', 'cat-bread', 5,   150, 90,  8,  datetime('now')),
-  ('3', '値札ラベル(赤)', 'LB-R01', NULL,            'cat-label', 100, 5,   2,   10, datetime('now')),
-  ('4', 'チーズ',         'CS-001', '4901987654322', 'cat-dairy', 4,   350, 220, 8,  datetime('now'));
+-- price (販売定価) は税抜。tax_rate は食品なので軽減税率 8%。
+-- 値札ラベルは売らない「資材」(kind) なので、販売定価・税率は使われない (列の既定値のまま)
+INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at) VALUES
+  ('1', '牛乳',           'ML-001', '4901234567894', 'cat-dairy', 5,   198, 130, 8, '販売品', datetime('now')),
+  ('2', '食パン',         'BR-001', '4912345678904', 'cat-bread', 5,   150, 90,  8, '販売品', datetime('now')),
+  ('3', '値札ラベル(赤)', 'LB-R01', NULL,            'cat-label', 100, 5,   2,   8, '資材',   datetime('now')),
+  ('4', 'チーズ',         'CS-001', '4901987654322', 'cat-dairy', 4,   350, 220, 8, '販売品', datetime('now'));
 
 -- l1/l2 (牛乳) は原価履歴のサンプル (118→120) と揃えて実原価を持たせてある。
 -- それ以外は unit_price を NULL のままにし、商品の現在原価にフォールバックする挙動を示す。
@@ -58,7 +59,6 @@ INSERT INTO stock_transactions (id, date, type, product_id, product_name, produc
 
 -- 売上管理のサンプル: 直近の売上出庫。実売単価 (unit_price) は定価どおりの日と値引きした日を混ぜ、
 -- 出庫した時点のロット原価 (cost_unit_price) と税率 (tax_rate) も一緒に残してある (粗利・消費税が計算できるように)。
--- tx-sale-5 は標準税率 10% の資材 (ラベル) の売上で、税率別の内訳に 10% 対象が出るようにしてある。
 -- tx-sale-old だけは実売単価・原価・得意先・税率を持たない古い記録で、売上管理タブでは
 -- 商品の販売定価・現在原価・現在の税率で代用した「概算」として表示される。
 INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, customer_id, cost_unit_price, tax_rate) VALUES
@@ -66,5 +66,9 @@ INSERT INTO stock_transactions (id, date, type, product_id, product_name, produc
   ('tx-sale-2',   datetime('now', '-5 days'), '売上出庫', '2', '食パン', 'BR-001', replace(date('now', '+1 days'),  '-', ''), 4, '売上登録', 'wh-sales', NULL, 150,  'cus-sakura', 90,   8),
   ('tx-sale-3',   datetime('now', '-3 days'), '売上出庫', '4', 'チーズ', 'CS-001', replace(date('now', '+14 days'), '-', ''), 2, '売上登録', 'wh-sales', NULL, 320,  'cus-kita',   220,  8),
   ('tx-sale-4',   datetime('now', '-1 days'), '売上出庫', '1', '牛乳',   'ML-001', replace(date('now', '-10 days'), '-', ''), 8, '売上登録', 'wh-sales', NULL, 178,  'cus-midori', 120,  8),
-  ('tx-sale-5',   datetime('now', '-2 days'), '売上出庫', '3', '値札ラベル(赤)', 'LB-R01', '20260101',                     100, '売上登録', 'wh-sales', NULL, 5, 'cus-sakura', 2,    10),
   ('tx-sale-old', datetime('now', '-20 days'), '売上出庫', '1', '牛乳',  'ML-001', replace(date('now', '-30 days'), '-', ''), 3, 'FEFO出庫', 'wh-sales', NULL, NULL, NULL,         NULL, NULL);
+
+-- 資材 (値札ラベル) を使った記録。資材は売らないので売上出庫ではなく「資材使用」で出庫し、
+-- 単価・得意先・税率は持たない (売上管理には出ず、在庫分析の出庫ペースにだけ使われる)
+INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id) VALUES
+  ('tx-use-1', datetime('now', '-2 days'), '資材使用', '3', '値札ラベル(赤)', 'LB-R01', '20260101', 100, '', 'wh-sales', NULL);

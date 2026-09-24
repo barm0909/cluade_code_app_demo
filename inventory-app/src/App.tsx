@@ -1,5 +1,5 @@
 import { Fragment, useState, useMemo } from 'react';
-import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, productTaxRate, saleAmounts, taxRateLabel, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
+import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, productTaxRate, saleAmounts, taxRateLabel, isMaterial, outboundTypesFor, INBOUND_TYPES } from './useInventory';
 import type { Customer, Product, Lot, LotTraceKey, SaleFields, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
@@ -105,7 +105,8 @@ interface StockIoModalProps {
 
 function StockIoModal({ lot, product, warehouses, customers, direction, onSubmit, onClose }: StockIoModalProps) {
   const label = direction === 'in' ? '入庫' : '出庫';
-  const types = direction === 'in' ? INBOUND_TYPES : OUTBOUND_TYPES;
+  // 出庫区分は商品で変わる (販売品は売上出庫、資材は資材使用が既定)
+  const types = direction === 'in' ? INBOUND_TYPES : outboundTypesFor(product);
   const maxQty = direction === 'in' ? undefined : lot.quantity;
   const [type, setType] = useState<TransactionType>(types[0]);
   const [qty, setQty] = useState(1);
@@ -439,7 +440,7 @@ export default function App() {
                       <span className={qty <= p.minQuantity ? 'qty-low' : ''}>{qty}</span>
                       <span className="lot-count">（{p.lots.length}ロット）</span>
                     </td>
-                    <td>¥{p.price.toLocaleString()}</td>
+                    <td>{isMaterial(p) ? <span className="badge" title="資材は売らないので販売定価を持ちません">資材</span> : `¥${p.price.toLocaleString()}`}</td>
                     <td>¥{p.costPrice.toLocaleString()}</td>
                     <td onClick={e => e.stopPropagation()}>
                       <div className="row-actions">

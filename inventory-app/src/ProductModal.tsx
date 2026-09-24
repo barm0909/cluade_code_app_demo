@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { DEFAULT_TAX_RATE, TAX_RATES, defaultTaxRateForCategory, normalizeJanCode, productTaxRate, taxRateLabel, withTax } from './useInventory';
-import type { Category, Product, TaxRate } from './useInventory';
+import { DEFAULT_TAX_RATE, PRODUCT_KINDS, TAX_RATES, defaultTaxRateForCategory, normalizeJanCode, productKind, productTaxRate, taxRateLabel, withTax } from './useInventory';
+import type { Category, Product, ProductKind, TaxRate } from './useInventory';
 import { NumberInput } from './NumberInput';
 
 interface Props {
@@ -12,7 +12,7 @@ interface Props {
   onClose: () => void;
 }
 
-const EMPTY = { name: '', sku: '', janCode: '', categoryId: '', minQuantity: 5, price: 0, costPrice: 0, taxRate: DEFAULT_TAX_RATE as TaxRate };
+const EMPTY = { name: '', sku: '', janCode: '', categoryId: '', minQuantity: 5, price: 0, costPrice: 0, taxRate: DEFAULT_TAX_RATE as TaxRate, kind: '販売品' as ProductKind };
 
 export function ProductModal({ product, categories, products = [], onSave, onClose }: Props) {
   const [form, setForm] = useState(EMPTY);
@@ -21,13 +21,15 @@ export function ProductModal({ product, categories, products = [], onSave, onClo
 
   useEffect(() => {
     setForm(product
-      ? { name: product.name, sku: product.sku, janCode: product.janCode ?? '', categoryId: product.categoryId, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice, taxRate: productTaxRate(product) }
+      ? { name: product.name, sku: product.sku, janCode: product.janCode ?? '', categoryId: product.categoryId, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice, taxRate: productTaxRate(product), kind: productKind(product) }
       : EMPTY
     );
     setTaxRateTouched(false);
   }, [product]);
 
   const set = (k: keyof typeof EMPTY, v: string | number) => setForm(f => ({ ...f, [k]: v }));
+  // 資材は売らないので販売定価・税率の欄を出さない (値は保持したまま隠すだけ)
+  const isSaleItem = form.kind === '販売品';
 
   const setCategory = (categoryId: string) => setForm(f => ({
     ...f,
@@ -51,14 +53,22 @@ export function ProductModal({ product, categories, products = [], onSave, onClo
             </select>
           </label>
           <label>最低在庫数 <NumberInput min={0} required value={form.minQuantity} onValueChange={v => set('minQuantity', v)} /></label>
-          <label>消費税率
-            <select value={form.taxRate} onChange={e => { set('taxRate', Number(e.target.value)); setTaxRateTouched(true); }}>
-              {TAX_RATES.map(r => <option key={r} value={r}>{taxRateLabel(r)}</option>)}
+          <label>区分
+            <select value={form.kind} onChange={e => set('kind', e.target.value)}>
+              {PRODUCT_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
             </select>
           </label>
-          <label>販売定価 (税抜・円) <span className="label-hint">税込 ¥{withTax(form.price, form.taxRate).toLocaleString()}</span>
-            <NumberInput min={0} required value={form.price} onValueChange={v => set('price', v)} />
-          </label>
+          {!isSaleItem && <p className="label-hint">資材は売上の対象にならず、使った分は「資材使用」で出庫します。</p>}
+          {isSaleItem && (<>
+            <label>消費税率
+              <select value={form.taxRate} onChange={e => { set('taxRate', Number(e.target.value)); setTaxRateTouched(true); }}>
+                {TAX_RATES.map(r => <option key={r} value={r}>{taxRateLabel(r)}</option>)}
+              </select>
+            </label>
+            <label>販売定価 (税抜・円) <span className="label-hint">税込 ¥{withTax(form.price, form.taxRate).toLocaleString()}</span>
+              <NumberInput min={0} required value={form.price} onValueChange={v => set('price', v)} />
+            </label>
+          </>)}
           <label>原価 (税抜・円) <NumberInput min={0} required value={form.costPrice} onValueChange={v => set('costPrice', v)} /></label>
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose}>キャンセル</button>

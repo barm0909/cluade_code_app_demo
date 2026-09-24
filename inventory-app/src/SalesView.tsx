@@ -9,6 +9,7 @@ import {
   exportSalesSummaryCsv,
   filterSales,
   formatLedgerDateTime,
+  isMaterial,
   productTaxRate,
   saleAmounts,
   salesCustomerSummaries,
@@ -149,7 +150,7 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
           <span className="dashboard-section-note">
             帳票の「売上出庫」から組み立てています（移動・調整出庫・廃棄は売上に含みません）
           </span>
-          <button className="btn-primary" onClick={() => setEntryOpen(true)} disabled={products.length === 0}>
+          <button className="btn-primary" onClick={() => setEntryOpen(true)} disabled={!products.some(p => !isMaterial(p))}>
             + 売上を登録
           </button>
         </div>

@@ -463,18 +463,21 @@ describe('salesRows / salesTotals — 消費税', () => {
   });
 });
 
-// SAMPLE_DATA: 牛乳(id:1) は軽減税率 8%、値札ラベル(id:3) は標準税率 10%
+// SAMPLE_DATA: 牛乳(id:1)・チーズ(id:4) は軽減税率 8%
 describe('useInventory — 売上出庫に税率を残す', () => {
   it('売上登録は引き当てたロットごとの帳票に出庫時点の税率を書く', () => {
     const { result } = renderHook(() => useInventory());
 
+    // チーズを標準税率にしてから売る (税率は商品ごと)
+    const cheese = result.current.products.find(p => p.id === '4')!;
+    act(() => { result.current.updateProduct('4', { ...cheese, taxRate: 10 }); });
     act(() => { result.current.recordSale({ productId: '1', quantity: 12, unitPrice: 180, customerId: '' }); });
-    act(() => { result.current.recordSale({ productId: '3', quantity: 10, unitPrice: 5, customerId: '' }); });
+    act(() => { result.current.recordSale({ productId: '4', quantity: 1, unitPrice: 350, customerId: '' }); });
 
     const milk = result.current.ledger.filter(t => t.productId === '1');
     expect(milk).toHaveLength(2);
     expect(milk.every(t => t.taxRate === 8)).toBe(true);
-    expect(result.current.ledger.find(t => t.productId === '3')!.taxRate).toBe(10);
+    expect(result.current.ledger.find(t => t.productId === '4')!.taxRate).toBe(10);
   });
 
   it('ロット行の売上出庫にも税率が残り、それ以外の出庫には残らない', () => {

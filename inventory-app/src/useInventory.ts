@@ -69,20 +69,23 @@ export interface Product {
   categoryId: string;
   lots: Lot[];
   minQuantity: number;
-  price: number; // 販売定価 (税抜)
+  price: number; // 販売定価 (税抜)。資材は売らないので使わない (入力欄も出さない)
   costPrice: number;
-  /** 消費税率 (%)。食品は軽減税率 8%、ラベル等の資材は標準税率 10%。未設定は productTaxRate で既定値を使う */
+  /** 消費税率 (%)。食品は軽減税率 8%、それ以外は標準税率 10%。未設定は productTaxRate で既定値を使う。資材では使わない */
   taxRate?: TaxRate;
+  /** 商品区分。販売品 = 売る商品 / 資材 = ラベル等の自社で使うだけのもの。未設定は productKind で 販売品 */
+  kind?: ProductKind;
   updatedAt: string;
 }
 
-export type TransactionType = '入荷' | '調整入庫' | '売上出庫' | '調整出庫' | '廃棄' | '移動';
+export type TransactionType = '入荷' | '調整入庫' | '売上出庫' | '資材使用' | '調整出庫' | '廃棄' | '移動';
 
 /** 出庫系の区分だけを指す型 (FEFO出庫のように出庫しか受け付けない API 用) */
-export type OutboundTransactionType = Extract<TransactionType, '売上出庫' | '調整出庫' | '廃棄'>;
+export type OutboundTransactionType = Extract<TransactionType, '売上出庫' | '資材使用' | '調整出庫' | '廃棄'>;
 
 export const INBOUND_TYPES: TransactionType[] = ['入荷', '調整入庫'];
-export const OUTBOUND_TYPES: OutboundTransactionType[] = ['売上出庫', '調整出庫', '廃棄'];
+/** すべての出庫区分。商品ごとに選べる区分は outboundTypesFor で絞る (資材は売上出庫できない等) */
+export const OUTBOUND_TYPES: OutboundTransactionType[] = ['売上出庫', '資材使用', '調整出庫', '廃棄'];
 export const ALL_TRANSACTION_TYPES: TransactionType[] = [...INBOUND_TYPES, ...OUTBOUND_TYPES, '移動'];
 
 export function transactionDirection(type: TransactionType): 'in' | 'out' | 'move' {
@@ -257,6 +260,31 @@ export function totalQuantityByWarehouse(product: Product, warehouseId: string):
 /** ロットに適用する実原価。未設定なら商品の現在原価にフォールバックする */
 export function lotUnitCost(lot: Lot, product: Product): number {
   return lot.unitPrice ?? product.costPrice;
+}
+
+// ---- 商品区分 (販売品 / 資材) ----
+// 資材は値札ラベルのように在庫は管理するが売らないもの。売上の登録・売上出庫の対象にせず、
+// 販売定価・税率も持たない。使った分は「資材使用」で出庫する。
+
+export type ProductKind = '販売品' | '資材';
+export const PRODUCT_KINDS: ProductKind[] = ['販売品', '資材'];
+
+export function productKind(product: Pick<Product, 'kind'>): ProductKind {
+  return product.kind === '資材' ? '資材' : '販売品';
+}
+
+export function isMaterial(product: Pick<Product, 'kind'>): boolean {
+  return productKind(product) === '資材';
+}
+
+/**
+ * その商品で選べる出庫区分。販売品は 売上出庫、資材は 資材使用 がそれぞれ既定 (先頭)。
+ * 資材は売らないので売上出庫を、販売品は資材ではないので資材使用を選べない。
+ */
+export function outboundTypesFor(product: Pick<Product, 'kind'>): OutboundTransactionType[] {
+  return isMaterial(product)
+    ? ['資材使用', '調整出庫', '廃棄']
+    : ['売上出庫', '調整出庫', '廃棄'];
 }
 
 // ---- 消費税 ----
@@ -466,7 +494,7 @@ const SAMPLE_DATA: Product[] = [
     updatedAt: new Date().toISOString(),
   },
   {
-    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', categoryId: 'cat-label', minQuantity: 100, price: 5, costPrice: 2, taxRate: 10,
+    id: '3', name: '値札ラベル(赤)', sku: 'LB-R01', categoryId: 'cat-label', minQuantity: 100, price: 5, costPrice: 2, kind: '資材',
     lots: [
       { id: 'l4', lotNo: '20260101', quantity: 500, warehouseId: DEFAULT_WAREHOUSE_ID },
     ],
@@ -505,6 +533,7 @@ const SAMPLE_INBOUND_PLANS: InboundPlan[] = [
 // - warehouseId がないロットにデフォルトを付与
 // - categoryId がない商品 (旧 category 文字列) はカテゴリマスタへ名前で対応付け、なければカテゴリを作成
 // - 税率がない商品 (消費税の導入前) は既定の税率 (軽減税率 8%) にする
+// - 区分がない商品 (資材の導入前) は 販売品 にする
 function migrateProducts(products: Product[], categories: Category[]): { products: Product[]; categories: Category[] } {
   const cats = [...categories];
   const idByName = new Map(cats.map(c => [c.name, c.id]));
@@ -524,6 +553,7 @@ function migrateProducts(products: Product[], categories: Category[]): { product
       ...p,
       categoryId,
       taxRate: productTaxRate(p),
+      kind: productKind(p),
       lots: p.lots.map(l => ({ ...l, warehouseId: l.warehouseId ?? DEFAULT_WAREHOUSE_ID })),
     };
   });
@@ -2829,15 +2859,16 @@ export interface StockAnalysisRow {
   productName: string;
   productSku: string;
   categoryId: string;
+  kind: ProductKind;
   quantity: number; // 現在庫数
   stockValue: number; // 現在庫金額 (ロットの実原価ベース)
-  outboundQuantity: number; // 期間内の出庫数 (売上出庫 + 調整出庫 + 廃棄)
+  outboundQuantity: number; // 期間内の出庫数 (売上出庫 + 資材使用 + 調整出庫 + 廃棄)
   salesQuantity: number; // うち売上出庫の数
   disposalQuantity: number; // うち廃棄の数
   outboundValue: number; // 期間内の出庫金額 (原価ベースの概算)
-  share: number; // 出庫金額の構成比 (0〜1)
-  cumulativeShare: number; // 出庫金額の累計構成比 (0〜1)。この行までの合計
-  rank: AbcRank;
+  share: number; // 出庫金額の構成比 (0〜1)。販売品の中での比率 (資材は 0)
+  cumulativeShare: number; // 出庫金額の累計構成比 (0〜1)。この行までの合計 (資材は 0)
+  rank: AbcRank | null; // 資材は売らないので ABC の対象外 (null)
   dailyOutbound: number; // 1日あたりの平均出庫数 = 期間出庫数 ÷ 期間日数
   turnoverRate: number; // 期間の在庫回転率 = 期間出庫数 ÷ 現在庫数 (在庫0なら0)
   daysOfStock: number | null; // 在庫日数 = 現在庫数 ÷ 1日あたり出庫数。出庫実績がなければ null (= 減らない)
@@ -2854,7 +2885,9 @@ export interface StockAnalysisOptions {
  * 商品ごとに「どれだけ出たか (ABC)」「何日分の在庫を持っているか (回転)」
  * 「最後に動いたのはいつか (滞留)」をまとめる。状態は変更しない。
  *
- * - 出庫数は売上出庫・調整出庫・廃棄の合計 (移動は総在庫を動かさないので数えない)。
+ * - 出庫数は売上出庫・資材使用・調整出庫・廃棄の合計 (移動は総在庫を動かさないので数えない)。
+ * - ABCランクは販売品だけで付ける (資材は rank = null)。資材は販売品のあとに出庫金額の大きい順で並べる。
+ *   滞留・発注点の提案は資材も対象のまま (ラベルも切らしたり抱えすぎたりするため)。
  * - 最終出庫日だけは期間で絞らず全期間の帳票から探す (滞留の判定に期間を切ると、
  *   期間より前にしか動いていない商品が「出庫実績なし」と区別できなくなるため)。
  * - 並びは出庫金額の大きい順 (ABCランクを振る順序そのもの)。
@@ -2894,6 +2927,7 @@ export function stockAnalysisRows(
       productName: p.name,
       productSku: p.sku,
       categoryId: p.categoryId,
+      kind: productKind(p),
       quantity,
       stockValue: p.lots.reduce((s, l) => s + l.quantity * lotUnitCost(l, p), 0),
       outboundQuantity,
@@ -2902,7 +2936,7 @@ export function stockAnalysisRows(
       outboundValue: outboundQuantity * p.costPrice,
       share: 0,
       cumulativeShare: 0,
-      rank: 'C' as AbcRank,
+      rank: null as AbcRank | null,
       dailyOutbound,
       turnoverRate: quantity > 0 ? outboundQuantity / quantity : 0,
       daysOfStock: dailyOutbound > 0 ? quantity / dailyOutbound : null,
@@ -2912,14 +2946,17 @@ export function stockAnalysisRows(
   });
 
   rows.sort((a, b) =>
-    b.outboundValue - a.outboundValue
+    Number(a.kind === '資材') - Number(b.kind === '資材')
+    || b.outboundValue - a.outboundValue
     || b.outboundQuantity - a.outboundQuantity
     || a.productName.localeCompare(b.productName));
 
-  // 累計構成比で A/B/C を振る。境目をまたぐ商品は上のランクに含める (ABC分析の慣習)
-  const total = rows.reduce((s, r) => s + r.outboundValue, 0);
+  // 累計構成比で A/B/C を振る。境目をまたぐ商品は上のランクに含める (ABC分析の慣習)。
+  // 資材は売上に関係しないので、構成比の分母にも入れない
+  const ranked = rows.filter(r => r.kind === '販売品');
+  const total = ranked.reduce((s, r) => s + r.outboundValue, 0);
   let cumulative = 0;
-  for (const row of rows) {
+  for (const row of ranked) {
     const share = total > 0 ? row.outboundValue / total : 0;
     const before = cumulative;
     cumulative += share;
@@ -2950,7 +2987,8 @@ export interface StockAnalysisTotals {
   outboundQuantity: number;
   outboundValue: number; // 期間内の出庫金額の合計
   daysOfStock: number | null; // 全体の在庫日数 = 在庫金額 ÷ 1日あたり出庫金額。出庫がなければ null
-  rankCounts: Record<AbcRank, number>;
+  rankCounts: Record<AbcRank, number>; // 販売品だけ (資材はランクなし)
+  materialCount: number; // 資材の商品数
   stagnantCount: number;
   stagnantValue: number; // 滞留在庫の金額
 }
@@ -2967,6 +3005,7 @@ export function stockAnalysisTotals(
     outboundValue: 0,
     daysOfStock: null,
     rankCounts: { A: 0, B: 0, C: 0 },
+    materialCount: 0,
     stagnantCount: 0,
     stagnantValue: 0,
   };
@@ -2974,7 +3013,8 @@ export function stockAnalysisTotals(
     totals.stockValue += r.stockValue;
     totals.outboundQuantity += r.outboundQuantity;
     totals.outboundValue += r.outboundValue;
-    totals.rankCounts[r.rank]++;
+    if (r.rank) totals.rankCounts[r.rank]++;
+    else totals.materialCount++;
     if (isStagnant(r, stagnantDays)) {
       totals.stagnantCount++;
       totals.stagnantValue += r.stockValue;
@@ -3116,10 +3156,11 @@ export function planMinQuantities(
 
 export function stockAnalysisCsv(rows: StockAnalysisRow[], categories: Category[]): string {
   const categoryName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
-  const header = 'ABCランク,商品名,SKU,カテゴリ,在庫数,在庫金額（原価）,期間出庫数,売上出庫数,廃棄数,'
+  const header = 'ABCランク,区分,商品名,SKU,カテゴリ,在庫数,在庫金額（原価）,期間出庫数,売上出庫数,廃棄数,'
     + '出庫金額（原価）,構成比,累計構成比,1日あたり出庫数,在庫回転率,在庫日数,最終出庫日,滞留日数';
   const body = rows.map(r => [
-    r.rank,
+    r.rank ?? '対象外',
+    r.kind,
     r.productName,
     r.productSku,
     categoryName(r.categoryId),
@@ -3352,7 +3393,12 @@ export function useInventory() {
       return next;
     });
     if (product && lot && actualDelta !== 0) {
-      const txnType = type ?? (actualDelta > 0 ? '調整入庫' : '調整出庫');
+      const requestedType = type ?? (actualDelta > 0 ? '調整入庫' : '調整出庫');
+      // 資材の売上出庫・販売品の資材使用は区分の取り違えなので、調整出庫として記録する (在庫は減らす)
+      const txnType = transactionDirection(requestedType) === 'out'
+        && !outboundTypesFor(product).includes(requestedType as OutboundTransactionType)
+        ? '調整出庫'
+        : requestedType;
       addTransaction({
         type: txnType,
         productId,
@@ -3396,7 +3442,12 @@ export function useInventory() {
     });
 
     // 引き当てたロットごとに1件ずつ記録する (どのロットを何個出したかが帳票に残るように)
-    const type = (options.type ?? '売上出庫') as TransactionType;
+    // 区分の既定は 販売品なら売上出庫・資材なら資材使用。その商品で選べない区分 (資材の売上出庫など) は
+    // 取り違えなので調整出庫として記録する (adjustLotQuantity と同じ扱い)
+    const allowedTypes = outboundTypesFor(product);
+    const type: TransactionType = !options.type ? allowedTypes[0]
+      : allowedTypes.includes(options.type) ? options.type
+      : '調整出庫';
     const isSale = type === '売上出庫';
     addTransactions(plan.allocations.map(a => ({
       type,
@@ -3419,14 +3470,21 @@ export function useInventory() {
    * 売上登録 (売上管理タブ)。実際の出庫は FEFO 出庫そのもので、区分を 売上出庫 に固定し、
    * 実売単価と得意先を一緒に帳票へ残すだけの薄いラッパー。引当結果 (不足の有無) を返す。
    */
-  const recordSale = useCallback((input: SaleInput): FefoPlan => shipFefo(input.productId, input.quantity, {
-    warehouseId: input.warehouseId,
-    includeExpired: input.includeExpired,
-    type: '売上出庫',
-    note: input.note?.trim() || SALE_NOTE,
-    unitPrice: input.unitPrice,
-    customerId: input.customerId,
-  }), [shipFefo]);
+  const recordSale = useCallback((input: SaleInput): FefoPlan => {
+    // 資材は売らないので売上にしない (在庫も動かさず、全量を不足として返す)
+    const product = products.find(p => p.id === input.productId);
+    if (product && isMaterial(product)) {
+      return { allocations: [], allocated: 0, shortage: Math.max(0, Math.floor(input.quantity)), skippedExpired: 0, cost: 0 };
+    }
+    return shipFefo(input.productId, input.quantity, {
+      warehouseId: input.warehouseId,
+      includeExpired: input.includeExpired,
+      type: '売上出庫',
+      note: input.note?.trim() || SALE_NOTE,
+      unitPrice: input.unitPrice,
+      customerId: input.customerId,
+    });
+  }, [products, shipFefo]);
 
   /**
    * 選んだロットをまとめて廃棄する。引当先の決定は planDisposal (純粋関数) に任せ、
@@ -3648,9 +3706,14 @@ export function useInventory() {
 
   const exportCsv = useCallback(() => {
     const categoryName = (id: string) => categories.find(c => c.id === id)?.name ?? '';
-    const header = '商品名,SKU,JANコード,カテゴリ,販売定価(税抜),原価,税率,ロットNo,賞味期限,在庫数';
+    const header = '商品名,SKU,JANコード,カテゴリ,区分,販売定価(税抜),原価,税率,ロットNo,賞味期限,在庫数';
     const rows = products.flatMap(p => {
-      const head = [p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), p.price, p.costPrice, `${productTaxRate(p)}%`];
+      // 資材は売らないので販売定価・税率は空欄にする
+      const material = isMaterial(p);
+      const head = [
+        p.name, p.sku, p.janCode ?? '', categoryName(p.categoryId), productKind(p),
+        material ? '' : p.price, p.costPrice, material ? '' : `${productTaxRate(p)}%`,
+      ];
       return p.lots.length > 0
         ? p.lots.map(l => [...head, l.lotNo, l.expiryDate ?? '', l.quantity].join(','))
         : [[...head, '', '', 0].join(',')];
