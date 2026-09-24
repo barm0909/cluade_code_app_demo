@@ -35,6 +35,12 @@ interface StockTransaction {
   unitPrice?: number;     // 区分で意味が変わる: 入荷=仕入単価 / 廃棄=ロットの原価 / 売上出庫=実売単価
   customerId?: string;    // 得意先マスタの id。「売上出庫」だけが持つ
   costUnitPrice?: number; // 出庫した時点のロット原価。「売上出庫」だけが持つ
+  taxRate?: 8 | 10;       // 出庫した時点の商品の消費税率。「売上出庫」だけが持つ
+}
+
+interface Product {
+  // ...既存のフィールド (price / costPrice は税抜)
+  taxRate?: 8 | 10; // 消費税率。8 = 軽減税率 (飲食料品) / 10 = 標準税率。未設定は 8 とみなす
 }
 ```
 
@@ -66,15 +72,38 @@ interface StockTransaction {
 
 ---
 
+## 消費税（税抜・税込）
+
+`migrations/0011_tax_rate.sql`（`products.tax_rate` / `stock_transactions.tax_rate`）で追加しました。
+
+- **単価はすべて税抜で持つ。** 販売定価・実売単価・原価はこれまでどおりの1つの数字で、それを税抜と定義した。
+  消費税・税込金額は保存せず、税率から計算する（既存データを書き換える必要がない）。
+- **税率は商品ごと。** 食品は軽減税率 8%、値札ラベルのような資材は標準税率 10% と混在するため。
+  カテゴリ単位にしなかったのは例外を作れるようにするためで、代わりに商品の新規追加時は
+  `defaultTaxRateForCategory`（同じカテゴリで一番多い税率）を初期値にしている。
+- **税率は出庫時に帳票へ写し取る**（`saleFields` が `costUnitPrice` と一緒に書く）。商品の税率をあとで変えても
+  過去の売上の消費税が変わらないようにするため。税率を持たない古い売上出庫は商品の現在の税率で計算する。
+  税率が変わることはまずないので、単価・原価のフォールバックと違って「概算」の印はつけない
+  （つけると消費税導入前の売上がすべて概算になってしまう）。
+- **消費税は帳票1行ごとに四捨五入**（`taxAmount` = `Math.round(税抜 × 税率 / 100)`）。売上1回でも
+  複数ロットから引き当てるとロットごとに1行になるため、四捨五入もその単位。売上登録・FEFO出庫・ロット出庫の
+  プレビューは `saleAmounts(引当ごとの数量, 単価, 税率)` で同じ単位の計算をしているので、画面に出た消費税と
+  記録される消費税はずれない。
+- 粗利・粗利率・構成比・在庫分析の出庫金額はすべて**税抜**のまま（消費税は預り金で利益ではないため）。
+- `SalesRow` / `SalesSummary` は `taxRate`（明細のみ）/ `tax` / `amountWithTax` を持ち、`SalesTotals` は
+  さらに `byTaxRate`（8%対象・10%対象ごとの税抜金額と消費税）を持つ。
+
+---
+
 ## 画面: 売上管理タブ
 
 `SalesView.tsx`。タブの並びは 入荷予定 の次（入荷と売上を隣り合わせにしています）。
 
-- 上部に 売上高 / 売上原価 / 粗利 / 粗利率 のサマリカード（絞り込み後の範囲で集計）
+- 上部に 売上高（税抜）/ 税込売上高（消費税と税率別の内訳つき）/ 売上原価 / 粗利 / 粗利率 のサマリカード（絞り込み後の範囲で集計）
 - キーワード（商品名・SKU・得意先名）／期間／得意先（「得意先なし」だけの絞り込みも可）／倉庫で絞り込み
 - **明細 / 商品別 / 得意先別 / 日別** の4つの切り口を1画面で切り替え
-  - 明細：日時・商品名・SKU・ロットNo・倉庫・得意先・数量・売上単価・売上金額・原価・粗利・粗利率
-  - 集計：件数・数量・売上金額・原価・粗利・粗利率・構成比（商品別・得意先別は売上高の多い順、
+  - 明細：日時・商品名・SKU・ロットNo・倉庫・得意先・数量・売上単価(税抜)・売上金額(税抜)・税率・消費税・税込金額・原価・粗利・粗利率
+  - 集計：件数・数量・売上金額(税抜)・消費税・税込金額・原価・粗利・粗利率・構成比（商品別・得意先別は売上高の多い順、
     日別だけは新しい日付順）
 - CSV は明細（`CSV_EXPORTS.sales`）と集計（`CSV_EXPORTS.salesSummary`）で出し分ける
 
@@ -114,7 +143,10 @@ interface StockTransaction {
 |------|------|
 | `salesRows(ledger, products, customers)` | 帳票の「売上出庫」を新しい順の売上明細へ整形（単価・原価が無い行は概算にフォールバック） |
 | `filterSales(rows, filter)` | キーワード／得意先（`NO_CUSTOMER` = 得意先なし）／倉庫／期間で絞り込み |
-| `salesTotals(rows)` | 件数・数量・売上高・原価・粗利・粗利率・平均単価 |
+| `salesTotals(rows)` | 件数・数量・売上高（税抜）・消費税・税込売上高・原価・粗利・粗利率・平均単価・税率別内訳 |
+| `productTaxRate` / `taxAmount` / `withTax` / `taxRateLabel` | 税率の取得（未設定は 8%）・消費税（四捨五入）・税込金額・表示用ラベル |
+| `saleAmounts(quantities, unitPrice, rate)` | 売上プレビュー用の税抜・消費税・税込。引当（帳票1行）ごとに四捨五入 |
+| `defaultTaxRateForCategory(products, categoryId)` | 新しい商品の税率の初期値（カテゴリ内で一番多い税率） |
 | `salesProductSummaries` / `salesCustomerSummaries` / `salesDailySummaries` | 商品別／得意先別／日別の集計（共通の `SalesSummary` 型） |
 | `salesCsv` / `salesSummaryCsv` | CSV（`売上明細_YYYY-MM-DD.csv` / `売上集計_YYYY-MM-DD.csv`） |
 | `customerValidationError` / `normalizeCustomerInput` | 得意先の入力チェック（画面と `addCustomer`/`updateCustomer` が共有） |

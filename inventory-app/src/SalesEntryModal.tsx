@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Customer, FefoPlan, Product, SaleInput, Warehouse } from './useInventory';
-import { planFefoShipment, selectableCustomers, totalQuantity, totalQuantityByWarehouse } from './useInventory';
+import { DEFAULT_TAX_RATE, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
 
@@ -19,7 +19,7 @@ const yen = (v: number) => `¥${Math.round(v).toLocaleString()}`;
  * 自動で引き当てて出庫する (FEFO出庫と同じ planFefoShipment を使うので、プレビューと
  * 実際に出るロットは必ず一致する)。
  *
- * 単価の初期値は商品の販売定価。値引きしたときはここを書き換えると、その金額が
+ * 単価は税抜で入力する (消費税は商品の税率で計算してプレビューに出す)。初期値は商品の販売定価。値引きしたときはここを書き換えると、その金額が
  * 「実際の売上」として帳票に残る (定価のままでも同じ扱い)。
  */
 export function SalesEntryModal({ products, customers, warehouses, onSubmit, onClose }: Props) {
@@ -49,7 +49,8 @@ export function SalesEntryModal({ products, customers, warehouses, onSubmit, onC
   );
 
   const stock = product ? (warehouseId ? totalQuantityByWarehouse(product, warehouseId) : totalQuantity(product)) : 0;
-  const amount = unitPrice * plan.allocated;
+  const taxRate = product ? productTaxRate(product) : DEFAULT_TAX_RATE;
+  const { amount, tax, amountWithTax } = saleAmounts(plan.allocations.map(a => a.quantity), unitPrice, taxRate);
   const profit = amount - plan.cost;
   const valid = !!product && qty > 0 && plan.shortage === 0;
 
@@ -88,7 +89,7 @@ export function SalesEntryModal({ products, customers, warehouses, onSubmit, onC
                 <NumberInput id="sale-qty" min={1} required value={qty} onValueChange={setQty} />
               </label>
               <label htmlFor="sale-price">
-                販売単価 <span className="label-hint">（円）</span>
+                販売単価 <span className="label-hint">（税抜・円／税率 {taxRateLabel(taxRate)}）</span>
                 <NumberInput
                   id="sale-price"
                   min={0}
@@ -165,7 +166,9 @@ export function SalesEntryModal({ products, customers, warehouses, onSubmit, onC
             </div>
 
             <div className="sale-preview">
-              <span>売上金額 <strong>{yen(amount)}</strong></span>
+              <span>売上金額（税抜） <strong>{yen(amount)}</strong></span>
+              <span>消費税 {yen(tax)}</span>
+              <span>税込 <strong>{yen(amountWithTax)}</strong></span>
               <span>原価 {yen(plan.cost)}</span>
               <span className={profit >= 0 ? 'qty-in' : 'qty-out'}>
                 粗利 {yen(profit)}（{amount > 0 ? ((profit / amount) * 100).toFixed(1) : '0.0'}%）

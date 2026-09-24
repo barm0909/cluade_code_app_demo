@@ -85,7 +85,7 @@ describe('exportCsv', () => {
     const { result } = renderHook(() => useInventory());
     act(() => { result.current.exportCsv(); });
     const lines = getBlobText().split('\n');
-    expect(lines[0]).toBe('商品名,SKU,JANコード,カテゴリ,販売定価,原価,ロットNo,賞味期限,在庫数');
+    expect(lines[0]).toBe('商品名,SKU,JANコード,カテゴリ,販売定価(税抜),原価,税率,ロットNo,賞味期限,在庫数');
   });
 
   it('ロットを持つ商品は各ロットが1行になる', () => {
@@ -123,7 +123,7 @@ describe('exportCsv', () => {
     const lines = getBlobText().split('\n');
     const line = lines.find(l => l.includes('NO-LOT'));
     expect(line).toBeDefined();
-    // 行フォーマット: 商品名,SKU,JANコード,カテゴリ,販売定価,原価,ロットNo(空),賞味期限(空),在庫数(0)
+    // 行フォーマット: 商品名,SKU,JANコード,カテゴリ,販売定価,原価,税率,ロットNo(空),賞味期限(空),在庫数(0)
     expect(line).toMatch(/,,,0$/);
   });
 
@@ -136,7 +136,8 @@ describe('exportCsv', () => {
     const line = lines.find(l => l.includes('LB-R01'));
     expect(line).toBeDefined();
     const cols = line!.split(',');
-    expect(cols[7]).toBe(''); // 賞味期限列
+    expect(cols[6]).toBe('10%'); // 税率列 (資材なので標準税率)
+    expect(cols[8]).toBe(''); // 賞味期限列
   });
 
   it('JANコードのある商品はJANコード列に出力され、ない商品は空になる', () => {

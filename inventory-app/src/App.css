@@ -569,3 +569,6 @@ tr:hover td { background: #fafbff; }
   font-size: 0.9rem; color: #555;
 }
 .sale-preview strong { color: #333; font-size: 1.05rem; }
+
+/* 売上管理: 税率別の内訳 (8%対象 / 10%対象) を1行ずつ */
+.tax-breakdown { display: block; }

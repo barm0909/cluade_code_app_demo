@@ -1,5 +1,5 @@
 import { Fragment, useState, useMemo } from 'react';
-import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
+import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, productTaxRate, saleAmounts, taxRateLabel, INBOUND_TYPES, OUTBOUND_TYPES } from './useInventory';
 import type { Customer, Product, Lot, LotTraceKey, SaleFields, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
@@ -113,6 +113,8 @@ function StockIoModal({ lot, product, warehouses, customers, direction, onSubmit
   const [unitPrice, setUnitPrice] = useState(product.price);
   const [customerId, setCustomerId] = useState('');
   const isSale = type === '売上出庫';
+  // ロット行の出庫は1ロットだけなので、帳票の1行 = この数量 × 単価 で消費税を計算する
+  const sale = saleAmounts([qty], unitPrice, productTaxRate(product));
 
   const valid = qty > 0 && (maxQty === undefined || qty <= maxQty);
 
@@ -155,9 +157,14 @@ function StockIoModal({ lot, product, warehouses, customers, direction, onSubmit
           </label>
           {isSale && (<>
             <label htmlFor="io-price">
-              販売単価 <span className="label-hint">（円。既定は販売定価）</span>
+              販売単価 <span className="label-hint">（税抜・円／税率 {taxRateLabel(productTaxRate(product))}。既定は販売定価）</span>
               <NumberInput id="io-price" min={0} value={unitPrice} onValueChange={setUnitPrice} />
             </label>
+            <p className="sale-preview">
+              <span>売上金額（税抜） <strong>¥{sale.amount.toLocaleString()}</strong></span>
+              <span>消費税 ¥{sale.tax.toLocaleString()}</span>
+              <span>税込 <strong>¥{sale.amountWithTax.toLocaleString()}</strong></span>
+            </p>
             <label htmlFor="io-customer">
               得意先 <span className="label-hint">（任意）</span>
               <select id="io-customer" value={customerId} onChange={e => setCustomerId(e.target.value)}>
@@ -410,7 +417,7 @@ export default function App() {
               <th onClick={() => toggleSort('janCode')} className="sortable">JANコード{sortIcon('janCode')}</th>
               <th onClick={() => toggleSort('category')} className="sortable">カテゴリ{sortIcon('category')}</th>
               <th>合計在庫</th>
-              <th onClick={() => toggleSort('price')} className="sortable">販売定価{sortIcon('price')}</th>
+              <th onClick={() => toggleSort('price')} className="sortable">販売定価(税抜){sortIcon('price')}</th>
               <th onClick={() => toggleSort('costPrice')} className="sortable">原価{sortIcon('costPrice')}</th>
               <th>操作</th>
             </tr>
@@ -525,6 +532,7 @@ export default function App() {
         <ProductModal
           product={editingProduct === 'new' ? null : editingProduct}
           categories={categories}
+          products={products}
           onSave={data => editingProduct === 'new' ? addProduct(data) : updateProduct((editingProduct as Product).id, data)}
           onClose={() => setEditingProduct(null)}
         />
