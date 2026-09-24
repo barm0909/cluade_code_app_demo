@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Customer, FefoPlan, Product, SaleInput, Warehouse } from './useInventory';
-import { DEFAULT_TAX_RATE, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
+import { DEFAULT_TAX_RATE, isMaterial, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
 
@@ -23,7 +23,11 @@ const yen = (v: number) => `¥${Math.round(v).toLocaleString()}`;
  * 「実際の売上」として帳票に残る (定価のままでも同じ扱い)。
  */
 export function SalesEntryModal({ products, customers, warehouses, onSubmit, onClose }: Props) {
-  const sorted = useMemo(() => [...products].sort((a, b) => a.name.localeCompare(b.name)), [products]);
+  // 資材は売らないので選択肢に出さない
+  const sorted = useMemo(
+    () => products.filter(p => !isMaterial(p)).sort((a, b) => a.name.localeCompare(b.name)),
+    [products],
+  );
   const [productId, setProductId] = useState(sorted[0]?.id ?? '');
   const [qty, setQty] = useState(1);
   // 単価を手で変えたかどうか。変えていなければ商品を選び直すたびに定価へ追従させる

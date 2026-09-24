@@ -349,16 +349,16 @@ describe('stockAnalysisCsv', () => {
   it('ヘッダーと商品ごとの行を出す', () => {
     const lines = stockAnalysisCsv(rowsOf(), CATEGORIES).split('\n');
     expect(lines[0]).toBe(
-      'ABCランク,商品名,SKU,カテゴリ,在庫数,在庫金額（原価）,期間出庫数,売上出庫数,廃棄数,'
+      'ABCランク,区分,商品名,SKU,カテゴリ,在庫数,在庫金額（原価）,期間出庫数,売上出庫数,廃棄数,'
       + '出庫金額（原価）,構成比,累計構成比,1日あたり出庫数,在庫回転率,在庫日数,最終出庫日,滞留日数',
     );
     expect(lines).toHaveLength(5);
-    expect(lines[1]).toContain('A,牛乳,ML-001,乳製品,30,3000,150,150,0,15000');
+    expect(lines[1]).toContain('A,販売品,牛乳,ML-001,乳製品,30,3000,150,150,0,15000');
   });
 
   it('出庫実績のない商品は最終出庫日・滞留日数を空欄にする', () => {
     const line = stockAnalysisCsv(rowsOf(), CATEGORIES).split('\n')[4];
-    expect(line.startsWith('C,値札ラベル,LB-R01,ラベル,100,200,0,0,0,0,')).toBe(true);
+    expect(line.startsWith('C,販売品,値札ラベル,LB-R01,ラベル,100,200,0,0,0,0,')).toBe(true);
     expect(line.endsWith(',,')).toBe(true);
   });
 });

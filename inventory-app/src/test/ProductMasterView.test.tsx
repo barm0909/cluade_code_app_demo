@@ -400,3 +400,23 @@ describe('ProductMasterView — 消費税率', () => {
     expect(defaultProps.onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ taxRate: 10 }));
   });
 });
+
+describe('ProductMasterView — 区分', () => {
+  it('資材は区分に「資材」と出て、販売定価・税率は表示しない', () => {
+    render(<ProductMasterView {...defaultProps} products={[makeProduct({ id: '3', name: '値札ラベル', price: 5, kind: '資材' })]} />);
+    const row = screen.getByText('値札ラベル').closest('tr')!;
+    expect(within(row).getByText('資材')).toBeInTheDocument();
+    expect(within(row).queryByText(/税込/)).not.toBeInTheDocument();
+    expect(within(row).getAllByText('—').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('インライン編集で区分を資材にすると onUpdate に渡る', async () => {
+    const user = userEvent.setup();
+    render(<ProductMasterView {...defaultProps} />);
+    await user.click(screen.getByRole('button', { name: '編集' }));
+    await user.selectOptions(screen.getByLabelText('区分'), '資材');
+    expect(screen.queryByLabelText('販売定価')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '保存' }));
+    expect(defaultProps.onUpdate).toHaveBeenCalledWith('1', expect.objectContaining({ kind: '資材' }));
+  });
+});

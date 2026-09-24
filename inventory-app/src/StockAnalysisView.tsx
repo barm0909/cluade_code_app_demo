@@ -78,6 +78,9 @@ export function StockAnalysisView({ products, categories, ledger, inboundPlans, 
 
   const allRows = useMemo(() => stockAnalysisRows(products, ledger, { days }), [products, ledger, days]);
   const filtered = useMemo(() => filterStockAnalysis(allRows, filter), [allRows, filter]);
+  // 資材は売らないので ABC の表からは外し、下に別の表で出す (rank が null)
+  const rankedRows = useMemo(() => filtered.filter(r => r.rank), [filtered]);
+  const materialRows = useMemo(() => filtered.filter(r => !r.rank), [filtered]);
   const totals = useMemo(() => stockAnalysisTotals(allRows, { days, stagnantDays }), [allRows, days, stagnantDays]);
   const stagnant = useMemo(() => stagnantRows(allRows, stagnantDays), [allRows, stagnantDays]);
   const suggestions = useMemo(
@@ -148,7 +151,10 @@ export function StockAnalysisView({ products, categories, ledger, inboundPlans, 
         <div className="stat-card">
           <div className="stat-label">Aランク商品</div>
           <div className="stat-value">{totals.rankCounts.A}</div>
-          <div className="stat-sub">B {totals.rankCounts.B} / C {totals.rankCounts.C}</div>
+          <div className="stat-sub">
+            B {totals.rankCounts.B} / C {totals.rankCounts.C}
+            {totals.materialCount > 0 && ` / 資材 ${totals.materialCount}（対象外）`}
+          </div>
         </div>
         <div className="stat-card">
           <div className="stat-label">滞留在庫</div>
@@ -166,7 +172,7 @@ export function StockAnalysisView({ products, categories, ledger, inboundPlans, 
               {ANALYSIS_PERIODS.map(d => <option key={d} value={d}>直近{d}日</option>)}
             </select>
           </label>
-          <span className="dashboard-section-note">A = 上位70% / B = 90%まで / C = 残り</span>
+          <span className="dashboard-section-note">A = 上位70% / B = 90%まで / C = 残り（販売品だけでランク付け）</span>
         </div>
 
         <div className="controls ledger-controls">
@@ -202,8 +208,8 @@ export function StockAnalysisView({ products, categories, ledger, inboundPlans, 
         </div>
 
         <div className="table-wrapper">
-          {filtered.length === 0 ? (
-            <p className="empty">条件に一致する商品がありません。</p>
+          {rankedRows.length === 0 ? (
+            <p className="empty">条件に一致する販売品がありません。</p>
           ) : (
             <table>
               <thead>
@@ -223,9 +229,9 @@ export function StockAnalysisView({ products, categories, ledger, inboundPlans, 
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(r => (
+                {rankedRows.map(r => (
                   <tr key={r.productId}>
-                    <td><RankBadge rank={r.rank} /></td>
+                    <td>{r.rank && <RankBadge rank={r.rank} />}</td>
                     <td><strong>{r.productName}</strong></td>
                     <td className="mono">{r.productSku}</td>
                     <td>{categoryNameById.get(r.categoryId) ?? '—'}</td>
@@ -257,6 +263,48 @@ export function StockAnalysisView({ products, categories, ledger, inboundPlans, 
             </table>
           )}
         </div>
+
+        {materialRows.length > 0 && (<>
+          <h4 className="analysis-subtitle">資材（ABCランクの対象外）</h4>
+          <div className="table-wrapper">
+            <table aria-label="資材">
+              <thead>
+                <tr>
+                  <th>商品名</th>
+                  <th>SKU</th>
+                  <th>カテゴリ</th>
+                  <th style={{ textAlign: 'right' }}>在庫数</th>
+                  <th style={{ textAlign: 'right' }}>在庫金額</th>
+                  <th style={{ textAlign: 'right' }}>期間出庫数</th>
+                  <th style={{ textAlign: 'right' }}>出庫金額</th>
+                  <th style={{ textAlign: 'right' }}>回転率</th>
+                  <th style={{ textAlign: 'right' }}>在庫日数</th>
+                  <th>最終出庫</th>
+                </tr>
+              </thead>
+              <tbody>
+                {materialRows.map(r => (
+                  <tr key={r.productId}>
+                    <td><strong>{r.productName}</strong></td>
+                    <td className="mono">{r.productSku}</td>
+                    <td>{categoryNameById.get(r.categoryId) ?? '—'}</td>
+                    <td style={{ textAlign: 'right' }}>{r.quantity.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right' }}>{yen(r.stockValue)}</td>
+                    <td style={{ textAlign: 'right' }}>{r.outboundQuantity.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right' }}>{yen(r.outboundValue)}</td>
+                    <td style={{ textAlign: 'right' }}>{r.turnoverRate.toFixed(2)}</td>
+                    <td style={{ textAlign: 'right' }}>{daysOfStockLabel(r.daysOfStock)}</td>
+                    <td className="mono">
+                      {r.lastOutboundAt
+                        ? localDateKey(r.lastOutboundAt)
+                        : <span className="stat-sub">実績なし</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>)}
       </section>
 
       <section className="dashboard-section">

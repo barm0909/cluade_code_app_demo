@@ -76,6 +76,7 @@ interface Product {
   price: number; // 販売定価 (税抜)
   costPrice: number;
   taxRate?: number; // 消費税率 (%)。8 = 軽減税率 / 10 = 標準税率
+  kind?: string; // 商品区分。販売品 / 資材
   updatedAt: string;
 }
 
@@ -152,6 +153,7 @@ interface ProductRow {
   price: number;
   cost_price: number;
   tax_rate: number;
+  kind: string;
   updated_at: string;
 }
 
@@ -253,7 +255,7 @@ interface TransactionRow {
 
 async function readState(db: D1Database) {
   const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes] = await db.batch([
-    db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, updated_at FROM products'),
+    db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
@@ -290,6 +292,7 @@ async function readState(db: D1Database) {
     price: r.price,
     costPrice: r.cost_price,
     taxRate: r.tax_rate,
+    kind: r.kind,
     updatedAt: r.updated_at,
     lots: lotsByProduct.get(r.id) ?? [],
   }));
@@ -393,13 +396,13 @@ async function readState(db: D1Database) {
 async function replaceProducts(db: D1Database, products: Product[]) {
   const stmts = [db.prepare('DELETE FROM lots'), db.prepare('DELETE FROM products')];
   const insertProduct = db.prepare(
-    'INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   const insertLot = db.prepare(
     'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?)'
   );
   for (const p of products) {
-    stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.janCode || null, p.categoryId, p.minQuantity, p.price, p.costPrice, p.taxRate ?? 8, p.updatedAt));
+    stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.janCode || null, p.categoryId, p.minQuantity, p.price, p.costPrice, p.taxRate ?? 8, p.kind === '資材' ? '資材' : '販売品', p.updatedAt));
   }
   for (const p of products) {
     for (const l of p.lots) {

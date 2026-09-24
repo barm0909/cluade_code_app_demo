@@ -572,3 +572,6 @@ tr:hover td { background: #fafbff; }
 
 /* 売上管理: 税率別の内訳 (8%対象 / 10%対象) を1行ずつ */
 .tax-breakdown { display: block; }
+
+/* 在庫分析: ABC の表の下に出す資材の表の見出し */
+.analysis-subtitle { margin: 20px 0 8px; font-size: 0.9rem; color: #888; }

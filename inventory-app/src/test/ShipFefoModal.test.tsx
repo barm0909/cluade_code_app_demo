@@ -154,3 +154,24 @@ describe('ShipFefoModal — 出庫の実行', () => {
     expect(defaultProps.onClose).toHaveBeenCalled();
   });
 });
+
+describe('ShipFefoModal — 資材', () => {
+  it('資材は売上出庫を選べず、資材使用が既定で販売単価の欄も出ない', async () => {
+    const user = userEvent.setup();
+    const onShip = vi.fn();
+    render(<ShipFefoModal {...defaultProps} product={{ ...PRODUCT, kind: '資材' }} onShip={onShip} />);
+
+    const typeSelect = screen.getByLabelText('出庫区分');
+    expect(typeSelect).toHaveValue('資材使用');
+    expect(within(typeSelect).queryByRole('option', { name: '売上出庫' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/販売単価/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '出庫' }));
+    expect(onShip).toHaveBeenCalledWith(1, expect.objectContaining({ type: '資材使用' }));
+  });
+
+  it('販売品は資材使用を選べない', () => {
+    render(<ShipFefoModal {...defaultProps} />);
+    expect(within(screen.getByLabelText('出庫区分')).queryByRole('option', { name: '資材使用' })).not.toBeInTheDocument();
+  });
+});

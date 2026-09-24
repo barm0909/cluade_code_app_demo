@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { Customer, FefoPlan, FefoShipOptions, OutboundTransactionType, Product, Warehouse } from './useInventory';
-import { OUTBOUND_TYPES, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
+import { outboundTypesFor, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
 
@@ -21,7 +21,9 @@ export function ShipFefoModal({ product, warehouses, customers, onShip, onClose 
   const [qty, setQty] = useState(1);
   const [warehouseId, setWarehouseId] = useState('');
   const [includeExpired, setIncludeExpired] = useState(false);
-  const [type, setType] = useState<OutboundTransactionType>(OUTBOUND_TYPES[0]);
+  // 選べる区分は商品で変わる (販売品は売上出庫、資材は資材使用が既定)
+  const types = outboundTypesFor(product);
+  const [type, setType] = useState<OutboundTransactionType>(types[0]);
   // 売上出庫のときだけ入力できる項目。ここで入れた単価が「実際の売上」として帳票に残り、
   // 売上管理タブの売上高・粗利になる (未入力=定価のままでも同じ)
   const [unitPrice, setUnitPrice] = useState(product.price);
@@ -71,7 +73,7 @@ export function ShipFefoModal({ product, warehouses, customers, onShip, onClose 
           <label htmlFor="fefo-type">
             出庫区分
             <select id="fefo-type" value={type} onChange={e => setType(e.target.value as OutboundTransactionType)}>
-              {OUTBOUND_TYPES.map(t => (
+              {types.map(t => (
                 <option key={t} value={t}>{t}</option>
               ))}
             </select>

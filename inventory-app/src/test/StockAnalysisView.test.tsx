@@ -195,3 +195,21 @@ describe('StockAnalysisView — 発注点の見直し提案', () => {
     expect(screen.getByRole('button', { name: /選択した0件を反映/ })).toBeDisabled();
   });
 });
+
+describe('StockAnalysisView — 資材', () => {
+  const LABEL: Product = {
+    id: 'p-label', name: '値札ラベル', sku: 'LB-R01', categoryId: 'cat-dairy', minQuantity: 0, price: 0, costPrice: 2,
+    kind: '資材', lots: [{ id: 'l-label', lotNo: 'L1', quantity: 100, warehouseId: 'wh-sales' }],
+    updatedAt: '2026-09-01T00:00:00.000Z',
+  };
+
+  it('資材は ABC の表から外れ、下の「資材」の表に出る', () => {
+    renderView({ products: [...PRODUCTS, LABEL] });
+    const abcSection = screen.getByRole('heading', { name: /ABC分析/ }).closest('section')!;
+    const [abcTable] = within(abcSection).getAllByRole('table');
+    expect(within(abcTable).queryByText('値札ラベル')).not.toBeInTheDocument();
+    const materialTable = within(abcSection).getByRole('table', { name: '資材' });
+    expect(within(materialTable).getByText('値札ラベル')).toBeInTheDocument();
+    expect(screen.getByText(/資材 1（対象外）/)).toBeInTheDocument();
+  });
+});
