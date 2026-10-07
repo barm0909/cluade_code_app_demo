@@ -209,6 +209,8 @@ describe('useInventory — 得意先マスタ', () => {
   it('売上の記録がない得意先は削除できる', () => {
     const { result } = renderHook(() => useInventory());
 
+    // サンプルの得意先にはどれも受注 (so1〜so3) があり、受注があっても削除できないので先に消す
+    act(() => { result.current.deleteSalesOrder('so1'); });
     act(() => { result.current.deleteCustomer('cus-midori'); });
 
     expect(result.current.customers.map(c => c.id)).not.toContain('cus-midori');
