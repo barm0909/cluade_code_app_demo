@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import type { InboundPlan, Warehouse, Product } from './useInventory';
-import { remainingInbound } from './useInventory';
+import type { InboundPlan, SalesOrder, Warehouse, Product } from './useInventory';
+import { remainingInbound, remainingShipment } from './useInventory';
 import { useConfirm } from './useConfirm';
 
 interface Props {
   warehouses: Warehouse[];
   products: Product[];
   inboundPlans: InboundPlan[];
+  /** 出荷待ちの受注が出荷元にしている倉庫も削除できない。省略時は受注なし */
+  salesOrders?: SalesOrder[];
   onAdd: (name: string, color: string) => void;
   onUpdate: (id: string, name: string, color: string) => void;
   onDelete: (id: string) => void;
@@ -14,7 +16,7 @@ interface Props {
 
 const DEFAULT_NEW_COLOR = '#4f6ef7';
 
-export function WarehouseMasterView({ warehouses, products, inboundPlans, onAdd, onUpdate, onDelete }: Props) {
+export function WarehouseMasterView({ warehouses, products, inboundPlans, salesOrders = [], onAdd, onUpdate, onDelete }: Props) {
   const [newName, setNewName] = useState('');
   const [newColor, setNewColor] = useState(DEFAULT_NEW_COLOR);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -27,6 +29,9 @@ export function WarehouseMasterView({ warehouses, products, inboundPlans, onAdd,
   // 入荷待ちの予定が入荷先に指定している倉庫も削除できない (入荷先が消えてしまうため)
   const pendingInboundCount = (id: string) =>
     inboundPlans.filter(p => p.warehouseId === id && remainingInbound(p) > 0).length;
+  // 出荷待ちの受注が出荷元に指定している倉庫も同じ理由で削除できない
+  const pendingOrderCount = (id: string) =>
+    salesOrders.filter(o => o.warehouseId === id && remainingShipment(o) > 0).length;
 
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,6 +84,7 @@ export function WarehouseMasterView({ warehouses, products, inboundPlans, onAdd,
             {warehouses.map(w => {
               const count = usageCount(w.id);
               const pending = pendingInboundCount(w.id);
+              const pendingOrders = pendingOrderCount(w.id);
               return editingId === w.id ? (
                 <tr key={w.id} className="master-editing-row">
                   <td><input className="master-input" aria-label="倉庫名" required value={editName} onChange={e => setEditName(e.target.value)} /></td>
@@ -106,10 +112,11 @@ export function WarehouseMasterView({ warehouses, products, inboundPlans, onAdd,
                       <button className="btn-edit" onClick={() => startEdit(w)}>編集</button>
                       <button
                         className="btn-delete"
-                        disabled={count > 0 || pending > 0}
+                        disabled={count > 0 || pending > 0 || pendingOrders > 0}
                         title={count > 0
                           ? 'ロットが使用中の倉庫は削除できません'
-                          : pending > 0 ? '入荷待ちの入荷予定がある倉庫は削除できません' : undefined}
+                          : pending > 0 ? '入荷待ちの入荷予定がある倉庫は削除できません'
+                          : pendingOrders > 0 ? '出荷待ちの受注が出荷元にしている倉庫は削除できません' : undefined}
                         onClick={async () => {
                           const ok = await confirm({ message: `倉庫「${w.name}」を削除しますか？`, confirmLabel: '削除', tone: 'danger' });
                           if (ok) onDelete(w.id);

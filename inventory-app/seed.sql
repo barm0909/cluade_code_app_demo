@@ -1,11 +1,12 @@
 -- 開発用サンプルデータ (useInventory.ts の SAMPLE_DATA / SAMPLE_INBOUND_PLANS / DEFAULT_CATEGORIES /
--- DEFAULT_SUPPLIERS / DEFAULT_CUSTOMERS と同期)
+-- DEFAULT_SUPPLIERS / DEFAULT_CUSTOMERS / SAMPLE_SALES_ORDERS と同期)
 -- アプリ同様に賞味期限を実行日からの相対日付で生成する (date('now', ...) は SQLite 組み込み)
--- 再実行できるよう、投入前に既存の商品・ロット・帳票・カテゴリ・入荷予定・仕入先・得意先・発注履歴を全削除する
+-- 再実行できるよう、投入前に既存の商品・ロット・帳票・カテゴリ・入荷予定・受注・仕入先・得意先・発注履歴を全削除する
 
 DELETE FROM stock_transactions;
 DELETE FROM purchase_order_prints;
 DELETE FROM inbound_plans;
+DELETE FROM sales_orders;
 DELETE FROM lots;
 DELETE FROM products;
 DELETE FROM categories;
@@ -72,3 +73,10 @@ INSERT INTO stock_transactions (id, date, type, product_id, product_name, produc
 -- 単価・得意先・税率は持たない (売上管理には出ず、在庫分析の出庫ペースにだけ使われる)
 INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id) VALUES
   ('tx-use-1', datetime('now', '-2 days'), '資材使用', '3', '値札ラベル(赤)', 'LB-R01', '20260101', 100, '', 'wh-sales', NULL);
+
+-- 受注 (出荷予定): so2 は在庫 (食パン 3) を超える受注で「在庫不足」、so3 は出荷予定日を過ぎた「遅延」。
+-- まだどれも出荷していないので shipped_quantity は 0 (出荷すると上の売上出庫と同じ形の記録が増える)
+INSERT INTO sales_orders (id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at) VALUES
+  ('so1', 'cus-midori', '1', date('now', '+1 days'), 12, 0, 190, '',         '定期配送', NULL, datetime('now'), datetime('now')),
+  ('so2', 'cus-sakura', '2', date('now', '+2 days'), 10, 0, 150, '',         '',         NULL, datetime('now'), datetime('now')),
+  ('so3', 'cus-kita',   '4', date('now', '-1 days'), 3,  0, 330, 'wh-sales', '給食用',   NULL, datetime('now'), datetime('now'));

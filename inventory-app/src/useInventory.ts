@@ -154,6 +154,27 @@ export interface InboundPlan {
   updatedAt: string;
 }
 
+// 受注 (出荷予定)。入荷予定の販売側の対で、得意先から受けた注文のうちまだ出荷していないものを持つ。
+// 受注自体は在庫を動かさず、出荷して初めて「売上出庫」として在庫が減り帳票に残る。
+// 分割出荷に対応するため受注数量とは別に出荷済数量を持ち、状態はそこから導出する
+// (canceledAt だけは操作の結果として保存する。入荷予定と同じ方針)。
+// 在庫の引当 (取り置き) はロットに予約を書き込むのではなく、受注残を出荷予定日の早い順に
+// FEFO で割り付けたときに足りるかどうかを salesOrderAllocations で都度計算する。
+export interface SalesOrder {
+  id: string;
+  customerId: string; // 得意先マスタの id
+  productId: string;
+  expectedDate: string; // 出荷予定日 YYYY-MM-DD
+  quantity: number; // 受注数量
+  shippedQuantity: number; // 出荷済数量 (分割出荷の累計)
+  unitPrice: number; // 受注単価 (税抜・円)。0 は未入力 (出荷時は帳票に書かず、売上管理で販売定価に代用)
+  warehouseId: string; // 出荷元倉庫。空文字は「全倉庫から引き当てる」
+  note: string;
+  canceledAt?: string; // キャンセル日時 (ISO)。未設定なら有効な受注
+  createdAt: string;
+  updatedAt: string;
+}
+
 // 発注書の印刷履歴。1回の「印刷」操作 (= 1枚の発注書) につき、印刷した明細の数だけ行を作る
 // (stock_transactions と同じ「1件1行、必要な情報は都度そのまま持たせる」方針)。
 // printGroupId が同じ行は同じ印刷操作 = 同じ発注書に載っていたことを意味する。
@@ -397,6 +418,7 @@ interface ServerState {
   suppliers?: Supplier[]; // 仕入先マスタも同様 (未導入のサーバーからは返ってこない)
   purchaseOrderPrints?: PurchaseOrderPrintItem[]; // 発注書の印刷履歴も同様 (未導入のサーバーからは返ってこない)
   customers?: Customer[]; // 得意先マスタも同様 (未導入のサーバーからは返ってこない)
+  salesOrders?: SalesOrder[]; // 受注も同様 (未導入のサーバーからは返ってこない)
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -409,7 +431,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers' | 'sales-orders';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -529,6 +551,23 @@ const SAMPLE_INBOUND_PLANS: InboundPlan[] = [
   },
 ];
 
+// 受注のサンプル (seed.sql と同期)。so2 は在庫 (食パン 3) を超える受注で「在庫不足」、
+// so3 は出荷予定日を過ぎた「遅延」の状態にしてある
+const SAMPLE_SALES_ORDERS: SalesOrder[] = [
+  {
+    id: 'so1', customerId: 'cus-midori', productId: '1', expectedDate: d(1), quantity: 12, shippedQuantity: 0,
+    unitPrice: 190, warehouseId: '', note: '定期配送', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'so2', customerId: 'cus-sakura', productId: '2', expectedDate: d(2), quantity: 10, shippedQuantity: 0,
+    unitPrice: 150, warehouseId: '', note: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  },
+  {
+    id: 'so3', customerId: 'cus-kita', productId: '4', expectedDate: d(-1), quantity: 3, shippedQuantity: 0,
+    unitPrice: 330, warehouseId: DEFAULT_WAREHOUSE_ID, note: '給食用', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  },
+];
+
 // 旧データの後方互換:
 // - warehouseId がないロットにデフォルトを付与
 // - categoryId がない商品 (旧 category 文字列) はカテゴリマスタへ名前で対応付け、なければカテゴリを作成
@@ -641,6 +680,10 @@ function savePurchaseOrderPrints(prints: PurchaseOrderPrintItem[]) {
   persist('purchase-order-prints', prints);
 }
 
+function saveSalesOrders(orders: SalesOrder[]) {
+  persist('sales-orders', orders);
+}
+
 // ---- CSV エクスポートの種類 ----
 // 画面に CSV エクスポートボタンが複数あり、どれも中身が違う。ボタンの表示名・ツールチップ・
 // 出力ファイル名をここ1箇所で決めることで、「どのボタンから何のファイルが出るのか」を
@@ -660,6 +703,7 @@ export const CSV_EXPORTS = {
   sales: { label: '売上明細', description: '絞り込み後の売上明細（売上金額・原価・粗利つき）' },
   salesSummary: { label: '売上集計', description: '商品別・得意先別・日別に集計した売上' },
   customer: { label: '得意先一覧', description: '得意先マスタと売上実績の状況' },
+  salesOrder: { label: '受注一覧', description: '絞り込み後の受注（出荷予定）と引当の状況' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -1332,6 +1376,266 @@ export interface ReceiptResult extends ReceiptTarget {
   remaining: number;
   /** 既存ロットへ加算したか (false なら新しいロットを作った) */
   merged: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 受注 (出荷予定)
+// 入荷予定の販売側の対。受注は在庫を持たず、出荷 (shipSalesOrder) で初めて FEFO で
+// 引き当てたロットから「売上出庫」として在庫が減る。状態は出荷済数量から導出する。
+//
+// 引当はロットに予約を書き込まない「見込み」の計算で、受注残を出荷予定日の早い順に
+// 現在庫へ FEFO で割り付けたとき足りるかどうかを毎回求める (salesOrderAllocations)。
+// 予約を保存しないので、売上登録や廃棄で在庫が減ればその場で引当結果に反映される。
+// ---------------------------------------------------------------------------
+
+export type SalesOrderStatus = '未出荷' | '一部出荷' | '出荷済' | 'キャンセル';
+
+export const SALES_ORDER_STATUSES: SalesOrderStatus[] = ['未出荷', '一部出荷', '出荷済', 'キャンセル'];
+
+export function salesOrderStatus(order: SalesOrder): SalesOrderStatus {
+  if (order.canceledAt) return 'キャンセル';
+  if (order.shippedQuantity <= 0) return '未出荷';
+  if (order.shippedQuantity < order.quantity) return '一部出荷';
+  return '出荷済';
+}
+
+/** まだ出荷していない数量 (受注残)。キャンセル済み・出荷済みは 0 */
+export function remainingShipment(order: SalesOrder): number {
+  if (order.canceledAt) return 0;
+  return Math.max(0, order.quantity - order.shippedQuantity);
+}
+
+/** 出荷予定日を過ぎたまま受注残がある受注 (= 遅延) かどうか */
+export function isOverdueSalesOrder(order: SalesOrder, today = new Date().toISOString().slice(0, 10)): boolean {
+  return remainingShipment(order) > 0 && order.expectedDate < today;
+}
+
+/** 受注の入力値 (id・出荷実績・日時は画面から編集しない) */
+export type SalesOrderInput = Omit<SalesOrder, 'id' | 'shippedQuantity' | 'canceledAt' | 'createdAt' | 'updatedAt'>;
+
+/**
+ * 受注の入力チェック。問題がなければ空文字を返す。
+ * 画面 (SalesOrderModal) と登録処理 (addSalesOrder / updateSalesOrder) が同じ判定を共有する。
+ * 資材は売らないので受注の対象にしない (売上登録と同じ)。
+ */
+export function salesOrderValidationError(input: SalesOrderInput, products: Product[], customers: Customer[]): string {
+  const product = products.find(p => p.id === input.productId);
+  if (!product) return '商品を選んでください';
+  if (isMaterial(product)) return '資材は受注の対象にできません';
+  if (!input.customerId || !customers.some(c => c.id === input.customerId)) return '得意先を選んでください';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.expectedDate)) return '出荷予定日を入力してください';
+  if (!Number.isFinite(input.quantity) || input.quantity <= 0) return '受注数量は1以上で入力してください';
+  if (!Number.isFinite(input.unitPrice) || input.unitPrice < 0) return '受注単価は0以上で入力してください';
+  return '';
+}
+
+/** 受注1件の引当結果 (見込み) */
+export interface SalesOrderAllocation {
+  /** いまの在庫から引き当てられる数量 (受注残以下) */
+  allocated: number;
+  /** 引き当てられない数量。0 より大きければ在庫不足 */
+  shortage: number;
+}
+
+/** 受注の優先順。出荷予定日の早い順、同日は登録順 */
+function compareSalesOrders(a: SalesOrder, b: SalesOrder): number {
+  return a.expectedDate.localeCompare(b.expectedDate) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
+}
+
+/**
+ * 受注残を、出荷予定日の早い受注から順に現在庫へ FEFO で割り付けたときの引当結果を返す。
+ * 先の受注に割り付けた在庫は後の受注からは引けない (同じ在庫を二重に数えない)。
+ * 割付は出荷 (planSalesOrderShipment) と同じ planFefoShipment を使い、期限切れのロットは対象外。
+ * 受注残のない受注 (出荷済・キャンセル) と、商品マスタにない商品の受注は結果に含めない。
+ */
+export function salesOrderAllocations(orders: SalesOrder[], products: Product[]): Map<string, SalesOrderAllocation> {
+  // 割付で減らしていく作業用の在庫 (元の商品は変更しない)
+  const working = new Map(products.map(p => [p.id, { ...p, lots: p.lots.map(l => ({ ...l })) }]));
+  const result = new Map<string, SalesOrderAllocation>();
+  for (const order of orders.filter(o => remainingShipment(o) > 0).sort(compareSalesOrders)) {
+    const product = working.get(order.productId);
+    if (!product) continue;
+    const plan = planFefoShipment(product, remainingShipment(order), { warehouseId: order.warehouseId || undefined });
+    const taken = new Map(plan.allocations.map(a => [a.lotId, a.quantity]));
+    product.lots = product.lots.map(l => taken.has(l.id) ? { ...l, quantity: l.quantity - taken.get(l.id)! } : l);
+    result.set(order.id, { allocated: plan.allocated, shortage: plan.shortage });
+  }
+  return result;
+}
+
+export interface SalesOrderFilter {
+  keyword: string; // 商品名・SKU・得意先名の部分一致
+  status: SalesOrderStatus | '';
+  customerId: string;
+  from: string; // 出荷予定日 YYYY-MM-DD (この日を含む)
+  to: string;
+}
+
+export const EMPTY_SALES_ORDER_FILTER: SalesOrderFilter = { keyword: '', status: '', customerId: '', from: '', to: '' };
+
+/** 受注一覧の1行。表示に要る情報を平坦に持たせる (入荷予定と同じ方針) */
+export interface SalesOrderRow {
+  order: SalesOrder;
+  productName: string;
+  productSku: string;
+  /** 得意先マスタから解決した名前。マスタにない id なら空文字 */
+  customerName: string;
+  status: SalesOrderStatus;
+  remaining: number;
+  overdue: boolean;
+  /** 受注残のうち今の在庫で引き当てられる数量 (受注残がなければ 0) */
+  allocated: number;
+  /** 受注残のうち在庫が足りない数量 */
+  shortage: number;
+  /** 金額の計算に使う単価 (税抜)。受注単価が未入力 (0) なら商品の販売定価 */
+  unitPrice: number;
+  /** 受注単価が未入力で販売定価を使った (概算) */
+  estimatedPrice: boolean;
+  /** 受注残の金額 (税抜) = remaining × unitPrice */
+  remainingAmount: number;
+}
+
+/**
+ * 絞り込み済みの受注を、出荷予定日の早い順 (同日は登録順) に返す。
+ * 引当は絞り込みの前に全受注で計算する (絞り込みで先の受注が隠れても、その受注が押さえる在庫は変わらないため)。
+ * 商品マスタから消えた商品を指す受注は表示できないので除外する。
+ */
+export function salesOrderRows(
+  orders: SalesOrder[],
+  products: Product[],
+  customers: Customer[],
+  filter: SalesOrderFilter = EMPTY_SALES_ORDER_FILTER,
+): SalesOrderRow[] {
+  const q = filter.keyword.trim().toLowerCase();
+  const productById = new Map(products.map(p => [p.id, p]));
+  const customerNameById = new Map(customers.map(c => [c.id, c.name]));
+  const allocations = salesOrderAllocations(orders, products);
+  const rows: SalesOrderRow[] = [];
+  for (const order of orders) {
+    const product = productById.get(order.productId);
+    if (!product) continue;
+    const status = salesOrderStatus(order);
+    if (filter.status && status !== filter.status) continue;
+    if (filter.customerId && order.customerId !== filter.customerId) continue;
+    if (filter.from && order.expectedDate < filter.from) continue;
+    if (filter.to && order.expectedDate > filter.to) continue;
+    const name = customerNameById.get(order.customerId) ?? '';
+    if (q && !(
+      product.name.toLowerCase().includes(q)
+      || product.sku.toLowerCase().includes(q)
+      || name.toLowerCase().includes(q)
+    )) continue;
+    const remaining = remainingShipment(order);
+    const allocation = allocations.get(order.id) ?? { allocated: 0, shortage: 0 };
+    const estimatedPrice = order.unitPrice <= 0;
+    const unitPrice = estimatedPrice ? product.price : order.unitPrice;
+    rows.push({
+      order,
+      productName: product.name,
+      productSku: product.sku,
+      customerName: name,
+      status,
+      remaining,
+      overdue: isOverdueSalesOrder(order),
+      allocated: allocation.allocated,
+      shortage: allocation.shortage,
+      unitPrice,
+      estimatedPrice,
+      remainingAmount: remaining * unitPrice,
+    });
+  }
+  return rows.sort((a, b) => compareSalesOrders(a.order, b.order));
+}
+
+export interface SalesOrderTotals {
+  count: number;
+  ordered: number; // 受注数量の合計 (キャンセルを除く)
+  shipped: number; // 出荷済数量の合計
+  remaining: number; // 受注残の合計
+  remainingAmount: number; // 受注残の金額 (税抜)
+  overdue: number; // 遅延している受注の件数
+  short: number; // 在庫不足の受注の件数
+  canceled: number;
+}
+
+export function salesOrderTotals(rows: SalesOrderRow[]): SalesOrderTotals {
+  const totals: SalesOrderTotals = { count: rows.length, ordered: 0, shipped: 0, remaining: 0, remainingAmount: 0, overdue: 0, short: 0, canceled: 0 };
+  for (const r of rows) {
+    if (r.status === 'キャンセル') { totals.canceled++; continue; }
+    totals.ordered += r.order.quantity;
+    totals.shipped += r.order.shippedQuantity;
+    totals.remaining += r.remaining;
+    totals.remainingAmount += r.remainingAmount;
+    if (r.overdue) totals.overdue++;
+    if (r.shortage > 0) totals.short++;
+  }
+  return totals;
+}
+
+export function salesOrderCsv(rows: SalesOrderRow[], warehouses: Warehouse[]): string {
+  const whName = (id: string) => id ? (warehouses.find(w => w.id === id)?.name ?? id) : '全倉庫';
+  const header = '出荷予定日,得意先,商品名,SKU,出荷元倉庫,受注単価(税抜),受注数量,出荷済,受注残,引当可能,在庫不足,受注残金額(税抜),状態,概算,備考';
+  const body = rows.map(r => [
+    r.order.expectedDate,
+    r.customerName,
+    r.productName,
+    r.productSku,
+    whName(r.order.warehouseId),
+    r.unitPrice,
+    r.order.quantity,
+    r.order.shippedQuantity,
+    r.remaining,
+    r.allocated,
+    r.shortage,
+    r.remainingAmount,
+    r.status,
+    r.estimatedPrice ? '概算' : '',
+    r.order.note,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportSalesOrderCsv(rows: SalesOrderRow[], warehouses: Warehouse[]) {
+  downloadCsv(csvFileName('salesOrder'), salesOrderCsv(rows, warehouses));
+}
+
+/** 得意先ごとの受注件数 (キャンセル・出荷済も含む)。得意先の削除可否の判定に使う */
+export function salesOrderCountByCustomer(orders: SalesOrder[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const o of orders) counts.set(o.customerId, (counts.get(o.customerId) ?? 0) + 1);
+  return counts;
+}
+
+/** 出荷時の入力。数量以外は任意 */
+export interface ShipOrderInput {
+  quantity: number;
+  /** 既定 false: 期限切れロットは引き当てない (FEFO出庫と同じ) */
+  includeExpired?: boolean;
+  note?: string;
+}
+
+/**
+ * 受注を出荷したときに引き当てるロットを求める。状態は変更しない (ShipSalesOrderModal のプレビューと
+ * shipSalesOrder が同じ結果を共有するための純粋関数)。
+ * 数量は受注残を超えないよう丸め (過出荷は受け付けない)、出荷元倉庫は受注のものを使う。
+ * 引当の見込み (salesOrderAllocations) と違い、他の受注のために見込んだ在庫も引ける
+ * (どの受注から出すかは出荷する人が決めるため)。
+ */
+export function planSalesOrderShipment(order: SalesOrder, product: Product, input: ShipOrderInput): FefoPlan {
+  const quantity = Math.min(Math.max(0, Math.floor(input.quantity)), remainingShipment(order));
+  return planFefoShipment(product, quantity, { warehouseId: order.warehouseId || undefined, includeExpired: input.includeExpired });
+}
+
+/** 受注からの出荷でつく帳票の備考の既定値 (売上登録・FEFO出庫と区別するため) */
+export function salesOrderShipmentNote(customer: string): string {
+  return customer ? `受注出荷（${customer}）` : '受注出荷';
+}
+
+/** 出荷の結果 (呼び出し側が通知に使う) */
+export interface ShipOrderResult {
+  plan: FefoPlan;
+  /** 出荷後の受注残 */
+  remaining: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -3198,6 +3502,7 @@ export function useInventory() {
   const [suppliers, setSuppliers] = useState<Supplier[]>(DEFAULT_SUPPLIERS);
   const [purchaseOrderPrints, setPurchaseOrderPrints] = useState<PurchaseOrderPrintItem[]>([]);
   const [customers, setCustomers] = useState<Customer[]>(DEFAULT_CUSTOMERS);
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>(SAMPLE_SALES_ORDERS);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
@@ -3222,6 +3527,7 @@ export function useInventory() {
       if (changed) saveLedger(txns);
       setPurchaseOrderPrints(state.purchaseOrderPrints ?? []);
       setCustomers(state.customers ?? []);
+      setSalesOrders(state.salesOrders ?? []);
     });
     return () => { cancelled = true; };
   }, []);
@@ -3295,6 +3601,12 @@ export function useInventory() {
       if (!prev.some(p => p.productId === id)) return prev;
       const next = prev.filter(p => p.productId !== id);
       saveInboundPlans(next); return next;
+    });
+    // 受注も同じく出荷しようがないので一緒に消す (出荷済みの売上は帳票に残る)
+    setSalesOrders(prev => {
+      if (!prev.some(o => o.productId === id)) return prev;
+      const next = prev.filter(o => o.productId !== id);
+      saveSalesOrders(next); return next;
     });
     // 商品を消すと在庫も一緒に消えるので、残っていたロットの分を 調整出庫 として帳票に残す
     if (product) {
@@ -3485,6 +3797,80 @@ export function useInventory() {
       customerId: input.customerId,
     });
   }, [products, shipFefo]);
+
+  // ---- 受注 (出荷予定) ----
+  // 受注の作成・編集・キャンセルは在庫を動かさないので帳票には記録しない。
+  // 在庫が動くのは shipSalesOrder (出荷) のときだけで、記録は売上登録と同じ「売上出庫」になる。
+  // 画面と同じ salesOrderValidationError で弾くので、画面に出るエラーと実際の拒否条件がずれない。
+
+  const addSalesOrder = useCallback((data: SalesOrderInput) => {
+    if (salesOrderValidationError(data, products, customers)) return;
+    setSalesOrders(prev => {
+      const now = new Date().toISOString();
+      const next = [...prev, { ...data, id: crypto.randomUUID(), shippedQuantity: 0, createdAt: now, updatedAt: now }];
+      saveSalesOrders(next); return next;
+    });
+  }, [customers, products]);
+
+  // 出荷実績 (shippedQuantity) は編集対象外。キャンセル済みの受注は編集しない
+  const updateSalesOrder = useCallback((id: string, data: SalesOrderInput) => {
+    if (salesOrderValidationError(data, products, customers)) return;
+    setSalesOrders(prev => {
+      if (!prev.some(o => o.id === id && !o.canceledAt)) return prev;
+      const next = prev.map(o => o.id === id ? { ...o, ...data, updatedAt: new Date().toISOString() } : o);
+      saveSalesOrders(next); return next;
+    });
+  }, [customers, products]);
+
+  // キャンセルは受注を消さずに残す (出荷済みの分は売上として帳票にそのまま残るため)
+  const cancelSalesOrder = useCallback((id: string) => {
+    setSalesOrders(prev => {
+      if (!prev.some(o => o.id === id && !o.canceledAt)) return prev;
+      const now = new Date().toISOString();
+      const next = prev.map(o => o.id === id ? { ...o, canceledAt: now, updatedAt: now } : o);
+      saveSalesOrders(next); return next;
+    });
+  }, []);
+
+  const deleteSalesOrder = useCallback((id: string) => {
+    setSalesOrders(prev => {
+      const next = prev.filter(o => o.id !== id);
+      saveSalesOrders(next); return next;
+    });
+  }, []);
+
+  /**
+   * 受注にもとづく出荷。引当先の決定は planSalesOrderShipment (純粋関数) に任せ、在庫の反映と帳票への記録は
+   * shipFefo に任せる (区分は 売上出庫、実売単価と得意先は受注のもの)。ここでは出荷済数量の更新だけを足す。
+   * 在庫が足りなければ引けた分だけ出荷する。1つも引けない・受注残がない場合は何もしない (null を返す)。
+   */
+  const shipSalesOrder = useCallback((id: string, input: ShipOrderInput): ShipOrderResult | null => {
+    const order = salesOrders.find(o => o.id === id);
+    if (!order || order.canceledAt) return null;
+    const product = products.find(p => p.id === order.productId);
+    if (!product || isMaterial(product)) return null;
+
+    const preview = planSalesOrderShipment(order, product, input);
+    if (preview.allocated <= 0) return null;
+
+    const plan = shipFefo(product.id, preview.allocated + preview.shortage, {
+      warehouseId: order.warehouseId || undefined,
+      includeExpired: input.includeExpired,
+      type: '売上出庫',
+      note: input.note?.trim() || salesOrderShipmentNote(customerName(customers, order.customerId)),
+      unitPrice: order.unitPrice,
+      customerId: order.customerId,
+    });
+
+    setSalesOrders(prev => {
+      const next = prev.map(o => o.id === id
+        ? { ...o, shippedQuantity: o.shippedQuantity + plan.allocated, updatedAt: new Date().toISOString() }
+        : o);
+      saveSalesOrders(next); return next;
+    });
+
+    return { plan, remaining: remainingShipment(order) - plan.allocated };
+  }, [customers, products, salesOrders, shipFefo]);
 
   /**
    * 選んだロットをまとめて廃棄する。引当先の決定は planDisposal (純粋関数) に任せ、
@@ -3815,16 +4201,18 @@ export function useInventory() {
     });
   }, []);
 
-  // ロットだけでなく、入荷先に指定されている入荷予定 (未入荷・一部入荷) が残っていても削除しない
+  // ロットだけでなく、入荷先に指定されている入荷予定 (未入荷・一部入荷) や
+  // 出荷元に指定されている受注 (未出荷・一部出荷) が残っていても削除しない
   const deleteWarehouse = useCallback((id: string) => {
     const inUse = products.some(p => p.lots.some(l => l.warehouseId === id))
-      || inboundPlans.some(p => p.warehouseId === id && remainingInbound(p) > 0);
+      || inboundPlans.some(p => p.warehouseId === id && remainingInbound(p) > 0)
+      || salesOrders.some(o => o.warehouseId === id && remainingShipment(o) > 0);
     if (inUse) return;
     setWarehouses(prev => {
       const next = prev.filter(w => w.id !== id);
       saveWarehouses(next); return next;
     });
-  }, [inboundPlans, products]);
+  }, [inboundPlans, products, salesOrders]);
 
   const addCategory = useCallback((name: string) => {
     const trimmed = name.trim();
@@ -3908,15 +4296,16 @@ export function useInventory() {
     });
   }, []);
 
-  // 売上の記録から参照されている得意先は削除しない (過去の売上の得意先が消えてしまうため)。
+  // 売上の記録や受注から参照されている得意先は削除しない (過去の売上・受注の得意先が消えてしまうため)。
   // 取引が終わっただけなら削除ではなく active=false にしてもらう (仕入先と同じ)
   const deleteCustomer = useCallback((id: string) => {
     if (ledger.some(t => t.type === '売上出庫' && t.customerId === id)) return;
+    if (salesOrders.some(o => o.customerId === id)) return;
     setCustomers(prev => {
       const next = prev.filter(c => c.id !== id);
       saveCustomers(next); return next;
     });
-  }, [ledger]);
+  }, [ledger, salesOrders]);
 
   const moveLot = useCallback((productId: string, lotId: string, targetWarehouseId: string, quantity: number) => {
     const product = products.find(p => p.id === productId);
@@ -4008,7 +4397,11 @@ export function useInventory() {
     // 発注書の印刷履歴にサンプルはないので、リセットのたびに空に戻す
     setPurchaseOrderPrints([]);
     savePurchaseOrderPrints([]);
+    // 受注は商品と得意先を参照するので、どちらも入れ替えたあとに戻す
+    const freshOrders: SalesOrder[] = JSON.parse(JSON.stringify(SAMPLE_SALES_ORDERS));
+    setSalesOrders(freshOrders);
+    saveSalesOrders(freshOrders);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder };
 }

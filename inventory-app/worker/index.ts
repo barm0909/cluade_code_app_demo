@@ -11,6 +11,7 @@
 //   PUT /api/suppliers    → suppliers テーブルを全置換
 //   PUT /api/purchase-order-prints → purchase_order_prints テーブルを全置換
 //   PUT /api/customers    → customers テーブルを全置換
+//   PUT /api/sales-orders → sales_orders テーブルを全置換
 
 export interface Env {
   DB: D1Database;
@@ -118,6 +119,22 @@ interface InboundPlan {
   updatedAt: string;
 }
 
+// 受注 (出荷予定)。入荷予定の販売側の対で、出荷すると売上出庫として帳票に残る
+interface SalesOrder {
+  id: string;
+  customerId: string;
+  productId: string;
+  expectedDate: string;
+  quantity: number;
+  shippedQuantity: number;
+  unitPrice: number; // 受注単価 (税抜)。0 は未入力
+  warehouseId: string; // 出荷元倉庫。空文字は全倉庫
+  note: string;
+  canceledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // 発注書の印刷履歴。1回の印刷操作 (= 1枚の発注書) につき、印刷した明細の数だけ行を持つ
 // (stock_transactions と同じ「1件1行、必要な情報をそのまま持たせる」方針)
 interface PurchaseOrderPrintItem {
@@ -182,6 +199,21 @@ interface InboundPlanRow {
   note: string;
   canceled_at: string | null;
   printed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface SalesOrderRow {
+  id: string;
+  customer_id: string;
+  product_id: string;
+  expected_date: string;
+  quantity: number;
+  shipped_quantity: number;
+  unit_price: number;
+  warehouse_id: string;
+  note: string;
+  canceled_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -254,7 +286,7 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes, salesOrdersRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
@@ -264,6 +296,7 @@ async function readState(db: D1Database) {
     db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
     db.prepare('SELECT id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount FROM purchase_order_prints ORDER BY printed_at DESC'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, note, active FROM customers ORDER BY name'),
+    db.prepare('SELECT id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at FROM sales_orders ORDER BY expected_date'),
   ]);
 
   const lotsByProduct = new Map<string, Lot[]>();
@@ -388,7 +421,22 @@ async function readState(db: D1Database) {
     active: r.active !== 0,
   }));
 
-  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers };
+  const salesOrders: SalesOrder[] = (salesOrdersRes.results as unknown as SalesOrderRow[]).map(r => ({
+    id: r.id,
+    customerId: r.customer_id,
+    productId: r.product_id,
+    expectedDate: r.expected_date,
+    quantity: r.quantity,
+    shippedQuantity: r.shipped_quantity,
+    unitPrice: r.unit_price,
+    warehouseId: r.warehouse_id,
+    note: r.note,
+    ...(r.canceled_at != null ? { canceledAt: r.canceled_at } : {}),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }));
+
+  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -486,6 +534,18 @@ async function replaceCustomers(db: D1Database, customers: Customer[]) {
   await db.batch(stmts);
 }
 
+// sales_orders を全置換 (replaceInboundPlans と同じく外部キーは張らないので、そのまま削除→再挿入できる)
+async function replaceSalesOrders(db: D1Database, orders: SalesOrder[]) {
+  const stmts = [db.prepare('DELETE FROM sales_orders')];
+  const insert = db.prepare(
+    'INSERT INTO sales_orders (id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const o of orders) {
+    stmts.push(insert.bind(o.id, o.customerId, o.productId, o.expectedDate, o.quantity, o.shippedQuantity, o.unitPrice ?? 0, o.warehouseId ?? '', o.note, o.canceledAt ?? null, o.createdAt, o.updatedAt));
+  }
+  await db.batch(stmts);
+}
+
 // purchase_order_prints を全置換。追記専用の履歴だが、他のスライスと同じ
 // 「全量取得→全量保存」の方式に合わせている (products / suppliers と同じ理由で外部キーは張らない)
 async function replacePurchaseOrderPrints(db: D1Database, prints: PurchaseOrderPrintItem[]) {
@@ -530,6 +590,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/customers':
           await replaceCustomers(env.DB, await request.json<Customer[]>());
+          return Response.json({ ok: true });
+        case '/api/sales-orders':
+          await replaceSalesOrders(env.DB, await request.json<SalesOrder[]>());
           return Response.json({ ok: true });
         case '/api/purchase-order-prints':
           await replacePurchaseOrderPrints(env.DB, await request.json<PurchaseOrderPrintItem[]>());
