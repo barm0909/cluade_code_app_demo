@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { Lot, Warehouse } from './useInventory';
 import { generateLotNo, DEFAULT_WAREHOUSE_ID } from './useInventory';
 import { NumberInput } from './NumberInput';
@@ -16,16 +16,11 @@ const makeEmpty = (defaultUnitPrice: number) => ({ lotNo: '', expiryDate: '', qu
 const LOT_PATTERN = /^\d{8}$/;
 
 export function LotModal({ lot, warehouses, defaultUnitPrice, onSave, onClose }: Props) {
-  const [form, setForm] = useState(() => makeEmpty(defaultUnitPrice));
+  // 開くたびにマウントされる (App.tsx が key を付けて出し分ける) ので、初期値は最初の描画で一度だけ作る
+  const [form, setForm] = useState(() => lot
+    ? { lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? '', quantity: lot.quantity, warehouseId: lot.warehouseId ?? DEFAULT_WAREHOUSE_ID, unitPrice: lot.unitPrice ?? defaultUnitPrice }
+    : makeEmpty(defaultUnitPrice));
   const [lotError, setLotError] = useState('');
-
-  useEffect(() => {
-    setForm(lot
-      ? { lotNo: lot.lotNo, expiryDate: lot.expiryDate ?? '', quantity: lot.quantity, warehouseId: lot.warehouseId ?? DEFAULT_WAREHOUSE_ID, unitPrice: lot.unitPrice ?? defaultUnitPrice }
-      : makeEmpty(defaultUnitPrice)
-    );
-    setLotError('');
-  }, [lot, defaultUnitPrice]);
 
   const handleExpiryChange = (val: string) => {
     setForm(f => ({

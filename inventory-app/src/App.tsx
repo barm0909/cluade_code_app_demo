@@ -236,7 +236,8 @@ export default function App() {
   const toggleExpand = (id: string) => {
     setExpandedIds(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -548,6 +549,7 @@ export default function App() {
 
       {editingProduct !== null && (
         <ProductModal
+          key={editingProduct === 'new' ? 'new' : editingProduct.id}
           product={editingProduct === 'new' ? null : editingProduct}
           categories={categories}
           products={products}
@@ -557,6 +559,7 @@ export default function App() {
       )}
       {editingLot !== null && (
         <LotModal
+          key={`${editingLot.productId}:${editingLot.lot?.id ?? 'new'}`}
           lot={editingLot.lot}
           warehouses={warehouses}
           defaultUnitPrice={products.find(p => p.id === editingLot.productId)?.costPrice ?? 0}

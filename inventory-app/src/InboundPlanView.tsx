@@ -227,6 +227,7 @@ export function InboundPlanView({ inboundPlans, products, warehouses, suppliers,
 
       {editingId !== null && (
         <InboundPlanModal
+          key={editingId}
           plan={editingPlan}
           products={products}
           warehouses={warehouses}

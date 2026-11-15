@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { Supplier, SupplierInput } from './useInventory';
 import { EMPTY_SUPPLIER, supplierValidationError } from './useInventory';
 import { NumberInput } from './NumberInput';
@@ -23,13 +23,9 @@ const toForm = (s: Supplier): SupplierInput => ({
  * 同じ関数で弾くので、「エラーは出ないのに保存されない」ということが起こらない。
  */
 export function SupplierModal({ supplier, suppliers, onSave, onClose }: Props) {
+  // 開くたびにマウントされる (SupplierMasterView が key を付けて出し分ける) ので、初期値は最初の描画で一度だけ作る
   const [form, setForm] = useState<SupplierInput>(() => supplier ? toForm(supplier) : EMPTY_SUPPLIER);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    setForm(supplier ? toForm(supplier) : EMPTY_SUPPLIER);
-    setError('');
-  }, [supplier]);
 
   const set = <K extends keyof SupplierInput>(key: K, value: SupplierInput[K]) => {
     setForm(f => ({ ...f, [key]: value }));
