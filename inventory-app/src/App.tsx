@@ -280,7 +280,10 @@ export default function App() {
           <button className="btn-secondary" onClick={exportCsv} title={csvExportHint('inventory')}>
             {csvExportLabel('inventory')}
           </button>
-          <button className="btn-secondary" onClick={exportExcel}>Excelエクスポート</button>
+          <button className="btn-secondary" onClick={() => {
+            // xlsx は押した時点で読み込むので、オフラインなどで取得に失敗しうる
+            exportExcel().catch(() => notify('Excelファイルの作成に失敗しました。', 'Excelエクスポート'));
+          }}>Excelエクスポート</button>
           <label className="btn-secondary" style={{ cursor: 'pointer' }}>
             Excelインポート
             <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={async e => {

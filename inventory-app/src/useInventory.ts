@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import * as XLSX from 'xlsx';
+
+// xlsx (SheetJS) は 400kB 超あり、Excel の入出力ボタンを押したときにしか使わないので、
+// 初期表示のバンドルに含めず、使う時点で別チャンクとして読み込む。
+const loadXlsx = () => import('xlsx');
 
 export interface Warehouse {
   id: string;
@@ -4076,13 +4079,15 @@ export function useInventory() {
     };
   }, [addTransaction, inboundPlans, products, suppliers]);
 
-  const exportExcel = useCallback(() => {
+  const exportExcel = useCallback(async (): Promise<void> => {
+    // 押した時点の在庫を書き出すので、xlsx の読み込みを待つ前に行を組み立てておく
     const wsData: (string | number)[][] = [['SKU', 'ロットNo', '在庫数']];
     for (const p of products) {
       for (const l of p.lots) {
         wsData.push([p.sku, l.lotNo, l.quantity]);
       }
     }
+    const XLSX = await loadXlsx();
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     ws['!cols'] = [{ wch: 14 }, { wch: 16 }, { wch: 12 }];
     const wb = XLSX.utils.book_new();
@@ -4107,7 +4112,8 @@ export function useInventory() {
     downloadCsv(csvFileName('inventory'), header + '\n' + rows.join('\n'));
   }, [products, categories]);
 
-  const importExcel = useCallback((file: File): Promise<{ updated: number; errors: string[] }> => {
+  const importExcel = useCallback(async (file: File): Promise<{ updated: number; errors: string[] }> => {
+    const XLSX = await loadXlsx();
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = (e) => {

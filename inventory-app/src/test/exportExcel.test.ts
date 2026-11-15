@@ -44,30 +44,30 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('exportExcel', () => {
-  it('XLSX.writeFile が呼ばれる', () => {
+  it('XLSX.writeFile が呼ばれる', async () => {
     const { result } = renderHook(() => useInventory());
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     expect(mockWriteFile).toHaveBeenCalledTimes(1);
   });
 
-  it('ファイル名に今日の日付が含まれる', () => {
+  it('ファイル名に今日の日付が含まれる', async () => {
     const { result } = renderHook(() => useInventory());
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     const filename = mockWriteFile.mock.calls[0][1] as string;
     expect(filename).toContain('2026-06-28');
     expect(filename).toMatch(/\.xlsx$/);
   });
 
-  it('ヘッダー行に SKU・ロットNo・在庫数 が含まれる', () => {
+  it('ヘッダー行に SKU・ロットNo・在庫数 が含まれる', async () => {
     const { result } = renderHook(() => useInventory());
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     const wsData = mockAoaToSheet.mock.calls[0][0] as (string | number)[][];
     expect(wsData[0]).toEqual(['SKU', 'ロットNo', '在庫数']);
   });
 
-  it('各ロットが1行として出力される', () => {
+  it('各ロットが1行として出力される', async () => {
     const { result } = renderHook(() => useInventory());
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     const wsData = mockAoaToSheet.mock.calls[0][0] as (string | number)[][];
 
     const totalLots = result.current.products.reduce((s, p) => s + p.lots.length, 0);
@@ -75,9 +75,9 @@ describe('exportExcel', () => {
     expect(wsData).toHaveLength(1 + totalLots);
   });
 
-  it('データ行に SKU・ロットNo・在庫数 が正しく入る', () => {
+  it('データ行に SKU・ロットNo・在庫数 が正しく入る', async () => {
     const { result } = renderHook(() => useInventory());
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     const wsData = mockAoaToSheet.mock.calls[0][0] as (string | number)[][];
 
     // サンプルデータの牛乳(ML-001)の最初のロットを検証
@@ -88,7 +88,7 @@ describe('exportExcel', () => {
     expect(dataRow![2]).toBe(lot.quantity);
   });
 
-  it('ロットのない商品は行が出力されない', () => {
+  it('ロットのない商品は行が出力されない', async () => {
     const { result } = renderHook(() => useInventory());
 
     // ロットなし商品を追加
@@ -96,36 +96,36 @@ describe('exportExcel', () => {
       result.current.addProduct({ name: 'ロットなし商品', sku: 'NO-LOT', categoryId: 'cat-food', minQuantity: 1, price: 100, costPrice: 50 });
     });
 
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     const wsData = mockAoaToSheet.mock.calls[0][0] as (string | number)[][];
     const hasNoLotRow = wsData.slice(1).some(row => row[0] === 'NO-LOT');
     expect(hasNoLotRow).toBe(false);
   });
 
-  it('商品が複数ロットを持つ場合、それぞれ別の行になる', () => {
+  it('商品が複数ロットを持つ場合、それぞれ別の行になる', async () => {
     const { result } = renderHook(() => useInventory());
 
     // 牛乳はサンプルデータで2ロット持っている
     const product = result.current.products.find(p => p.sku === 'ML-001')!;
     expect(product.lots.length).toBeGreaterThanOrEqual(2);
 
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     const wsData = mockAoaToSheet.mock.calls[0][0] as (string | number)[][];
     const milkRows = wsData.slice(1).filter(row => row[0] === 'ML-001');
     expect(milkRows).toHaveLength(product.lots.length);
   });
 
-  it('ワークシートに列幅(!cols)が設定される', () => {
+  it('ワークシートに列幅(!cols)が設定される', async () => {
     const fakeWs: Record<string, unknown> = {};
     mockAoaToSheet.mockReturnValueOnce(fakeWs);
     const { result } = renderHook(() => useInventory());
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     expect(fakeWs['!cols']).toBeDefined();
   });
 
-  it('XLSX.utils.book_append_sheet でシート名「在庫インポート」が使われる', () => {
+  it('XLSX.utils.book_append_sheet でシート名「在庫インポート」が使われる', async () => {
     const { result } = renderHook(() => useInventory());
-    act(() => { result.current.exportExcel(); });
+    await act(async () => { await result.current.exportExcel(); });
     const sheetName = mockBookAppendSheet.mock.calls[0][2] as string;
     expect(sheetName).toBe('在庫インポート');
   });
