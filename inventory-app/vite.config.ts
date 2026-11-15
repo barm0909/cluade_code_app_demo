@@ -15,6 +15,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
+    // 全件を並列で流すと jsdom + user-event のテストが CPU を取り合い、既定の 5 秒を超えることがある。
+    // 単体では数百 ms で終わるテストなので、遅いマシンでも落ちないよう余裕を持たせる。
+    testTimeout: 20_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
