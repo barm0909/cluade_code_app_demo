@@ -1,4 +1,4 @@
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 import { configure } from '@testing-library/react';
 
 // waitFor / findBy* の待ち時間（既定 1 秒）も、全件並列実行の負荷で足りなくなることがあるので延ばす。
