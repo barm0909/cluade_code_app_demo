@@ -155,6 +155,7 @@ export function SupplierMasterView({ suppliers, inboundPlans, products, warehous
 
       {editingId !== null && (
         <SupplierModal
+          key={editingId}
           supplier={editingSupplier}
           suppliers={suppliers}
           onSave={data => editingId === 'new' ? onAdd(data) : onUpdate(editingId, data)}

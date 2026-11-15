@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { Customer, CustomerInput } from './useInventory';
 import { EMPTY_CUSTOMER, customerValidationError } from './useInventory';
 
@@ -21,13 +21,9 @@ const toForm = (c: Customer): CustomerInput => ({
  * 同じ関数で弾くので、「エラーは出ないのに保存されない」ということが起こらない。
  */
 export function CustomerModal({ customer, customers, onSave, onClose }: Props) {
+  // 開くたびにマウントされる (CustomerMasterView が key を付けて出し分ける) ので、初期値は最初の描画で一度だけ作る
   const [form, setForm] = useState<CustomerInput>(() => customer ? toForm(customer) : EMPTY_CUSTOMER);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    setForm(customer ? toForm(customer) : EMPTY_CUSTOMER);
-    setError('');
-  }, [customer]);
 
   const set = <K extends keyof CustomerInput>(key: K, value: CustomerInput[K]) => {
     setForm(f => ({ ...f, [key]: value }));

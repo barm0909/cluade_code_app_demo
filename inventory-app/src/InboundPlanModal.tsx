@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { InboundPlan, InboundPlanInput, Product, Supplier, Warehouse } from './useInventory';
 import { generateLotNo, expectedDateFromLeadTime, selectableSuppliers, DEFAULT_WAREHOUSE_ID } from './useInventory';
 import { NumberInput } from './NumberInput';
@@ -34,25 +34,22 @@ const makeEmpty = (products: Product[], warehouses: Warehouse[]) => ({
  * 入荷モーダルの初期値になるので、入荷時に上書きもできる「予定値」として扱う。
  */
 export function InboundPlanModal({ plan, products, warehouses, suppliers, onSave, onClose }: Props) {
-  const [form, setForm] = useState(() => makeEmpty(products, warehouses));
+  // 開くたびにマウントされる (InboundPlanView が key を付けて出し分ける) ので、初期値は最初の描画で一度だけ作る。
+  // products / warehouses が更新されても入力中の内容は作り直さない。
+  const [form, setForm] = useState(() => plan
+    ? {
+        productId: plan.productId,
+        expectedDate: plan.expectedDate,
+        quantity: plan.quantity,
+        warehouseId: plan.warehouseId,
+        lotNo: plan.lotNo,
+        expiryDate: plan.expiryDate ?? '',
+        supplierId: plan.supplierId,
+        unitPrice: plan.unitPrice,
+        note: plan.note,
+      }
+    : makeEmpty(products, warehouses));
   const [lotError, setLotError] = useState('');
-
-  useEffect(() => {
-    setForm(plan
-      ? {
-          productId: plan.productId,
-          expectedDate: plan.expectedDate,
-          quantity: plan.quantity,
-          warehouseId: plan.warehouseId,
-          lotNo: plan.lotNo,
-          expiryDate: plan.expiryDate ?? '',
-          supplierId: plan.supplierId,
-          unitPrice: plan.unitPrice,
-          note: plan.note,
-        }
-      : makeEmpty(products, warehouses));
-    setLotError('');
-  }, [plan, products, warehouses]);
 
   // 新規登録で仕入先を選んだときだけ、入荷予定日をその仕入先の標準リードタイムに合わせる。
   // 編集中や、予定日を自分で動かしたあと (今日+前の仕入先のリードタイム から変わっている) は触らない

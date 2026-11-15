@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { DEFAULT_TAX_RATE, PRODUCT_KINDS, TAX_RATES, defaultTaxRateForCategory, normalizeJanCode, productKind, productTaxRate, taxRateLabel, withTax } from './useInventory';
 import type { Category, Product, ProductKind, TaxRate } from './useInventory';
 import { NumberInput } from './NumberInput';
@@ -15,17 +15,12 @@ interface Props {
 const EMPTY = { name: '', sku: '', janCode: '', categoryId: '', minQuantity: 5, price: 0, costPrice: 0, taxRate: DEFAULT_TAX_RATE as TaxRate, kind: '販売品' as ProductKind };
 
 export function ProductModal({ product, categories, products = [], onSave, onClose }: Props) {
-  const [form, setForm] = useState(EMPTY);
+  // 開くたびにマウントされる (App.tsx が key を付けて出し分ける) ので、初期値は最初の描画で一度だけ作る
+  const [form, setForm] = useState(() => product
+    ? { name: product.name, sku: product.sku, janCode: product.janCode ?? '', categoryId: product.categoryId, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice, taxRate: productTaxRate(product), kind: productKind(product) }
+    : EMPTY);
   // 税率を手で選んだあとは、カテゴリを変えても初期値で上書きしない
   const [taxRateTouched, setTaxRateTouched] = useState(false);
-
-  useEffect(() => {
-    setForm(product
-      ? { name: product.name, sku: product.sku, janCode: product.janCode ?? '', categoryId: product.categoryId, minQuantity: product.minQuantity, price: product.price, costPrice: product.costPrice, taxRate: productTaxRate(product), kind: productKind(product) }
-      : EMPTY
-    );
-    setTaxRateTouched(false);
-  }, [product]);
 
   const set = (k: keyof typeof EMPTY, v: string | number) => setForm(f => ({ ...f, [k]: v }));
   // 資材は売らないので販売定価・税率の欄を出さない (値は保持したまま隠すだけ)

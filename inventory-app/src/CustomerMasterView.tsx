@@ -148,6 +148,7 @@ export function CustomerMasterView({ customers, sales, salesOrders = [], onAdd, 
 
       {editingId !== null && (
         <CustomerModal
+          key={editingId}
           customer={editingCustomer}
           customers={customers}
           onSave={data => editingId === 'new' ? onAdd(data) : onUpdate(editingId, data)}
