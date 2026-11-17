@@ -12,6 +12,7 @@
 //   PUT /api/purchase-order-prints → purchase_order_prints テーブルを全置換
 //   PUT /api/customers    → customers テーブルを全置換
 //   PUT /api/sales-orders → sales_orders テーブルを全置換
+//   PUT /api/sales-documents → sales_document_items テーブルを全置換 (納品書・請求書の発行履歴)
 
 export interface Env {
   DB: D1Database;
@@ -160,6 +161,79 @@ interface PurchaseOrderPrintItem {
   amount: number;
 }
 
+// 納品書・請求書の発行履歴。1枚の書類につき、載せた明細の数だけ行を持つ (発注書の印刷履歴と同じ方針)
+interface SalesDocumentItem {
+  id: string;
+  documentId: string;
+  kind: '納品書' | '請求書';
+  documentNo: string;
+  issuedAt: string;
+  issueDate: string;
+  customerId: string;
+  customerName: string;
+  customerAddress: string;
+  customerContact: string;
+  periodFrom: string;
+  periodTo: string;
+  dueDate: string;
+  issuerName: string;
+  issuerAddress: string;
+  issuerPhone: string;
+  issuerContact: string;
+  issuerRegistrationNo: string;
+  issuerBankAccount: string;
+  lineNo: number;
+  deliveryDate: string;
+  productName: string;
+  productSku: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  taxRate: number;
+  txnIds: string[];
+}
+
+interface SalesDocumentItemRow {
+  id: string;
+  document_id: string;
+  kind: '納品書' | '請求書';
+  document_no: string;
+  issued_at: string;
+  issue_date: string;
+  customer_id: string;
+  customer_name: string;
+  customer_address: string;
+  customer_contact: string;
+  period_from: string;
+  period_to: string;
+  due_date: string;
+  issuer_name: string;
+  issuer_address: string;
+  issuer_phone: string;
+  issuer_contact: string;
+  issuer_registration_no: string;
+  issuer_bank_account: string;
+  line_no: number;
+  delivery_date: string;
+  product_name: string;
+  product_sku: string;
+  quantity: number;
+  unit_price: number;
+  amount: number;
+  tax_rate: number;
+  txn_ids: string;
+}
+
+// txn_ids は JSON 配列の文字列。壊れていても書類自体は表示できるよう空配列に倒す
+function parseTxnIds(raw: string): string[] {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 interface ProductRow {
   id: string;
   name: string;
@@ -286,7 +360,7 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes, salesOrdersRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes, salesOrdersRes, salesDocsRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
@@ -297,6 +371,7 @@ async function readState(db: D1Database) {
     db.prepare('SELECT id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount FROM purchase_order_prints ORDER BY printed_at DESC'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, note, active FROM customers ORDER BY name'),
     db.prepare('SELECT id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at FROM sales_orders ORDER BY expected_date'),
+    db.prepare('SELECT id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids FROM sales_document_items ORDER BY issued_at DESC, line_no'),
   ]);
 
   const lotsByProduct = new Map<string, Lot[]>();
@@ -436,7 +511,38 @@ async function readState(db: D1Database) {
     updatedAt: r.updated_at,
   }));
 
-  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders };
+  const salesDocumentItems: SalesDocumentItem[] = (salesDocsRes.results as unknown as SalesDocumentItemRow[]).map(r => ({
+    id: r.id,
+    documentId: r.document_id,
+    kind: r.kind,
+    documentNo: r.document_no,
+    issuedAt: r.issued_at,
+    issueDate: r.issue_date,
+    customerId: r.customer_id,
+    customerName: r.customer_name,
+    customerAddress: r.customer_address,
+    customerContact: r.customer_contact,
+    periodFrom: r.period_from,
+    periodTo: r.period_to,
+    dueDate: r.due_date,
+    issuerName: r.issuer_name,
+    issuerAddress: r.issuer_address,
+    issuerPhone: r.issuer_phone,
+    issuerContact: r.issuer_contact,
+    issuerRegistrationNo: r.issuer_registration_no,
+    issuerBankAccount: r.issuer_bank_account,
+    lineNo: r.line_no,
+    deliveryDate: r.delivery_date,
+    productName: r.product_name,
+    productSku: r.product_sku,
+    quantity: r.quantity,
+    unitPrice: r.unit_price,
+    amount: r.amount,
+    taxRate: r.tax_rate,
+    txnIds: parseTxnIds(r.txn_ids),
+  }));
+
+  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders, salesDocumentItems };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -563,6 +669,26 @@ async function replacePurchaseOrderPrints(db: D1Database, prints: PurchaseOrderP
   await db.batch(stmts);
 }
 
+// sales_document_items を全置換。発注書の印刷履歴と同じく追記中心の履歴だが、
+// 取消 (書類の削除) もあるので他のスライスと同じ「全量取得→全量保存」に合わせる
+async function replaceSalesDocumentItems(db: D1Database, items: SalesDocumentItem[]) {
+  const stmts = [db.prepare('DELETE FROM sales_document_items')];
+  const insert = db.prepare(
+    'INSERT INTO sales_document_items (id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const i of items) {
+    stmts.push(insert.bind(
+      i.id, i.documentId, i.kind, i.documentNo, i.issuedAt, i.issueDate,
+      i.customerId, i.customerName, i.customerAddress, i.customerContact,
+      i.periodFrom, i.periodTo, i.dueDate ?? '',
+      i.issuerName, i.issuerAddress, i.issuerPhone, i.issuerContact, i.issuerRegistrationNo, i.issuerBankAccount ?? '',
+      i.lineNo, i.deliveryDate, i.productName, i.productSku, i.quantity, i.unitPrice, i.amount, i.taxRate,
+      JSON.stringify(i.txnIds ?? []),
+    ));
+  }
+  await db.batch(stmts);
+}
+
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   try {
     if (request.method === 'GET' && url.pathname === '/api/state') {
@@ -596,6 +722,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/purchase-order-prints':
           await replacePurchaseOrderPrints(env.DB, await request.json<PurchaseOrderPrintItem[]>());
+          return Response.json({ ok: true });
+        case '/api/sales-documents':
+          await replaceSalesDocumentItems(env.DB, await request.json<SalesDocumentItem[]>());
           return Response.json({ ok: true });
       }
     }

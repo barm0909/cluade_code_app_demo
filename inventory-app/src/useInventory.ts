@@ -422,6 +422,7 @@ interface ServerState {
   purchaseOrderPrints?: PurchaseOrderPrintItem[]; // 発注書の印刷履歴も同様 (未導入のサーバーからは返ってこない)
   customers?: Customer[]; // 得意先マスタも同様 (未導入のサーバーからは返ってこない)
   salesOrders?: SalesOrder[]; // 受注も同様 (未導入のサーバーからは返ってこない)
+  salesDocumentItems?: SalesDocumentItem[]; // 納品書・請求書の発行履歴も同様
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -434,7 +435,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers' | 'sales-orders';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers' | 'sales-orders' | 'sales-documents';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -687,6 +688,10 @@ function saveSalesOrders(orders: SalesOrder[]) {
   persist('sales-orders', orders);
 }
 
+function saveSalesDocumentItems(items: SalesDocumentItem[]) {
+  persist('sales-documents', items);
+}
+
 // ---- CSV エクスポートの種類 ----
 // 画面に CSV エクスポートボタンが複数あり、どれも中身が違う。ボタンの表示名・ツールチップ・
 // 出力ファイル名をここ1箇所で決めることで、「どのボタンから何のファイルが出るのか」を
@@ -707,6 +712,7 @@ export const CSV_EXPORTS = {
   salesSummary: { label: '売上集計', description: '商品別・得意先別・日別に集計した売上' },
   customer: { label: '得意先一覧', description: '得意先マスタと売上実績の状況' },
   salesOrder: { label: '受注一覧', description: '絞り込み後の受注（出荷予定）と引当の状況' },
+  salesDocument: { label: '納品書・請求書', description: '発行した納品書・請求書の明細' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -2868,6 +2874,413 @@ export function exportPurchaseOrderHistoryCsv(groups: PurchaseOrderPrintGroup[])
 }
 
 // ---------------------------------------------------------------------------
+// 納品書・請求書 (docs/sales-document-feature.md)
+// 売上 (帳票の「売上出庫」) を得意先ごとにまとめて書類にする。発注書・発注履歴の販売側の対で、
+// 発行した内容は salesDocumentItems にスナップショットとして残し、あとから同じ内容で再印刷できる。
+// 在庫は動かないので帳票には何も書かない。
+//
+// 消費税は売上管理 (salesRows) と違い「1枚の書類につき税率ごとに1回」端数処理する
+// (適格請求書の端数処理のルール)。そのため書類の消費税額は、同じ売上を売上管理で
+// 足し上げた額と数円ずれることがある。
+// ---------------------------------------------------------------------------
+
+export type SalesDocumentKind = '納品書' | '請求書';
+export const SALES_DOCUMENT_KINDS: SalesDocumentKind[] = ['納品書', '請求書'];
+
+/** 書類に載せる発行元 (自社) の情報。発注書の発注元と同じく端末ごとの入力補助 (localStorage) */
+export interface SalesDocumentIssuer {
+  name: string;
+  address: string;
+  phone: string;
+  contact: string;
+  /** 適格請求書発行事業者の登録番号 (T + 13桁)。空なら書類に載せない */
+  registrationNo: string;
+  /** 振込先 (請求書だけに載せる自由記述) */
+  bankAccount: string;
+}
+
+export const EMPTY_SALES_DOCUMENT_ISSUER: SalesDocumentIssuer = {
+  name: '', address: '', phone: '', contact: '', registrationNo: '', bankAccount: '',
+};
+
+/**
+ * 発行した書類の明細1行 (永続化の単位)。発注履歴 (PurchaseOrderPrintItem) と同じく、
+ * 同じ documentId の行が1枚の書類で、ヘッダ情報 (得意先・発行元など) は各行にそのまま持たせる。
+ * 商品名・得意先名などは発行した時点のスナップショットなので、あとでマスタを変えても変わらない。
+ */
+export interface SalesDocumentItem {
+  id: string;
+  documentId: string;
+  kind: SalesDocumentKind;
+  documentNo: string; // 書類番号 (例: D20261117-001 / I20261117-001)
+  issuedAt: string; // 発行操作をした日時 (ISO)
+  issueDate: string; // 書類に記載する発行日 YYYY-MM-DD
+  customerId: string;
+  customerName: string;
+  customerAddress: string;
+  customerContact: string;
+  periodFrom: string; // 対象期間 (納品書は納品日と同じ日)
+  periodTo: string;
+  dueDate: string; // お支払期限 (請求書だけ。納品書は空文字)
+  issuerName: string;
+  issuerAddress: string;
+  issuerPhone: string;
+  issuerContact: string;
+  issuerRegistrationNo: string;
+  issuerBankAccount: string;
+  lineNo: number; // 書類内の行番号 (1始まり)
+  deliveryDate: string; // 納品日 YYYY-MM-DD
+  productName: string;
+  productSku: string;
+  quantity: number;
+  unitPrice: number; // 税抜
+  amount: number; // quantity * unitPrice (税抜)
+  taxRate: TaxRate;
+  txnIds: string[]; // この行にまとめた帳票 (売上出庫) の id
+}
+
+/** 書類に載せる候補の1行。同じ日・同じ商品・同じ単価・同じ税率の売上を1行にまとめたもの */
+export interface SalesDocumentLine {
+  key: string;
+  deliveryDate: string;
+  productId: string;
+  productName: string;
+  productSku: string;
+  quantity: number;
+  unitPrice: number;
+  amount: number;
+  taxRate: TaxRate;
+  txnIds: string[];
+  /** 実売単価が記録されておらず、販売定価で代用した売上を含む */
+  estimatedPrice: boolean;
+  /** すでに同じ種類の書類に載っている場合はその書類番号 (二重発行の防止) */
+  issuedNo: string;
+}
+
+/** 帳票の id → その売上を載せた書類番号 (指定した種類の書類だけ) */
+export function issuedSalesDocumentNos(items: SalesDocumentItem[], kind: SalesDocumentKind): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const i of items) {
+    if (i.kind !== kind) continue;
+    for (const id of i.txnIds) map.set(id, i.documentNo);
+  }
+  return map;
+}
+
+/**
+ * 得意先・期間 (納品日。両端を含む) の売上を、書類の明細行にまとめる。
+ * 同じ納品日・商品・単価・税率の売上 (FEFO でロットごとに分かれた行など) は1行にまとめる。
+ * すでに発行済みの売上は issuedNo を付けて別の行にする (未発行の売上と混ぜない)。
+ * 得意先なしの売上は宛先がないので対象外。納品日の古い順 → 商品名順。
+ */
+export function salesDocumentLines(
+  sales: SalesRow[],
+  customerId: string,
+  from: string,
+  to: string,
+  issued: Map<string, string> = new Map(),
+): SalesDocumentLine[] {
+  if (!customerId) return [];
+  const byKey = new Map<string, SalesDocumentLine>();
+  for (const r of sales) {
+    if (r.customerId !== customerId) continue;
+    const day = localDateKey(r.date);
+    if (from && day < from) continue;
+    if (to && day > to) continue;
+    const issuedNo = issued.get(r.txnId) ?? '';
+    const key = [day, r.productId, r.unitPrice, r.taxRate, issuedNo].join('|');
+    const line = byKey.get(key) ?? {
+      key,
+      deliveryDate: day,
+      productId: r.productId,
+      productName: r.productName,
+      productSku: r.productSku,
+      quantity: 0,
+      unitPrice: r.unitPrice,
+      amount: 0,
+      taxRate: r.taxRate,
+      txnIds: [],
+      estimatedPrice: false,
+      issuedNo,
+    };
+    line.quantity += r.quantity;
+    line.amount += r.amount;
+    line.txnIds.push(r.txnId);
+    line.estimatedPrice ||= r.estimatedPrice;
+    byKey.set(key, line);
+  }
+  return [...byKey.values()].sort((a, b) =>
+    a.deliveryDate.localeCompare(b.deliveryDate) || a.productName.localeCompare(b.productName) || a.unitPrice - b.unitPrice);
+}
+
+export interface SalesDocumentTotals {
+  quantity: number;
+  amount: number; // 税抜
+  tax: number;
+  amountWithTax: number;
+  /** 書類に載っている税率だけ (軽減税率が先) */
+  byTaxRate: SalesTaxBreakdown[];
+}
+
+/**
+ * 書類の合計。消費税は税率ごとに税抜金額を合計してから1回だけ四捨五入する
+ * (適格請求書の端数処理。明細ごとに丸める salesTotals とは数円ずれることがある)。
+ */
+export function salesDocumentTotals(lines: Pick<SalesDocumentLine, 'quantity' | 'amount' | 'taxRate'>[]): SalesDocumentTotals {
+  const byTaxRate = TAX_RATES
+    .filter(rate => lines.some(l => l.taxRate === rate))
+    .map(taxRate => {
+      const amount = lines.filter(l => l.taxRate === taxRate).reduce((s, l) => s + l.amount, 0);
+      const tax = taxAmount(amount, taxRate);
+      return { taxRate, amount, tax, amountWithTax: amount + tax };
+    });
+  const amount = byTaxRate.reduce((s, b) => s + b.amount, 0);
+  const tax = byTaxRate.reduce((s, b) => s + b.tax, 0);
+  return { quantity: lines.reduce((s, l) => s + l.quantity, 0), amount, tax, amountWithTax: amount + tax, byTaxRate };
+}
+
+/**
+ * 次の書類番号。種類ごとの接頭辞 (納品書 D / 請求書 I) + 発行日 + その日の連番3桁。
+ * 連番は同じ接頭辞・日付の既存番号の最大値 + 1 (取り消した書類があっても既存の番号とは重ならない)。
+ */
+export function nextSalesDocumentNo(kind: SalesDocumentKind, issueDate: string, items: SalesDocumentItem[]): string {
+  const prefix = `${kind === '納品書' ? 'D' : 'I'}${issueDate.replace(/-/g, '')}-`;
+  let max = 0;
+  for (const i of items) {
+    if (!i.documentNo.startsWith(prefix)) continue;
+    const n = Number(i.documentNo.slice(prefix.length));
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`;
+}
+
+/** 前月の1日〜末日 (請求書の対象期間の既定値 = 月末締め) */
+export function previousMonthRange(today = new Date()): { from: string; to: string } {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const last = new Date(today.getFullYear(), today.getMonth(), 0);
+  return {
+    from: `${first.getFullYear()}-${pad(first.getMonth() + 1)}-01`,
+    to: `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`,
+  };
+}
+
+/** 締め日 (YYYY-MM-DD) の翌月末 (お支払期限の既定値) */
+export function nextMonthEnd(date: string): string {
+  const [y, m] = date.split('-').map(Number);
+  const last = new Date(y, m + 1, 0); // m は1始まりなので m+1 月の0日 = 翌月末
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`;
+}
+
+/** 登録番号の形式 (T + 13桁)。空は「載せない」なので可 */
+export function isValidRegistrationNo(value: string): boolean {
+  return value === '' || /^T\d{13}$/.test(value);
+}
+
+export interface IssueSalesDocumentInput {
+  kind: SalesDocumentKind;
+  issueDate: string;
+  customer: Customer;
+  periodFrom: string;
+  periodTo: string;
+  dueDate: string; // 納品書では使わない
+  issuer: SalesDocumentIssuer;
+  lines: SalesDocumentLine[];
+}
+
+/** 発行できない理由 (できるなら空文字)。モーダルのボタンと issueSalesDocument で共有する */
+export function salesDocumentValidationError(input: IssueSalesDocumentInput): string {
+  if (!input.customer?.id) return '得意先を選んでください';
+  if (!input.issueDate) return '発行日を入力してください';
+  if (!input.periodFrom || !input.periodTo) return input.kind === '納品書' ? '納品日を入力してください' : '対象期間を入力してください';
+  if (input.periodFrom > input.periodTo) return '対象期間の開始日が終了日より後になっています';
+  if (!isValidRegistrationNo(input.issuer.registrationNo.trim())) return '登録番号は「T」に続けて13桁の数字で入力してください';
+  if (input.lines.length === 0) return '書類に載せる売上を1件以上選んでください';
+  if (input.lines.some(l => l.issuedNo)) return `すでに${input.kind}に載っている売上は選べません`;
+  return '';
+}
+
+/** 1枚の書類 (同じ documentId の明細をまとめたもの) */
+export interface SalesDocument {
+  documentId: string;
+  kind: SalesDocumentKind;
+  documentNo: string;
+  issuedAt: string;
+  issueDate: string;
+  customerId: string;
+  customerName: string;
+  customerAddress: string;
+  customerContact: string;
+  periodFrom: string;
+  periodTo: string;
+  dueDate: string;
+  issuer: SalesDocumentIssuer;
+  items: SalesDocumentItem[];
+  totals: SalesDocumentTotals;
+}
+
+/**
+ * 発行内容から保存する明細行を作る。モーダルのプレビューも同じ関数で組み立てる
+ * (documentId だけ仮の値) ので、プレビューと保存される内容は食い違わない。
+ */
+export function buildSalesDocumentItems(
+  input: IssueSalesDocumentInput,
+  existing: SalesDocumentItem[],
+  documentId: string,
+  issuedAt: string,
+): SalesDocumentItem[] {
+  const documentNo = nextSalesDocumentNo(input.kind, input.issueDate, existing);
+  const issuer = input.issuer;
+  return input.lines.map((l, idx) => ({
+    id: `${documentId}-${idx + 1}`,
+    documentId,
+    kind: input.kind,
+    documentNo,
+    issuedAt,
+    issueDate: input.issueDate,
+    customerId: input.customer.id,
+    customerName: input.customer.name,
+    customerAddress: input.customer.address,
+    customerContact: input.customer.contact,
+    periodFrom: input.periodFrom,
+    periodTo: input.periodTo,
+    dueDate: input.kind === '請求書' ? input.dueDate : '',
+    issuerName: issuer.name.trim(),
+    issuerAddress: issuer.address.trim(),
+    issuerPhone: issuer.phone.trim(),
+    issuerContact: issuer.contact.trim(),
+    issuerRegistrationNo: issuer.registrationNo.trim(),
+    issuerBankAccount: input.kind === '請求書' ? issuer.bankAccount.trim() : '',
+    lineNo: idx + 1,
+    deliveryDate: l.deliveryDate,
+    productName: l.productName,
+    productSku: l.productSku,
+    quantity: l.quantity,
+    unitPrice: l.unitPrice,
+    amount: l.amount,
+    taxRate: l.taxRate,
+    txnIds: [...l.txnIds],
+  }));
+}
+
+/** 同じ書類の明細行 (1件以上) から書類を組み立てる */
+function toSalesDocument(items: SalesDocumentItem[]): SalesDocument {
+  const sorted = [...items].sort((a, b) => a.lineNo - b.lineNo);
+  const h = sorted[0];
+  return {
+    documentId: h.documentId,
+    kind: h.kind,
+    documentNo: h.documentNo,
+    issuedAt: h.issuedAt,
+    issueDate: h.issueDate,
+    customerId: h.customerId,
+    customerName: h.customerName,
+    customerAddress: h.customerAddress,
+    customerContact: h.customerContact,
+    periodFrom: h.periodFrom,
+    periodTo: h.periodTo,
+    dueDate: h.dueDate,
+    issuer: {
+      name: h.issuerName,
+      address: h.issuerAddress,
+      phone: h.issuerPhone,
+      contact: h.issuerContact,
+      registrationNo: h.issuerRegistrationNo,
+      bankAccount: h.issuerBankAccount,
+    },
+    items: sorted,
+    totals: salesDocumentTotals(sorted),
+  };
+}
+
+/** 発行内容をプレビュー用の書類にする (明細0件でも見出しだけの書類を返す) */
+export function draftSalesDocument(input: IssueSalesDocumentInput, existing: SalesDocumentItem[]): SalesDocument {
+  const items = buildSalesDocumentItems(input, existing, 'preview', '');
+  if (items.length > 0) return toSalesDocument(items);
+  return {
+    documentId: 'preview',
+    kind: input.kind,
+    documentNo: nextSalesDocumentNo(input.kind, input.issueDate, existing),
+    issuedAt: '',
+    issueDate: input.issueDate,
+    customerId: input.customer?.id ?? '',
+    customerName: input.customer?.name ?? '',
+    customerAddress: input.customer?.address ?? '',
+    customerContact: input.customer?.contact ?? '',
+    periodFrom: input.periodFrom,
+    periodTo: input.periodTo,
+    dueDate: input.kind === '請求書' ? input.dueDate : '',
+    issuer: input.issuer,
+    items: [],
+    totals: salesDocumentTotals([]),
+  };
+}
+
+export interface SalesDocumentFilter {
+  keyword: string; // 書類番号・得意先名・商品名・SKU の部分一致
+  kind: SalesDocumentKind | '';
+  customerId: string;
+  from: string; // 発行日 YYYY-MM-DD (この日を含む)
+  to: string;
+}
+
+export const EMPTY_SALES_DOCUMENT_FILTER: SalesDocumentFilter = { keyword: '', kind: '', customerId: '', from: '', to: '' };
+
+/** 発行した書類の一覧 (発行操作の新しい順)。絞り込みは書類単位 */
+export function salesDocuments(
+  items: SalesDocumentItem[],
+  filter: SalesDocumentFilter = EMPTY_SALES_DOCUMENT_FILTER,
+): SalesDocument[] {
+  const byDoc = new Map<string, SalesDocumentItem[]>();
+  for (const i of items) {
+    const list = byDoc.get(i.documentId);
+    if (list) list.push(i); else byDoc.set(i.documentId, [i]);
+  }
+  const q = filter.keyword.trim().toLowerCase();
+  const docs: SalesDocument[] = [];
+  for (const list of byDoc.values()) {
+    const doc = toSalesDocument(list);
+    if (filter.kind && doc.kind !== filter.kind) continue;
+    if (filter.customerId && doc.customerId !== filter.customerId) continue;
+    if (filter.from && doc.issueDate < filter.from) continue;
+    if (filter.to && doc.issueDate > filter.to) continue;
+    if (q && !(
+      doc.documentNo.toLowerCase().includes(q)
+      || doc.customerName.toLowerCase().includes(q)
+      || doc.items.some(i => i.productName.toLowerCase().includes(q) || i.productSku.toLowerCase().includes(q))
+    )) continue;
+    docs.push(doc);
+  }
+  return docs.sort((a, b) => b.issuedAt.localeCompare(a.issuedAt) || b.documentNo.localeCompare(a.documentNo));
+}
+
+export function salesDocumentCsv(docs: SalesDocument[]): string {
+  const header = '種類,書類番号,発行日,得意先,対象期間（開始）,対象期間（終了）,お支払期限,納品日,商品名,SKU,数量,単価（税抜）,金額（税抜）,税率';
+  const body = docs.flatMap(d => d.items.map(i => [
+    d.kind,
+    d.documentNo,
+    d.issueDate,
+    d.customerName,
+    d.periodFrom,
+    d.periodTo,
+    d.dueDate,
+    i.deliveryDate,
+    i.productName,
+    i.productSku,
+    i.quantity,
+    i.unitPrice,
+    i.amount,
+    `${i.taxRate}%`,
+  ].map(csvCell).join(',')));
+  return [header, ...body].join('\n');
+}
+
+export function exportSalesDocumentCsv(docs: SalesDocument[]) {
+  downloadCsv(csvFileName('salesDocument'), salesDocumentCsv(docs));
+}
+
+// ---------------------------------------------------------------------------
 // ロットトレーサビリティ (ロット追跡)
 // リコール時に要るのは「このロットが、いつ入って、どこを経由して、いつ出たか」。
 // 必要な記録は帳票 (ledger) にすべて残っているので専用の永続データは持たず、集計だけで組み立てる。
@@ -3506,6 +3919,7 @@ export function useInventory() {
   const [purchaseOrderPrints, setPurchaseOrderPrints] = useState<PurchaseOrderPrintItem[]>([]);
   const [customers, setCustomers] = useState<Customer[]>(DEFAULT_CUSTOMERS);
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>(SAMPLE_SALES_ORDERS);
+  const [salesDocumentItems, setSalesDocumentItems] = useState<SalesDocumentItem[]>([]);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
@@ -3531,6 +3945,7 @@ export function useInventory() {
       setPurchaseOrderPrints(state.purchaseOrderPrints ?? []);
       setCustomers(state.customers ?? []);
       setSalesOrders(state.salesOrders ?? []);
+      setSalesDocumentItems(state.salesDocumentItems ?? []);
     });
     return () => { cancelled = true; };
   }, []);
@@ -4407,7 +4822,37 @@ export function useInventory() {
     const freshOrders: SalesOrder[] = JSON.parse(JSON.stringify(SAMPLE_SALES_ORDERS));
     setSalesOrders(freshOrders);
     saveSalesOrders(freshOrders);
+    // 納品書・請求書は帳票の売上を参照していて、帳票を空に戻すと宙に浮くので一緒に空にする
+    setSalesDocumentItems([]);
+    saveSalesDocumentItems([]);
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder };
+  /**
+   * 納品書・請求書を発行する (SalesDocumentModal の「発行して印刷」から)。
+   * 発行内容のスナップショットを salesDocumentItems に追加するだけで、在庫も帳票も動かさない。
+   * 一度載せた売上は同じ種類の書類にもう載せられない (salesDocumentValidationError)。
+   * 発行できなかったときは null、発行したときは書類を返す。
+   */
+  const issueSalesDocument = useCallback((input: IssueSalesDocumentInput): SalesDocument | null => {
+    const issued = issuedSalesDocumentNos(salesDocumentItems, input.kind);
+    // 呼び出し側の候補が古くても二重発行しないよう、保存直前の発行状況で付け直してから検証する
+    const lines = input.lines.map(l => ({ ...l, issuedNo: l.txnIds.map(id => issued.get(id)).find(Boolean) ?? '' }));
+    const checked = { ...input, lines };
+    if (salesDocumentValidationError(checked)) return null;
+    const created = buildSalesDocumentItems(checked, salesDocumentItems, crypto.randomUUID(), new Date().toISOString());
+    const next = [...salesDocumentItems, ...created];
+    setSalesDocumentItems(next);
+    saveSalesDocumentItems(next);
+    return salesDocuments(created)[0];
+  }, [salesDocumentItems]);
+
+  /** 発行した書類を取り消す。載っていた売上はふたたび同じ種類の書類に載せられるようになる */
+  const deleteSalesDocument = useCallback((documentId: string) => {
+    setSalesDocumentItems(prev => {
+      const next = prev.filter(i => i.documentId !== documentId);
+      saveSalesDocumentItems(next); return next;
+    });
+  }, []);
+
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument };
 }

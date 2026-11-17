@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { Product, Warehouse, Category, StockTransaction, InboundPlan, Supplier, Customer, SalesOrder } from '../useInventory';
+import type { Product, Warehouse, Category, StockTransaction, InboundPlan, Supplier, Customer, SalesOrder, SalesDocumentItem } from '../useInventory';
 
 // Worker API (/api/*) を模倣する fetch モック。
 // 戻り値の server オブジェクトが「D1 の中身」に相当し、テストから直接読み書きできる。
@@ -13,10 +13,11 @@ export interface FakeServer {
   suppliers: Supplier[];
   customers: Customer[];
   salesOrders: SalesOrder[];
+  salesDocumentItems: SalesDocumentItem[];
 }
 
 export function stubApi(initial?: Partial<FakeServer>): FakeServer {
-  const server: FakeServer = { products: [], warehouses: [], categories: [], ledger: [], inboundPlans: [], suppliers: [], customers: [], salesOrders: [], ...initial };
+  const server: FakeServer = { products: [], warehouses: [], categories: [], ledger: [], inboundPlans: [], suppliers: [], customers: [], salesOrders: [], salesDocumentItems: [], ...initial };
 
   vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: { method?: string; body?: string }) => {
     const url = String(input);
@@ -35,6 +36,7 @@ export function stubApi(initial?: Partial<FakeServer>): FakeServer {
       if (url.endsWith('/api/suppliers')) { server.suppliers = body; return { ok: true, json: async () => ({ ok: true }) }; }
       if (url.endsWith('/api/customers')) { server.customers = body; return { ok: true, json: async () => ({ ok: true }) }; }
       if (url.endsWith('/api/sales-orders')) { server.salesOrders = body; return { ok: true, json: async () => ({ ok: true }) }; }
+      if (url.endsWith('/api/sales-documents')) { server.salesDocumentItems = body; return { ok: true, json: async () => ({ ok: true }) }; }
     }
     return { ok: false, json: async () => ({ error: 'not found' }) };
   }));
