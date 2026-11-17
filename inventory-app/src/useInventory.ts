@@ -81,19 +81,28 @@ export interface Product {
   updatedAt: string;
 }
 
-export type TransactionType = '入荷' | '調整入庫' | '売上出庫' | '資材使用' | '調整出庫' | '廃棄' | '移動';
+export type TransactionType = '入荷' | '調整入庫' | '売上返品' | '売上出庫' | '資材使用' | '調整出庫' | '廃棄' | '仕入返品' | '移動';
 
 /** 出庫系の区分だけを指す型 (FEFO出庫のように出庫しか受け付けない API 用) */
 export type OutboundTransactionType = Extract<TransactionType, '売上出庫' | '資材使用' | '調整出庫' | '廃棄'>;
 
+/**
+ * 入庫・出庫画面で手で選べる入庫区分。返品 (売上返品) は元の売上にひもづけて
+ * 専用の画面 (returnSale) からしか記録しないので、ここには含めない。
+ */
 export const INBOUND_TYPES: TransactionType[] = ['入荷', '調整入庫'];
-/** すべての出庫区分。商品ごとに選べる区分は outboundTypesFor で絞る (資材は売上出庫できない等) */
+/**
+ * 手で選べる出庫区分。商品ごとに選べる区分は outboundTypesFor で絞る (資材は売上出庫できない等)。
+ * 仕入返品は専用の画面 (returnToSupplier) からしか記録しないので含めない。
+ */
 export const OUTBOUND_TYPES: OutboundTransactionType[] = ['売上出庫', '資材使用', '調整出庫', '廃棄'];
-export const ALL_TRANSACTION_TYPES: TransactionType[] = [...INBOUND_TYPES, ...OUTBOUND_TYPES, '移動'];
+/** 返品の区分 (docs/return-feature.md)。売上返品は在庫が増え、仕入返品は在庫が減る */
+export const RETURN_TYPES: TransactionType[] = ['売上返品', '仕入返品'];
+export const ALL_TRANSACTION_TYPES: TransactionType[] = [...INBOUND_TYPES, '売上返品', ...OUTBOUND_TYPES, '仕入返品', '移動'];
 
 export function transactionDirection(type: TransactionType): 'in' | 'out' | 'move' {
-  if (INBOUND_TYPES.includes(type)) return 'in';
-  if ((OUTBOUND_TYPES as TransactionType[]).includes(type)) return 'out';
+  if (INBOUND_TYPES.includes(type) || type === '売上返品') return 'in';
+  if ((OUTBOUND_TYPES as TransactionType[]).includes(type) || type === '仕入返品') return 'out';
   return 'move';
 }
 
@@ -114,21 +123,28 @@ export interface StockTransaction {
    * - 入荷: 仕入単価 (入荷予定からの入荷だけが持つ)
    * - 廃棄: 廃棄したロットの原価 (一括廃棄だけが持つ)
    * - 売上出庫: 実売単価 (売上登録・FEFO出庫・ロット出庫で入力されたときだけ持つ)
+   * - 売上返品: 元の売上の実売単価 (元の売上が持っていたときだけ)
+   * - 仕入返品: 返品単価 (仕入先へ返す1個あたりの金額。0 なら持たない)
    * それ以外の区分では未設定。
    */
   unitPrice?: number;
-  /** 仕入先マスタの id。unitPrice と同じく「入荷予定からの入荷」だけが持つ */
+  /** 仕入先マスタの id。「入荷予定からの入荷」と「仕入返品」が持つ */
   supplierId?: string;
-  /** 得意先マスタの id。「売上出庫」だけが持つ (未設定 = 得意先なしの売上) */
+  /** 得意先マスタの id。「売上出庫」と「売上返品」が持つ (未設定 = 得意先なしの売上) */
   customerId?: string;
   /**
-   * 出庫した時点のロット原価 (円)。「売上出庫」だけが持つ。
+   * 返品の元になった取引の id。「売上返品」は元の売上出庫 (必ず持つ)、
+   * 「仕入返品」は元の入荷 (帳票から見つかったときだけ) を指す。
+   */
+  returnOfTxnId?: string;
+  /**
+   * 出庫した時点のロット原価 (円)。「売上出庫」と、それを写した「売上返品」が持つ。
    * 売れたロットは在庫から減って原価が分からなくなるため、粗利 (売上金額 - 原価) を
    * あとから再計算できるようその場で写し取る (廃棄ロスが unitPrice を持つのと同じ理由)。
    */
   costUnitPrice?: number;
   /**
-   * 出庫した時点の商品の消費税率 (%)。「売上出庫」だけが持つ。
+   * 出庫した時点の商品の消費税率 (%)。「売上出庫」と、それを写した「売上返品」が持つ。
    * 商品の税率はあとから変えられるので、売上の消費税が過去にさかのぼって変わらないようその場で写し取る。
    */
   taxRate?: TaxRate;
@@ -340,7 +356,10 @@ export function productTaxRate(product: Pick<Product, 'taxRate'>): TaxRate {
  * 売上明細1行 (数量 × 単価) ごとに計算し、合計はその足し上げにする (明細ごとの端数処理)。
  */
 export function taxAmount(amountExcludingTax: number, rate: TaxRate): number {
-  return Math.round(amountExcludingTax * rate / 100);
+  // 返品のマイナス金額でも、同じ額のプラス金額とちょうど符号違いになるよう絶対値で丸める
+  // (Math.round は -0.5 を 0 に寄せるため、そのままだと売上と返品で税額が1円ずれる)
+  const tax = Math.round(Math.abs(amountExcludingTax) * rate / 100);
+  return amountExcludingTax < 0 ? -tax : tax;
 }
 
 /** 税抜金額 → 税込金額 */
@@ -2441,6 +2460,13 @@ export interface SalesRow {
   estimatedPrice: boolean;
   /** 出庫時点の原価が帳票になく、商品の現在原価で代用した行 (概算) */
   estimatedCost: boolean;
+  /**
+   * 売上返品の行。数量・金額・消費税・原価・粗利はすべてマイナスで持つので、
+   * そのまま足し上げれば返品を差し引いた売上になる。
+   */
+  isReturn: boolean;
+  /** 返品の行だけ: 元の売上の帳票 id */
+  returnOfTxnId: string;
 }
 
 /**
@@ -2455,9 +2481,12 @@ export function salesRows(ledger: StockTransaction[], products: Product[], custo
   const productById = new Map(products.map(p => [p.id, p]));
   const customerNameById = new Map(customers.map(c => [c.id, c.name]));
   return ledger
-    .filter(t => t.type === '売上出庫')
+    .filter(t => t.type === '売上出庫' || t.type === '売上返品')
     .map(t => {
       const product = productById.get(t.productId);
+      const isReturn = t.type === '売上返品';
+      // 返品は数量をマイナスにして、金額・消費税・原価・粗利もすべてマイナスにする
+      const quantity = isReturn ? -t.quantity : t.quantity;
       const estimatedPrice = t.unitPrice == null;
       const estimatedCost = t.costUnitPrice == null;
       const unitPrice = t.unitPrice ?? product?.price ?? 0;
@@ -2465,9 +2494,9 @@ export function salesRows(ledger: StockTransaction[], products: Product[], custo
       // 消費税の導入前の記録は税率を持たないので、商品の現在の税率を使う。商品の税率が変わることは
       // まずなく、全件を「概算」扱いにすると印だらけになるため、単価・原価と違って印はつけない
       const taxRate = isTaxRate(t.taxRate) ? t.taxRate : product ? productTaxRate(product) : DEFAULT_TAX_RATE;
-      const amount = unitPrice * t.quantity;
+      const amount = unitPrice * quantity;
       const tax = taxAmount(amount, taxRate);
-      const cost = unitCost * t.quantity;
+      const cost = unitCost * quantity;
       const customerId = t.customerId ?? '';
       return {
         txnId: t.id,
@@ -2476,10 +2505,11 @@ export function salesRows(ledger: StockTransaction[], products: Product[], custo
         productName: t.productName,
         productSku: t.productSku,
         lotNo: t.lotNo,
-        warehouseId: t.fromWarehouseId ?? '',
+        // 売上は出庫元、返品は戻し先の倉庫
+        warehouseId: (isReturn ? t.toWarehouseId : t.fromWarehouseId) ?? '',
         customerId,
         customerName: customerNameById.get(customerId) ?? '',
-        quantity: t.quantity,
+        quantity,
         unitPrice,
         amount,
         taxRate,
@@ -2488,10 +2518,13 @@ export function salesRows(ledger: StockTransaction[], products: Product[], custo
         unitCost,
         cost,
         profit: amount - cost,
-        profitRate: amount > 0 ? (amount - cost) / amount : 0,
+        // 返品は粗利も金額もマイナスなので、そのまま割れば元の売上と同じ粗利率になる
+        profitRate: amount !== 0 ? (amount - cost) / amount : 0,
         note: t.note,
         estimatedPrice,
         estimatedCost,
+        isReturn,
+        returnOfTxnId: t.returnOfTxnId ?? '',
       };
     })
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -2552,6 +2585,9 @@ export interface SalesTotals {
   averageUnitPrice: number; // 売上高 (税抜) ÷ 数量
   /** 税率別の内訳 (軽減税率が先)。売上の無い税率も 0 円で含める */
   byTaxRate: SalesTaxBreakdown[];
+  /** 売上返品の件数と金額 (税抜・プラスの値)。売上高などはすでに返品を差し引いた値 */
+  returnCount: number;
+  returnAmount: number;
 }
 
 export function salesTotals(rows: SalesRow[]): SalesTotals {
@@ -2576,6 +2612,8 @@ export function salesTotals(rows: SalesRow[]): SalesTotals {
     profitRate: amount > 0 ? (amount - cost) / amount : 0,
     averageUnitPrice: quantity > 0 ? amount / quantity : 0,
     byTaxRate,
+    returnCount: rows.filter(r => r.isReturn).length,
+    returnAmount: rows.filter(r => r.isReturn).reduce((s, r) => s - r.amount, 0),
   };
 }
 
@@ -2695,6 +2733,148 @@ export function exportSalesSummaryCsv(summaries: SalesSummary[], columnLabel: st
   downloadCsv(csvFileName('salesSummary'), salesSummaryCsv(summaries, columnLabel));
 }
 
+// ---------------------------------------------------------------------------
+// 返品 (docs/return-feature.md)
+// - 売上返品: 得意先から戻ってきた商品。元の売上出庫を1件選び、その数量の範囲で在庫へ戻す。
+//   帳票には「売上返品」(入庫側) を1件書き、元の売上の単価・得意先・原価・税率をそのまま写す。
+//   売上管理 (salesRows) はこれをマイナスの売上として差し引く。
+// - 仕入返品: 仕入先へ返す商品。ロットを1つ選び、その在庫の範囲で減らす。
+//   帳票には「仕入返品」(出庫側) を1件書き、仕入先と返品単価を残す。
+// どちらも在庫が動くので必ず帳票に記録する。返品で受注・入荷予定の数量は戻さない。
+// ---------------------------------------------------------------------------
+
+/** 元の取引 id → これまでに返品した数量の合計 (売上返品・仕入返品の両方) */
+export function returnedQuantities(ledger: StockTransaction[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const t of ledger) {
+    if ((t.type === '売上返品' || t.type === '仕入返品') && t.returnOfTxnId) {
+      map.set(t.returnOfTxnId, (map.get(t.returnOfTxnId) ?? 0) + t.quantity);
+    }
+  }
+  return map;
+}
+
+/** その売上 (売上出庫) のうち、まだ返品できる数量 */
+export function returnableSaleQuantity(ledger: StockTransaction[], saleTxnId: string): number {
+  const sale = ledger.find(t => t.id === saleTxnId && t.type === '売上出庫');
+  if (!sale) return 0;
+  return Math.max(0, sale.quantity - (returnedQuantities(ledger).get(saleTxnId) ?? 0));
+}
+
+/** ロットNo が賞味期限から作られた8桁 (YYYYMMDD) なら、その日付を返す */
+function expiryFromLotNo(lotNo: string): string | undefined {
+  const m = /^(\d{4})(\d{2})(\d{2})$/.exec(lotNo);
+  if (!m) return undefined;
+  const date = `${m[1]}-${m[2]}-${m[3]}`;
+  const dt = new Date(`${date}T00:00:00`);
+  return Number.isNaN(dt.getTime()) || localDateKey(dt.toISOString()) !== date ? undefined : date;
+}
+
+export interface SalesReturnInput {
+  saleTxnId: string;
+  quantity: number;
+  /** 戻し先の倉庫。売り物にならないものは保留倉庫・不良倉庫へ戻し、あとで廃棄する想定 */
+  warehouseId: string;
+  note?: string;
+}
+
+/** 売上返品で在庫がどう戻るか (モーダルのプレビューと returnSale が共有する) */
+export interface SalesReturnPlan {
+  sale?: StockTransaction;
+  product?: Product;
+  /** 実際に戻す数量 (返品できる数量を超えないよう丸めたもの) */
+  quantity: number;
+  returnable: number;
+  lotNo: string;
+  expiryDate?: string;
+  warehouseId: string;
+  /** 戻し先の既存ロット (同じロットNo・倉庫・賞味期限)。なければ新しいロットを作る */
+  existingLot?: Lot;
+  /** 戻したロットの原価。売れたときのロット原価 (costUnitPrice) を使う */
+  unitCost: number;
+  /** 差し引く売上 (税抜・プラスの値) */
+  amount: number;
+  /** 返品できない理由 (できるなら空文字) */
+  error: string;
+}
+
+/**
+ * 売上返品の計画を立てる。状態は変更しない。
+ * 戻すロットは元の売上と同じロットNo。同じ倉庫に同じロットNo・賞味期限のロットが残っていれば
+ * そこへ足し、なければ作り直す (賞味期限は同じ商品の同じロットNoのロットから、なければロットNoから復元)。
+ */
+export function planSalesReturn(products: Product[], ledger: StockTransaction[], input: SalesReturnInput): SalesReturnPlan {
+  const sale = ledger.find(t => t.id === input.saleTxnId && t.type === '売上出庫');
+  const empty: SalesReturnPlan = {
+    sale, quantity: 0, returnable: 0, lotNo: sale?.lotNo ?? '', warehouseId: input.warehouseId,
+    unitCost: 0, amount: 0, error: '',
+  };
+  if (!sale) return { ...empty, error: '返品する売上が見つかりません' };
+  const product = products.find(p => p.id === sale.productId);
+  if (!product) return { ...empty, error: '商品が削除されているため、在庫に戻せません' };
+  const returnable = returnableSaleQuantity(ledger, sale.id);
+  const quantity = Math.min(Math.max(0, Math.floor(input.quantity)), returnable);
+  const expiryDate = product.lots.find(l => l.lotNo === sale.lotNo && l.expiryDate)?.expiryDate ?? expiryFromLotNo(sale.lotNo);
+  const existingLot = product.lots.find(l =>
+    l.lotNo === sale.lotNo && l.warehouseId === input.warehouseId && (l.expiryDate ?? '') === (expiryDate ?? ''));
+  const unitCost = sale.costUnitPrice ?? product.costPrice;
+  const unitPrice = sale.unitPrice ?? product.price;
+  let error = '';
+  if (returnable <= 0) error = 'この売上はすべて返品済みです';
+  else if (!input.warehouseId) error = '戻し先の倉庫を選んでください';
+  else if (quantity <= 0) error = '返品数量を入力してください';
+  return {
+    sale, product, quantity, returnable, lotNo: sale.lotNo, expiryDate, warehouseId: input.warehouseId,
+    existingLot, unitCost, amount: unitPrice * quantity, error,
+  };
+}
+
+export interface PurchaseReturnInput {
+  productId: string;
+  lotId: string;
+  quantity: number;
+  /** 仕入先マスタの id (必須) */
+  supplierId: string;
+  /** 返品単価 (税抜・円)。0 は未入力 */
+  unitPrice: number;
+  note?: string;
+}
+
+/** 仕入返品の初期値: そのロットを入荷したときの仕入先・入荷記録と、ロットの原価 */
+export function purchaseReturnDefaults(product: Product, lot: Lot, ledger: StockTransaction[]): { supplierId: string; inboundTxnId: string; unitPrice: number } {
+  // 帳票は新しい順なので、最初に見つかった入荷がいちばん新しい入荷
+  const inbound = ledger.find(t =>
+    t.type === '入荷' && t.productId === product.id && t.lotNo === lot.lotNo && t.toWarehouseId === lot.warehouseId && t.supplierId)
+    ?? ledger.find(t => t.type === '入荷' && t.productId === product.id && t.lotNo === lot.lotNo && t.supplierId);
+  return {
+    supplierId: inbound?.supplierId ?? '',
+    inboundTxnId: inbound?.id ?? '',
+    unitPrice: Math.round(lotUnitCost(lot, product)),
+  };
+}
+
+export interface PurchaseReturnPlan {
+  product?: Product;
+  lot?: Lot;
+  quantity: number;
+  amount: number; // 返品金額 (税抜) = 返品単価 × 数量
+  error: string;
+}
+
+/** 仕入返品の計画 (モーダルのプレビューと returnToSupplier が共有する)。数量はロットの在庫まで */
+export function planPurchaseReturn(products: Product[], suppliers: Supplier[], input: PurchaseReturnInput): PurchaseReturnPlan {
+  const product = products.find(p => p.id === input.productId);
+  const lot = product?.lots.find(l => l.id === input.lotId);
+  if (!product || !lot) return { quantity: 0, amount: 0, error: '返品するロットが見つかりません' };
+  const quantity = Math.min(Math.max(0, Math.floor(input.quantity)), lot.quantity);
+  let error = '';
+  if (!input.supplierId || !suppliers.some(s => s.id === input.supplierId)) error = '返品先の仕入先を選んでください';
+  else if (lot.quantity <= 0) error = 'このロットには在庫がありません';
+  else if (quantity <= 0) error = '返品数量を入力してください';
+  const unitPrice = Math.max(0, Math.round(input.unitPrice));
+  return { product, lot, quantity, amount: unitPrice * quantity, error };
+}
+
 /** 得意先ごとの売上実績 (削除可否の判定と一覧表示に使う) */
 export interface CustomerUsage {
   saleCount: number; // 売上明細の件数
@@ -2711,11 +2891,12 @@ export function customerUsage(rows: SalesRow[]): Map<string, CustomerUsage> {
   const byId = new Map<string, CustomerUsage>();
   for (const r of rows) {
     const usage = byId.get(r.customerId) ?? { ...EMPTY_CUSTOMER_USAGE };
-    usage.saleCount++;
+    // 返品は件数に数えず、数量・金額・粗利だけ差し引く
+    if (!r.isReturn) usage.saleCount++;
     usage.quantity += r.quantity;
     usage.amount += r.amount;
     usage.profit += r.profit;
-    if (r.date > usage.lastSaleAt) usage.lastSaleAt = r.date;
+    if (!r.isReturn && r.date > usage.lastSaleAt) usage.lastSaleAt = r.date;
     byId.set(r.customerId, usage);
   }
   return byId;
@@ -2955,6 +3136,8 @@ export interface SalesDocumentLine {
   estimatedPrice: boolean;
   /** すでに同じ種類の書類に載っている場合はその書類番号 (二重発行の防止) */
   issuedNo: string;
+  /** 売上返品の行 (数量・金額はマイナス) */
+  isReturn: boolean;
 }
 
 /** 帳票の id → その売上を載せた書類番号 (指定した種類の書類だけ) */
@@ -2972,6 +3155,7 @@ export function issuedSalesDocumentNos(items: SalesDocumentItem[], kind: SalesDo
  * 同じ納品日・商品・単価・税率の売上 (FEFO でロットごとに分かれた行など) は1行にまとめる。
  * すでに発行済みの売上は issuedNo を付けて別の行にする (未発行の売上と混ぜない)。
  * 得意先なしの売上は宛先がないので対象外。納品日の古い順 → 商品名順。
+ * 売上返品はマイナスの行として別にまとめる (includeReturns=false で除外。納品書は返品を載せない)。
  */
 export function salesDocumentLines(
   sales: SalesRow[],
@@ -2979,16 +3163,19 @@ export function salesDocumentLines(
   from: string,
   to: string,
   issued: Map<string, string> = new Map(),
+  options: { includeReturns?: boolean } = {},
 ): SalesDocumentLine[] {
   if (!customerId) return [];
+  const { includeReturns = true } = options;
   const byKey = new Map<string, SalesDocumentLine>();
   for (const r of sales) {
     if (r.customerId !== customerId) continue;
+    if (r.isReturn && !includeReturns) continue;
     const day = localDateKey(r.date);
     if (from && day < from) continue;
     if (to && day > to) continue;
     const issuedNo = issued.get(r.txnId) ?? '';
-    const key = [day, r.productId, r.unitPrice, r.taxRate, issuedNo].join('|');
+    const key = [day, r.productId, r.unitPrice, r.taxRate, issuedNo, r.isReturn ? 'R' : 'S'].join('|');
     const line = byKey.get(key) ?? {
       key,
       deliveryDate: day,
@@ -3002,6 +3189,7 @@ export function salesDocumentLines(
       txnIds: [],
       estimatedPrice: false,
       issuedNo,
+      isReturn: r.isReturn,
     };
     line.quantity += r.quantity;
     line.amount += r.amount;
@@ -3010,7 +3198,8 @@ export function salesDocumentLines(
     byKey.set(key, line);
   }
   return [...byKey.values()].sort((a, b) =>
-    a.deliveryDate.localeCompare(b.deliveryDate) || a.productName.localeCompare(b.productName) || a.unitPrice - b.unitPrice);
+    a.deliveryDate.localeCompare(b.deliveryDate) || a.productName.localeCompare(b.productName)
+    || a.unitPrice - b.unitPrice || Number(a.isReturn) - Number(b.isReturn));
 }
 
 export interface SalesDocumentTotals {
@@ -3605,7 +3794,8 @@ export interface StockAnalysisOptions {
  * 商品ごとに「どれだけ出たか (ABC)」「何日分の在庫を持っているか (回転)」
  * 「最後に動いたのはいつか (滞留)」をまとめる。状態は変更しない。
  *
- * - 出庫数は売上出庫・資材使用・調整出庫・廃棄の合計 (移動は総在庫を動かさないので数えない)。
+ * - 出庫数は売上出庫・資材使用・調整出庫・廃棄の合計から売上返品を引いたもの (移動は総在庫を動かさず、
+ *   仕入返品は需要ではないので数えない)。
  * - ABCランクは販売品だけで付ける (資材は rank = null)。資材は販売品のあとに出庫金額の大きい順で並べる。
  *   滞留・発注点の提案は資材も対象のまま (ラベルも切らしたり抱えすぎたりするため)。
  * - 最終出庫日だけは期間で絞らず全期間の帳票から探す (滞留の判定に期間を切ると、
@@ -3624,7 +3814,17 @@ export function stockAnalysisRows(
 
   const outbound = new Map<string, { total: number; sales: number; disposal: number; lastAt: string }>();
   for (const t of ledger) {
-    if (transactionDirection(t.type) !== 'out') continue;
+    // 売上返品は売れた数を取り消すので、期間内の出庫数・売上数から差し引く (最終出庫日は動かさない)
+    if (t.type === '売上返品') {
+      if (localDateKey(t.date) < from) continue;
+      const entry = outbound.get(t.productId) ?? { total: 0, sales: 0, disposal: 0, lastAt: '' };
+      entry.total -= t.quantity;
+      entry.sales -= t.quantity;
+      outbound.set(t.productId, entry);
+      continue;
+    }
+    // 仕入返品は需要ではない (仕入先へ戻しただけ) ので、出庫の勢いにも滞留の判定にも数えない
+    if (transactionDirection(t.type) !== 'out' || t.type === '仕入返品') continue;
     const entry = outbound.get(t.productId) ?? { total: 0, sales: 0, disposal: 0, lastAt: '' };
     // 最終出庫日は期間外の記録も見る (滞留日数は「いつから動いていないか」なので期間に縛れない)
     if (t.date > entry.lastAt) entry.lastAt = t.date;
@@ -3639,7 +3839,8 @@ export function stockAnalysisRows(
   const rows = products.map(p => {
     const entry = outbound.get(p.id);
     const quantity = totalQuantity(p);
-    const outboundQuantity = entry?.total ?? 0;
+    // 返品の方が多い期間でもマイナスの出庫にはしない
+    const outboundQuantity = Math.max(0, entry?.total ?? 0);
     const dailyOutbound = outboundQuantity / periodDays;
     const lastOutboundAt = entry?.lastAt ?? '';
     return {
@@ -3651,7 +3852,7 @@ export function stockAnalysisRows(
       quantity,
       stockValue: p.lots.reduce((s, l) => s + l.quantity * lotUnitCost(l, p), 0),
       outboundQuantity,
-      salesQuantity: entry?.sales ?? 0,
+      salesQuantity: Math.max(0, entry?.sales ?? 0),
       disposalQuantity: entry?.disposal ?? 0,
       outboundValue: outboundQuantity * p.costPrice,
       share: 0,
@@ -4215,6 +4416,93 @@ export function useInventory() {
       customerId: input.customerId,
     });
   }, [products, shipFefo]);
+
+  // ---- 返品 ----
+  // どちらも在庫が動くので帳票に1件ずつ記録する。計画は純粋関数 (planSalesReturn / planPurchaseReturn) に
+  // 任せ、モーダルのプレビューと実際の処理が食い違わないようにする。
+
+  /** 売上返品: 元の売上を1件選んで在庫へ戻す。戻せなかったときは null */
+  const returnSale = useCallback((input: SalesReturnInput): SalesReturnPlan | null => {
+    const plan = planSalesReturn(products, ledger, input);
+    if (plan.error || !plan.sale || !plan.product) return null;
+    const { sale, product } = plan;
+    const mergedPrice = mergedLotUnitPrice(plan.existingLot, product, plan.quantity, plan.unitCost);
+
+    setProducts(prev => {
+      const now = new Date().toISOString();
+      const next = prev.map(p => {
+        if (p.id !== product.id) return p;
+        const lots = plan.existingLot
+          ? p.lots.map(l => l.id === plan.existingLot!.id
+              ? { ...l, quantity: l.quantity + plan.quantity, ...(mergedPrice != null ? { unitPrice: mergedPrice } : {}) }
+              : l)
+          : [...p.lots, {
+              id: crypto.randomUUID(),
+              lotNo: plan.lotNo,
+              ...(plan.expiryDate ? { expiryDate: plan.expiryDate } : {}),
+              quantity: plan.quantity,
+              warehouseId: plan.warehouseId,
+              ...(mergedPrice != null ? { unitPrice: mergedPrice } : {}),
+            }];
+        return { ...p, lots, updatedAt: now };
+      });
+      save(next);
+      return next;
+    });
+
+    const customer = sale.customerId ? customerName(customers, sale.customerId) : '';
+    addTransaction({
+      type: '売上返品',
+      productId: product.id,
+      productName: product.name,
+      productSku: product.sku,
+      lotNo: plan.lotNo,
+      quantity: plan.quantity,
+      note: input.note?.trim() || (customer ? `売上返品（${customer}）` : '売上返品'),
+      toWarehouseId: plan.warehouseId,
+      // 元の売上の単価・得意先・原価・税率をそのまま写す (売上管理で同じ条件のマイナスの売上になる)
+      ...(sale.unitPrice != null ? { unitPrice: sale.unitPrice } : {}),
+      ...(sale.customerId ? { customerId: sale.customerId } : {}),
+      ...(sale.costUnitPrice != null ? { costUnitPrice: sale.costUnitPrice } : {}),
+      ...(sale.taxRate != null ? { taxRate: sale.taxRate } : {}),
+      returnOfTxnId: sale.id,
+    });
+    return plan;
+  }, [addTransaction, customers, ledger, products]);
+
+  /** 仕入返品: ロットを1つ選んで仕入先へ返す (在庫を減らす)。返せなかったときは null */
+  const returnToSupplier = useCallback((input: PurchaseReturnInput): PurchaseReturnPlan | null => {
+    const plan = planPurchaseReturn(products, suppliers, input);
+    if (plan.error || !plan.product || !plan.lot) return null;
+    const { product, lot } = plan;
+    const { inboundTxnId } = purchaseReturnDefaults(product, lot, ledger);
+
+    // 出庫と同じく、在庫0になったロットも残す (ロット行の出庫・FEFO出庫と同じ扱い)
+    setProducts(prev => {
+      const next = prev.map(p => p.id === product.id
+        ? { ...p, lots: p.lots.map(l => l.id === lot.id ? { ...l, quantity: l.quantity - plan.quantity } : l), updatedAt: new Date().toISOString() }
+        : p);
+      save(next);
+      return next;
+    });
+
+    const supplier = supplierName(suppliers, input.supplierId);
+    const unitPrice = Math.max(0, Math.round(input.unitPrice));
+    addTransaction({
+      type: '仕入返品',
+      productId: product.id,
+      productName: product.name,
+      productSku: product.sku,
+      lotNo: lot.lotNo,
+      quantity: plan.quantity,
+      note: input.note?.trim() || `仕入返品（${supplier}）`,
+      fromWarehouseId: lot.warehouseId,
+      supplierId: input.supplierId,
+      ...(unitPrice > 0 ? { unitPrice } : {}),
+      ...(inboundTxnId ? { returnOfTxnId: inboundTxnId } : {}),
+    });
+    return plan;
+  }, [addTransaction, ledger, products, suppliers]);
 
   // ---- 受注 (出荷予定) ----
   // 受注の作成・編集・キャンセルは在庫を動かさないので帳票には記録しない。
@@ -4854,5 +5142,5 @@ export function useInventory() {
     });
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument, returnSale, returnToSupplier };
 }

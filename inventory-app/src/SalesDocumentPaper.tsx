@@ -5,7 +5,7 @@ interface Props {
   doc: SalesDocument;
 }
 
-const yen = (n: number) => `¥${n.toLocaleString()}`;
+const yen = (n: number) => `${n < 0 ? '-' : ''}¥${Math.abs(n).toLocaleString()}`;
 
 /**
  * 納品書・請求書の紙面。発行前のプレビュー (SalesDocumentModal) と、発行済みの再表示
@@ -79,7 +79,7 @@ export function SalesDocumentPaper({ doc }: Props) {
           ) : doc.items.map(i => (
             <tr key={i.id}>
               {isInvoice && <td className="mono">{i.deliveryDate}</td>}
-              <td>{i.productName}{i.taxRate === REDUCED_TAX_RATE && ' ※'}</td>
+              <td>{i.productName}{i.quantity < 0 && '（返品）'}{i.taxRate === REDUCED_TAX_RATE && ' ※'}</td>
               <td className="mono">{i.productSku}</td>
               <td style={{ textAlign: 'right' }}>{i.quantity.toLocaleString()}</td>
               <td style={{ textAlign: 'right' }}>{yen(i.unitPrice)}</td>

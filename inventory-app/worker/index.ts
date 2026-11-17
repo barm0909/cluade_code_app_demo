@@ -99,6 +99,7 @@ interface StockTransaction {
   customerId?: string; // 売上出庫の売り先
   costUnitPrice?: number; // 売上出庫したロットの原価 (粗利の計算に使う)
   taxRate?: number; // 売上出庫した時点の消費税率 (%)
+  returnOfTxnId?: string; // 返品 (売上返品・仕入返品) の元取引の id
 }
 
 interface InboundPlan {
@@ -357,6 +358,7 @@ interface TransactionRow {
   customer_id: string | null;
   cost_unit_price: number | null;
   tax_rate: number | null;
+  return_of_txn_id: string | null;
 }
 
 async function readState(db: D1Database) {
@@ -365,7 +367,7 @@ async function readState(db: D1Database) {
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
     db.prepare('SELECT id, name FROM categories'),
-    db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id, customer_id, cost_unit_price, tax_rate FROM stock_transactions ORDER BY date DESC'),
+    db.prepare('SELECT id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id, customer_id, cost_unit_price, tax_rate, return_of_txn_id FROM stock_transactions ORDER BY date DESC'),
     db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
     db.prepare('SELECT id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount FROM purchase_order_prints ORDER BY printed_at DESC'),
@@ -425,6 +427,7 @@ async function readState(db: D1Database) {
     ...(r.customer_id != null ? { customerId: r.customer_id } : {}),
     ...(r.cost_unit_price != null ? { costUnitPrice: r.cost_unit_price } : {}),
     ...(r.tax_rate != null ? { taxRate: r.tax_rate } : {}),
+    ...(r.return_of_txn_id != null ? { returnOfTxnId: r.return_of_txn_id } : {}),
   }));
 
   const inboundPlans: InboundPlan[] = (plansRes.results as unknown as InboundPlanRow[]).map(r => ({
@@ -593,10 +596,10 @@ async function replaceCategories(db: D1Database, categories: Category[]) {
 async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
   const stmts = [db.prepare('DELETE FROM stock_transactions')];
   const insert = db.prepare(
-    'INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id, customer_id, cost_unit_price, tax_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id, customer_id, cost_unit_price, tax_rate, return_of_txn_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const t of ledger) {
-    stmts.push(insert.bind(t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null, t.unitPrice ?? null, t.supplierId ?? null, t.customerId ?? null, t.costUnitPrice ?? null, t.taxRate ?? null));
+    stmts.push(insert.bind(t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null, t.unitPrice ?? null, t.supplierId ?? null, t.customerId ?? null, t.costUnitPrice ?? null, t.taxRate ?? null, t.returnOfTxnId ?? null));
   }
   await db.batch(stmts);
 }

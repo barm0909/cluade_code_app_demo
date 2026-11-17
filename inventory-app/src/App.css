@@ -348,6 +348,19 @@ tr:hover td { background: #fafbff; }
 }
 .btn-move:hover { background: #7c4dff; color: white; }
 
+/* 仕入返品 (ロット行) と、売上管理の返品の行 */
+.btn-return {
+  padding: 3px 10px; font-size: 0.78rem; border-radius: 6px; cursor: pointer;
+  border: 1.5px solid #8d6e63; background: #efebe9; color: #6d4c41; font-weight: 600;
+}
+.btn-return:hover:not(:disabled) { background: #8d6e63; color: white; }
+.btn-return:disabled { opacity: 0.4; cursor: not-allowed; }
+.sales-return-row td { background: #fff8f6; }
+.return-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+  font-size: 0.72rem; font-weight: 700; color: #c62828; background: #ffebee; border: 1px solid #ef9a9a;
+}
+
 .btn-ship {
   padding: 3px 10px; font-size: 0.78rem; border-radius: 6px; cursor: pointer;
   border: 1.5px solid #e53935; background: #fce8e8; color: #e53935; font-weight: 600;

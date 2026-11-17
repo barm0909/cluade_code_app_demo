@@ -11,6 +11,7 @@ import {
   formatLedgerDateTime,
   isMaterial,
   productTaxRate,
+  returnedQuantities,
   saleAmounts,
   salesCustomerSummaries,
   salesDailySummaries,
@@ -24,11 +25,14 @@ import type {
   Product,
   SaleInput,
   SalesFilter,
+  SalesReturnInput,
+  SalesReturnPlan,
   SalesSummary,
   StockTransaction,
   Warehouse,
 } from './useInventory';
 import { SalesEntryModal } from './SalesEntryModal';
+import { SalesReturnModal } from './SalesReturnModal';
 import { WarehouseDot } from './badges';
 import { useNotify } from './useConfirm';
 
@@ -39,6 +43,8 @@ interface Props {
   warehouses: Warehouse[];
   /** 売上登録 (FEFO出庫 + 実売単価・得意先の記録)。引当結果を返す */
   onRecordSale: (input: SaleInput) => { allocated: number; shortage: number; cost: number; allocations?: { quantity: number }[] };
+  /** 売上返品 (元の売上を在庫へ戻し、マイナスの売上として記録する)。戻せなかったときは null */
+  onReturnSale: (input: SalesReturnInput) => SalesReturnPlan | null;
 }
 
 /** 集計の切り口。1列目の見出しだけが変わるので、表そのものは1つで描ける */
@@ -50,21 +56,23 @@ const SUMMARY_MODES = {
 
 type ViewMode = 'detail' | keyof typeof SUMMARY_MODES;
 
-const yen = (v: number) => `¥${Math.round(v).toLocaleString()}`;
+const yen = (v: number) => `${v < 0 ? '-' : ''}¥${Math.abs(Math.round(v)).toLocaleString()}`;
 const percent = (v: number) => `${(v * 100).toFixed(1)}%`;
 
 /**
  * 売上管理タブ。帳票の「売上出庫」を売上明細として一覧し、商品別・得意先別・日別に集計する。
- * 「+ 売上を登録」からの売上計上 (FEFO出庫 + 実売単価・得意先の記録) もこの画面から行う。
+ * 「+ 売上を登録」からの売上計上 (FEFO出庫 + 実売単価・得意先の記録) と、明細の「返品」からの
+ * 売上返品 (SalesReturnModal → returnSale) もこの画面から行う。返品はマイナスの明細として並ぶ。
  *
  * 絞り込み・集計・CSV はすべて useInventory.ts の純粋関数 (salesRows / filterSales /
  * salesTotals / salesProductSummaries / salesCustomerSummaries / salesDailySummaries) に任せ、
  * この画面は表示と操作の受け渡しだけを持つ (原価履歴・在庫分析と同じ構成)。
  */
-export function SalesView({ ledger, products, customers, warehouses, onRecordSale }: Props) {
+export function SalesView({ ledger, products, customers, warehouses, onRecordSale, onReturnSale }: Props) {
   const [filter, setFilter] = useState<SalesFilter>(EMPTY_SALES_FILTER);
   const [mode, setMode] = useState<ViewMode>('detail');
   const [entryOpen, setEntryOpen] = useState(false);
+  const [returningTxnId, setReturningTxnId] = useState<string | null>(null);
   const { notify, notifyDialog } = useNotify();
 
   const set = <K extends keyof SalesFilter>(key: K, value: SalesFilter[K]) =>
@@ -86,6 +94,23 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
   const estimatedCount = useMemo(() => filtered.filter(r => r.estimatedPrice || r.estimatedCost).length, [filtered]);
 
   const warehouseById = useMemo(() => new Map(warehouses.map(w => [w.id, w])), [warehouses]);
+  const returned = useMemo(() => returnedQuantities(ledger), [ledger]);
+  const returningSale = returningTxnId ? ledger.find(t => t.id === returningTxnId) ?? null : null;
+
+  const handleReturn = async (input: SalesReturnInput) => {
+    const plan = onReturnSale(input);
+    setReturningTxnId(null);
+    if (!plan) {
+      await notify('返品できませんでした。返品できる数量と戻し先の倉庫を確認してください。', '売上返品');
+      return;
+    }
+    await notify(
+      `${plan.product?.name ?? '商品'}を${plan.quantity}個 返品として在庫に戻しました。`
+      + `
+売上から ${yen(plan.amount)}（税抜）を差し引いています。`,
+      '売上返品',
+    );
+  };
 
   const handleRecordSale = async (input: SaleInput) => {
     const product = products.find(p => p.id === input.productId);
@@ -116,6 +141,9 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
           <div className="stat-label">売上高（税抜）</div>
           <div className="stat-value">{yen(totals.amount)}</div>
           <div className="stat-sub">{totals.count}件 / {totals.quantity.toLocaleString()}個</div>
+          {totals.returnCount > 0 && (
+            <div className="stat-sub">うち返品 {totals.returnCount}件 −{yen(totals.returnAmount)}</div>
+          )}
         </div>
         <div className="stat-card">
           <div className="stat-label">税込売上高</div>
@@ -148,7 +176,7 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
         <div className="dashboard-section-head">
           <h3 className="dashboard-section-title">売上実績</h3>
           <span className="dashboard-section-note">
-            帳票の「売上出庫」から組み立てています（移動・調整出庫・廃棄は売上に含みません）
+            帳票の「売上出庫」と「売上返品」から組み立てています（返品はマイナスの売上。移動・調整出庫・廃棄は売上に含みません）
           </span>
           <button className="btn-primary" onClick={() => setEntryOpen(true)} disabled={!products.some(p => !isMaterial(p))}>
             + 売上を登録
@@ -249,13 +277,19 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
                   <th style={{ textAlign: 'right' }}>原価</th>
                   <th style={{ textAlign: 'right' }}>粗利</th>
                   <th style={{ textAlign: 'right' }}>粗利率</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(r => (
-                  <tr key={r.txnId}>
+                {filtered.map(r => {
+                  const returnedQty = r.isReturn ? 0 : returned.get(r.txnId) ?? 0;
+                  return (
+                  <tr key={r.txnId} className={r.isReturn ? 'sales-return-row' : ''}>
                     <td className="mono">{formatLedgerDateTime(r.date)}</td>
-                    <td><strong>{r.productName}</strong></td>
+                    <td>
+                      <strong>{r.productName}</strong>
+                      {r.isReturn && <span className="return-badge">返品</span>}
+                    </td>
                     <td className="mono">{r.productSku}</td>
                     <td className="mono">{r.lotNo}</td>
                     <td><WarehouseDot warehouse={warehouseById.get(r.warehouseId)} /></td>
@@ -275,8 +309,20 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
                     </td>
                     <td style={{ textAlign: 'right' }} className={r.profit >= 0 ? 'qty-in' : 'qty-out'}>{yen(r.profit)}</td>
                     <td style={{ textAlign: 'right' }}>{percent(r.profitRate)}</td>
+                    <td>
+                      {!r.isReturn && (
+                        <button
+                          className="btn-edit"
+                          disabled={returnedQty >= r.quantity}
+                          title={returnedQty >= r.quantity ? 'すべて返品済みです' : 'この売上の返品を登録します'}
+                          onClick={() => setReturningTxnId(r.txnId)}
+                        >返品</button>
+                      )}
+                      {returnedQty > 0 && <span className="stat-sub"> 返品済 {returnedQty}</span>}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           ) : (
@@ -331,6 +377,17 @@ export function SalesView({ ledger, products, customers, warehouses, onRecordSal
           warehouses={warehouses}
           onSubmit={handleRecordSale}
           onClose={() => setEntryOpen(false)}
+        />
+      )}
+      {returningSale && (
+        <SalesReturnModal
+          sale={returningSale}
+          products={products}
+          ledger={ledger}
+          customers={customers}
+          warehouses={warehouses}
+          onSubmit={handleReturn}
+          onClose={() => setReturningTxnId(null)}
         />
       )}
       {notifyDialog}

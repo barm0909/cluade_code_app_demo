@@ -117,7 +117,7 @@ describe('SalesDocumentView', () => {
     const initial = buildSalesDocumentItems({
       kind: '請求書', issueDate: '2026-07-01', customer: CUSTOMERS[0], periodFrom: '2026-06-01', periodTo: '2026-06-30', dueDate: '2026-07-31',
       issuer: { name: '自社', address: '', phone: '', contact: '', registrationNo: '', bankAccount: '' },
-      lines: [{ key: 'k', deliveryDate: '2026-06-10', productId: 'p1', productName: '牛乳', productSku: 'ML-001', quantity: 1, unitPrice: 100, amount: 100, taxRate: 8, txnIds: ['old'], estimatedPrice: false, issuedNo: '' }],
+      lines: [{ key: 'k', deliveryDate: '2026-06-10', productId: 'p1', productName: '牛乳', productSku: 'ML-001', quantity: 1, unitPrice: 100, amount: 100, taxRate: 8, txnIds: ['old'], estimatedPrice: false, issuedNo: '', isReturn: false }],
     }, [], 'doc1', '2026-07-01T00:00:00.000Z');
     render(<Harness initial={initial} />);
     expect(screen.getByText('I20260701-001')).toBeInTheDocument();
@@ -131,7 +131,7 @@ describe('SalesDocumentView', () => {
     const initial = buildSalesDocumentItems({
       kind: '請求書', issueDate: '2026-07-01', customer: CUSTOMERS[0], periodFrom: '2026-06-01', periodTo: '2026-06-30', dueDate: '2026-07-31',
       issuer: { name: '自社', address: '', phone: '', contact: '', registrationNo: 'T1234567890123', bankAccount: '〇〇銀行' },
-      lines: [{ key: 'k', deliveryDate: '2026-06-10', productId: 'p1', productName: '牛乳', productSku: 'ML-001', quantity: 1, unitPrice: 100, amount: 100, taxRate: 8, txnIds: ['old'], estimatedPrice: false, issuedNo: '' }],
+      lines: [{ key: 'k', deliveryDate: '2026-06-10', productId: 'p1', productName: '牛乳', productSku: 'ML-001', quantity: 1, unitPrice: 100, amount: 100, taxRate: 8, txnIds: ['old'], estimatedPrice: false, issuedNo: '', isReturn: false }],
     }, [], 'doc1', '2026-07-01T00:00:00.000Z');
     render(<Harness initial={initial} />);
     await user.click(screen.getByRole('button', { name: '再表示' }));
