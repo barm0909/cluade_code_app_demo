@@ -106,8 +106,9 @@ export function SalesDocumentModal({ kind, sales, customers, items, onIssue, onC
   const to = isInvoice ? period.to : deliveryDate;
 
   const lines = useMemo(
-    () => salesDocumentLines(sales, customerId, from, to, issued),
-    [sales, customerId, from, to, issued],
+    // 返品は請求書でだけ差し引く (納品書は届けたものの書類なので返品を載せない)
+    () => salesDocumentLines(sales, customerId, from, to, issued, { includeReturns: isInvoice }),
+    [sales, customerId, from, to, issued, isInvoice],
   );
   const selectable = lines.filter(l => !l.issuedNo);
   const selected = selectable.filter(l => !excluded.has(l.key));
@@ -278,12 +279,13 @@ export function SalesDocumentModal({ kind, sales, customers, items, onIssue, onC
                         <td className="mono">{l.deliveryDate}</td>
                         <td>
                           {l.productName}
+                          {l.isReturn && <span className="return-badge">返品</span>}
                           {locked && <span className="label-hint"> 発行済み（{l.issuedNo}）</span>}
                           {l.estimatedPrice && <span className="label-hint" title="販売単価が記録されていないため、商品の販売定価で計算しています"> 定価で計算</span>}
                         </td>
                         <td style={{ textAlign: 'right' }}>{l.quantity.toLocaleString()}</td>
                         <td style={{ textAlign: 'right' }}>¥{l.unitPrice.toLocaleString()}</td>
-                        <td style={{ textAlign: 'right' }}>¥{l.amount.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right' }}>{l.amount < 0 ? '-' : ''}¥{Math.abs(l.amount).toLocaleString()}</td>
                         <td>{l.taxRate}%</td>
                       </tr>
                     );

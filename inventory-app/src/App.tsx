@@ -4,6 +4,7 @@ import type { Customer, Product, Lot, LotTraceKey, SaleFields, Warehouse, SortFi
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
 import { ShipFefoModal } from './ShipFefoModal';
+import { PurchaseReturnModal } from './PurchaseReturnModal';
 import { DashboardView } from './DashboardView';
 import { InboundPlanView } from './InboundPlanView';
 import { SalesOrderView } from './SalesOrderView';
@@ -189,13 +190,15 @@ function StockIoModal({ lot, product, warehouses, customers, direction, onSubmit
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument, returnSale, returnToSupplier } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
   // FEFO出庫は商品単位なので、商品そのものではなく id を持って毎回最新の商品を引き直す
   const [fefoProductId, setFefoProductId] = useState<string | null>(null);
   const [ioLot, setIoLot] = useState<{ product: Product; lot: Lot; direction: 'in' | 'out' } | null>(null);
+  // 仕入返品するロット (ロット行の「返品」から開く)
+  const [returnLot, setReturnLot] = useState<{ product: Product; lot: Lot } | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -382,6 +385,7 @@ export default function App() {
           customers={customers}
           warehouses={warehouses}
           onRecordSale={recordSale}
+          onReturnSale={returnSale}
         />
       ) : activeTab === 'salesDocs' ? (
         <SalesDocumentView
@@ -524,6 +528,12 @@ export default function App() {
                                           <button className="btn-ship" onClick={() => setIoLot({ product: p, lot: l, direction: 'out' })} disabled={l.quantity === 0}>出庫</button>
                                           <button className="btn-move" onClick={() => setMovingLot({ product: p, lot: l })}>移動</button>
                                           <button
+                                            className="btn-return"
+                                            onClick={() => setReturnLot({ product: p, lot: l })}
+                                            disabled={l.quantity === 0}
+                                            title="このロットを仕入先へ返品します"
+                                          >返品</button>
+                                          <button
                                             className="btn-trace"
                                             onClick={() => {
                                               setTraceTarget({ productId: p.id, lotNo: l.lotNo });
@@ -598,6 +608,26 @@ export default function App() {
           direction={ioLot.direction}
           onSubmit={(qty, type, sale) => adjustLotQuantity(ioLot.product.id, ioLot.lot.id, ioLot.direction === 'in' ? qty : -qty, type, sale)}
           onClose={() => setIoLot(null)}
+        />
+      )}
+      {returnLot !== null && (
+        <PurchaseReturnModal
+          product={returnLot.product}
+          lot={returnLot.lot}
+          ledger={ledger}
+          suppliers={suppliers}
+          warehouses={warehouses}
+          onSubmit={input => {
+            const plan = returnToSupplier(input);
+            setReturnLot(null);
+            notify(
+              plan
+                ? `${returnLot.product.name}（ロット ${returnLot.lot.lotNo}）を ${plan.quantity} 個、仕入先へ返品しました。`
+                : '返品できませんでした。数量と仕入先を確認してください。',
+              '仕入返品',
+            );
+          }}
+          onClose={() => setReturnLot(null)}
         />
       )}
       {fefoTarget !== null && (

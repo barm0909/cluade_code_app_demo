@@ -166,7 +166,7 @@ describe('salesTotals', () => {
 
   it('0件なら全て0（粗利率も0）', () => {
     expect(salesTotals([])).toEqual({
-      count: 0, quantity: 0, amount: 0, tax: 0, amountWithTax: 0, cost: 0, profit: 0, profitRate: 0, averageUnitPrice: 0,
+      count: 0, quantity: 0, amount: 0, tax: 0, amountWithTax: 0, cost: 0, profit: 0, profitRate: 0, averageUnitPrice: 0, returnCount: 0, returnAmount: 0,
       byTaxRate: [
         { taxRate: 8, amount: 0, tax: 0, amountWithTax: 0 },
         { taxRate: 10, amount: 0, tax: 0, amountWithTax: 0 },

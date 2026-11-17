@@ -65,6 +65,7 @@ const defaultProps = {
   customers: CUSTOMERS,
   warehouses: WAREHOUSES,
   onRecordSale: vi.fn(() => ({ allocated: 3, shortage: 0, cost: 354 })),
+  onReturnSale: vi.fn(() => null),
 };
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -269,5 +270,62 @@ describe('SalesView — 資材', () => {
   it('資材しかないときは売上を登録できない', () => {
     render(<SalesView {...defaultProps} products={[LABEL]} />);
     expect(screen.getByRole('button', { name: '+ 売上を登録' })).toBeDisabled();
+  });
+});
+
+describe('SalesView — 売上返品', () => {
+  const RETURN: StockTransaction = {
+    ...sale({ id: 'r1', date: at('2026-06-12T09:00:00'), quantity: 4 }),
+    type: '売上返品', fromWarehouseId: undefined, toWarehouseId: DEFAULT_WAREHOUSE_ID, returnOfTxnId: 't1', note: '売上返品（みどりストア）',
+  };
+
+  it('返品はマイナスの明細として並び、売上高から差し引かれる', () => {
+    render(<SalesView {...defaultProps} ledger={[RETURN, ...LEDGER]} />);
+    const row = within(screen.getByRole('table')).getAllByRole('row').slice(1)[0];
+    expect(within(row).getByText('返品')).toBeInTheDocument();
+    expect(within(row).getByText('-4')).toBeInTheDocument();
+    expect(within(row).getAllByText('-¥760').length).toBeGreaterThan(0);
+    expect(screen.getByText(/うち返品 1件 −¥760/)).toBeInTheDocument();
+    // 元の売上には返品済みの数が出る
+    const original = within(screen.getByRole('table')).getAllByRole('row').find(r => within(r).queryByText('返品済 4'));
+    expect(original).toBeTruthy();
+  });
+
+  it('すべて返品済みの売上は返品ボタンが押せない', () => {
+    render(<SalesView {...defaultProps} ledger={[{ ...RETURN, quantity: 10 }, ...LEDGER]} />);
+    const original = within(screen.getByRole('table')).getAllByRole('row').find(r => within(r).queryByText('返品済 10'))!;
+    expect(within(original).getByRole('button', { name: '返品' })).toBeDisabled();
+  });
+
+  it('返品ボタンから数量と戻し先を入力して返品できる', async () => {
+    const user = userEvent.setup();
+    const onReturnSale = vi.fn(() => ({ quantity: 3, amount: 570, product: PRODUCTS[0] }) as never);
+    render(<SalesView {...defaultProps} onReturnSale={onReturnSale} />);
+    const row = within(screen.getByRole('table')).getAllByRole('row').find(r => within(r).queryByText('10') && within(r).queryByText('牛乳'))!;
+    await user.click(within(row).getByRole('button', { name: '返品' }));
+
+    const qty = screen.getByLabelText('返品数量');
+    expect(qty).toHaveValue(10); // 既定は返品できる数量すべて
+    await user.clear(qty);
+    await user.type(qty, '3');
+    await user.selectOptions(screen.getByLabelText(/戻し先の倉庫/), 'wh-hold');
+    expect(screen.getByText(/差し引く売上 ¥570（税抜）/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '返品する' }));
+
+    expect(onReturnSale).toHaveBeenCalledWith({ saleTxnId: 't1', quantity: 3, warehouseId: 'wh-hold', note: '' });
+    expect(await screen.findByText(/3個 返品として在庫に戻しました/)).toBeInTheDocument();
+  });
+
+  it('返品できる数量を超えると返品できない', async () => {
+    const user = userEvent.setup();
+    render(<SalesView {...defaultProps} ledger={[{ ...RETURN, quantity: 8 }, ...LEDGER]} />);
+    const original = within(screen.getByRole('table')).getAllByRole('row').find(r => within(r).queryByText('返品済 8'))!;
+    await user.click(within(original).getByRole('button', { name: '返品' }));
+    const qty = screen.getByLabelText('返品数量');
+    expect(qty).toHaveValue(2);
+    await user.clear(qty);
+    await user.type(qty, '5');
+    expect(screen.getByText('返品できるのは 2 個までです')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '返品する' })).toBeDisabled();
   });
 });
