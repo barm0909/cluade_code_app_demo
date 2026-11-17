@@ -525,6 +525,25 @@ tr:hover td { background: #fafbff; }
 .po-check-col input { cursor: pointer; }
 .po-row-excluded td { color: #bbb; }
 
+/* 納品書・請求書 (紙面は発注書の .po-* を土台に、合計欄などを足す) */
+.sd-summary {
+  display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 8px 24px;
+  border-bottom: 2px solid #333; padding-bottom: 6px; margin-bottom: 14px;
+}
+.sd-summary-main { display: flex; align-items: baseline; gap: 16px; }
+.sd-summary-main strong { font-size: 1.4rem; }
+.sd-summary-sub { display: flex; flex-direction: column; font-size: 0.85rem; color: #333; text-align: right; }
+.sd-totals { margin: 12px 0 0 auto; width: auto; min-width: 280px; }
+.sd-totals th, .sd-totals td { padding: 4px 10px; border: none; font-size: 0.88rem; }
+.sd-totals th { text-align: left; font-weight: 400; color: #555; }
+.sd-totals td { text-align: right; }
+.sd-totals-grand th, .sd-totals-grand td { border-top: 2px solid #ccc; font-weight: 700; color: #222; }
+.sd-note { font-size: 0.8rem; color: #555; margin: 10px 0 0; }
+.sd-bank { margin-top: 14px; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.88rem; }
+.sd-bank-head { font-weight: 700; margin-bottom: 2px; }
+.sd-issuer summary { cursor: pointer; font-size: 0.9rem; font-weight: 600; color: #444; margin-bottom: 10px; }
+.sd-error { margin: 0 auto 0 0; align-self: center; }
+
 @media print {
   /* アプリ本体を丸ごと隠す (非表示にするだけの visibility:hidden だと高さが残り、
      発注書が1ページに収まる内容でも余計な空白ページができてしまう) */
