@@ -442,6 +442,7 @@ interface ServerState {
   customers?: Customer[]; // 得意先マスタも同様 (未導入のサーバーからは返ってこない)
   salesOrders?: SalesOrder[]; // 受注も同様 (未導入のサーバーからは返ってこない)
   salesDocumentItems?: SalesDocumentItem[]; // 納品書・請求書の発行履歴も同様
+  paymentItems?: PaymentItem[]; // 入金も同様 (未導入のサーバーからは返ってこない)
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -454,7 +455,7 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers' | 'sales-orders' | 'sales-documents';
+type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers' | 'sales-orders' | 'sales-documents' | 'payments';
 
 function persist(slice: Slice, data: unknown) {
   try {
@@ -711,6 +712,10 @@ function saveSalesDocumentItems(items: SalesDocumentItem[]) {
   persist('sales-documents', items);
 }
 
+function savePaymentItems(items: PaymentItem[]) {
+  persist('payments', items);
+}
+
 // ---- CSV エクスポートの種類 ----
 // 画面に CSV エクスポートボタンが複数あり、どれも中身が違う。ボタンの表示名・ツールチップ・
 // 出力ファイル名をここ1箇所で決めることで、「どのボタンから何のファイルが出るのか」を
@@ -732,6 +737,9 @@ export const CSV_EXPORTS = {
   customer: { label: '得意先一覧', description: '得意先マスタと売上実績の状況' },
   salesOrder: { label: '受注一覧', description: '絞り込み後の受注（出荷予定）と引当の状況' },
   salesDocument: { label: '納品書・請求書', description: '発行した納品書・請求書の明細' },
+  receivable: { label: '請求残高', description: '絞り込み後の請求書ごとの入金状況と残高' },
+  customerReceivable: { label: '売掛金残高', description: '得意先ごとの請求残高・未請求売上・未消込入金' },
+  payment: { label: '入金履歴', description: '絞り込み後の入金と請求書への消込' },
 } as const;
 
 export type CsvExportKind = keyof typeof CSV_EXPORTS;
@@ -3470,6 +3478,466 @@ export function exportSalesDocumentCsv(docs: SalesDocument[]) {
 }
 
 // ---------------------------------------------------------------------------
+// 入金管理・売掛金 (docs/receivable-feature.md)
+// 発行した請求書 (salesDocumentItems の 請求書) に入金を充てて (消込)、請求書ごとの残高と
+// 得意先ごとの売掛金残高を出す。入金は paymentItems に保存し、状態 (未入金/一部入金/入金済) や
+// 残高・期限超過は保存せず毎回計算する (入荷予定・受注の状態と同じ方針)。
+// 在庫は動かないので帳票には何も書かない。
+//
+// 1回の入金 (振込1回) は receiptId でまとめ、充てた請求書ごとに1行に分けて持つ。
+// 請求書に充てきれなかった分は documentId が空の行 (未消込 = 前受・過入金) として残す。
+// 振込手数料 (先方が差し引いて振り込んだ額) は入金額と合わせて請求書の消込に充てる。
+// ---------------------------------------------------------------------------
+
+export type PaymentMethod = '振込' | '現金' | '手形' | '相殺' | 'その他';
+export const PAYMENT_METHODS: PaymentMethod[] = ['振込', '現金', '手形', '相殺', 'その他'];
+
+/** 入金の明細1行 (永続化の単位)。同じ receiptId の行が1回の入金 */
+export interface PaymentItem {
+  id: string;
+  receiptId: string;
+  customerId: string;
+  paymentDate: string; // 入金日 YYYY-MM-DD
+  method: PaymentMethod;
+  documentId: string; // 消込先の請求書 ('' = 未消込)
+  documentNo: string; // 消込先の請求書番号 (表示用のスナップショット)
+  amount: number; // この行の入金額
+  fee: number; // この行に充てた振込手数料
+  note: string;
+  createdAt: string; // 登録操作の日時 (ISO)
+}
+
+/** 請求書の入金状況。保存せず、請求額と消込額から毎回求める */
+export type InvoicePaymentStatus = '未入金' | '一部入金' | '入金済';
+export const INVOICE_PAYMENT_STATUSES: InvoicePaymentStatus[] = ['未入金', '一部入金', '入金済'];
+
+/** 請求書1枚の入金状況 (入金管理の「請求書別」の1行) */
+export interface ReceivableRow {
+  documentId: string;
+  documentNo: string;
+  customerId: string;
+  customerName: string; // 請求書を発行した時点の得意先名
+  issueDate: string;
+  dueDate: string; // お支払期限 ('' = 期限なし)
+  periodFrom: string;
+  periodTo: string;
+  billed: number; // 請求額 (税込)
+  paid: number; // 消込済みの額 (入金額 + 振込手数料)
+  remaining: number; // 残高 = billed - paid
+  status: InvoicePaymentStatus;
+  /** お支払期限を過ぎて残高がある日数 (期限内・入金済は 0) */
+  overdueDays: number;
+  lastPaymentDate: string; // 最後に入金を充てた日 ('' = なし)
+}
+
+/** 端末のローカル日付で今日の YYYY-MM-DD */
+export function todayKey(now = new Date()): string {
+  return localDateKey(now.toISOString());
+}
+
+export function invoicePaymentStatus(billed: number, paid: number): InvoicePaymentStatus {
+  // 返品だけの請求書など請求額が 0 以下のものは、回収するものがないので入金済扱い
+  if (billed <= 0 || paid >= billed) return '入金済';
+  return paid > 0 ? '一部入金' : '未入金';
+}
+
+/**
+ * 発行した請求書ごとの入金状況。納品書は請求ではないので含めない。
+ * 並びは お支払期限の早い順 (期限なしは最後) → 発行日 → 書類番号。
+ */
+export function receivableRows(
+  items: SalesDocumentItem[],
+  payments: PaymentItem[],
+  today = todayKey(),
+): ReceivableRow[] {
+  const paidByDoc = new Map<string, { paid: number; last: string }>();
+  for (const p of payments) {
+    if (!p.documentId) continue;
+    const cur = paidByDoc.get(p.documentId) ?? { paid: 0, last: '' };
+    cur.paid += p.amount + p.fee;
+    if (p.paymentDate > cur.last) cur.last = p.paymentDate;
+    paidByDoc.set(p.documentId, cur);
+  }
+  return salesDocuments(items.filter(i => i.kind === '請求書'))
+    .map(doc => {
+      const billed = doc.totals.amountWithTax;
+      const { paid, last } = paidByDoc.get(doc.documentId) ?? { paid: 0, last: '' };
+      const remaining = billed - paid;
+      const overdueDays = remaining > 0 && doc.dueDate && doc.dueDate < today ? daysBetweenKeys(doc.dueDate, today) : 0;
+      return {
+        documentId: doc.documentId,
+        documentNo: doc.documentNo,
+        customerId: doc.customerId,
+        customerName: doc.customerName,
+        issueDate: doc.issueDate,
+        dueDate: doc.dueDate,
+        periodFrom: doc.periodFrom,
+        periodTo: doc.periodTo,
+        billed,
+        paid,
+        remaining,
+        status: invoicePaymentStatus(billed, paid),
+        overdueDays,
+        lastPaymentDate: last,
+      };
+    })
+    .sort((a, b) =>
+      (a.dueDate || '9999-99-99').localeCompare(b.dueDate || '9999-99-99')
+      || a.issueDate.localeCompare(b.issueDate)
+      || a.documentNo.localeCompare(b.documentNo));
+}
+
+/** 請求書別の絞り込み。'未回収' は 未入金 + 一部入金、'期限超過' はお支払期限を過ぎて残高があるもの */
+export type ReceivableStatusFilter = '' | InvoicePaymentStatus | '未回収' | '期限超過';
+
+export interface ReceivableFilter {
+  keyword: string; // 請求書番号・得意先名の部分一致
+  customerId: string;
+  status: ReceivableStatusFilter;
+}
+
+/** 入金管理を開いたときの絞り込み。回収が要るものだけを見せる */
+export const DEFAULT_RECEIVABLE_FILTER: ReceivableFilter = { keyword: '', customerId: '', status: '未回収' };
+
+export function filterReceivables(rows: ReceivableRow[], filter: ReceivableFilter): ReceivableRow[] {
+  const q = filter.keyword.trim().toLowerCase();
+  return rows.filter(r => {
+    if (filter.customerId && r.customerId !== filter.customerId) return false;
+    if (filter.status === '未回収' && r.status === '入金済') return false;
+    if (filter.status === '期限超過' && r.overdueDays <= 0) return false;
+    if ((INVOICE_PAYMENT_STATUSES as string[]).includes(filter.status) && r.status !== filter.status) return false;
+    if (q && !(r.documentNo.toLowerCase().includes(q) || r.customerName.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+/** 得意先1件の売掛金 (入金管理の「得意先別」の1行) */
+export interface CustomerReceivable {
+  customerId: string;
+  customerName: string;
+  invoiceBalance: number; // 請求済みで未回収の額 (請求書の残高の合計)
+  overdue: number; // うちお支払期限を過ぎている額
+  openInvoices: number; // 残高のある請求書の枚数
+  unbilled: number; // まだ請求書に載せていない売上 (税込。返品は差し引く)
+  unapplied: number; // 請求書に充てていない入金 (前受・過入金)
+  balance: number; // 売掛金残高 = invoiceBalance + unbilled - unapplied
+  lastPaymentDate: string;
+}
+
+/**
+ * 得意先ごとの売掛金。請求済みの残高に、まだ請求していない売上を足し、どの請求書にも充てていない
+ * 入金を差し引く。未請求売上の税込金額は売上管理と同じ明細ごとの端数処理 (salesRows の amountWithTax)
+ * なので、あとで請求書にすると (税率ごとに1回の端数処理で) 数円ずれることがある。
+ * 得意先なしの売上は請求できないので含めない。残高・未請求・未消込がすべて 0 の得意先は出さない。
+ * 並びは 売掛金残高の多い順 → 得意先名。
+ */
+export function customerReceivables(
+  receivables: ReceivableRow[],
+  sales: SalesRow[],
+  items: SalesDocumentItem[],
+  payments: PaymentItem[],
+  customers: Customer[],
+): CustomerReceivable[] {
+  const nameById = new Map(customers.map(c => [c.id, c.name]));
+  const byId = new Map<string, CustomerReceivable>();
+  const get = (customerId: string, fallbackName = '') => {
+    let r = byId.get(customerId);
+    if (!r) {
+      r = {
+        customerId,
+        customerName: nameById.get(customerId) ?? (fallbackName || '（削除された得意先）'),
+        invoiceBalance: 0, overdue: 0, openInvoices: 0, unbilled: 0, unapplied: 0, balance: 0, lastPaymentDate: '',
+      };
+      byId.set(customerId, r);
+    }
+    return r;
+  };
+  for (const r of receivables) {
+    const c = get(r.customerId, r.customerName);
+    c.invoiceBalance += r.remaining;
+    if (r.overdueDays > 0) c.overdue += r.remaining;
+    if (r.remaining > 0) c.openInvoices++;
+  }
+  const invoiced = issuedSalesDocumentNos(items, '請求書');
+  for (const s of sales) {
+    if (!s.customerId || invoiced.has(s.txnId)) continue;
+    get(s.customerId, s.customerName).unbilled += s.amountWithTax;
+  }
+  for (const p of payments) {
+    const c = get(p.customerId);
+    if (!p.documentId) c.unapplied += p.amount + p.fee;
+    if (p.paymentDate > c.lastPaymentDate) c.lastPaymentDate = p.paymentDate;
+  }
+  return [...byId.values()]
+    .map(c => ({ ...c, balance: c.invoiceBalance + c.unbilled - c.unapplied }))
+    .filter(c => c.invoiceBalance !== 0 || c.unbilled !== 0 || c.unapplied !== 0)
+    .sort((a, b) => b.balance - a.balance || a.customerName.localeCompare(b.customerName));
+}
+
+export interface ReceivableTotals {
+  invoiceBalance: number;
+  openInvoices: number;
+  overdue: number;
+  overdueInvoices: number;
+  unbilled: number;
+  unapplied: number;
+  balance: number;
+  /** 今月 (today の月) の入金額 (振込手数料は含めない) */
+  receivedThisMonth: number;
+}
+
+export function receivableTotals(
+  receivables: ReceivableRow[],
+  customerRows: CustomerReceivable[],
+  payments: PaymentItem[],
+  today = todayKey(),
+): ReceivableTotals {
+  const month = today.slice(0, 7);
+  return {
+    invoiceBalance: customerRows.reduce((s, c) => s + c.invoiceBalance, 0),
+    openInvoices: receivables.filter(r => r.remaining > 0).length,
+    overdue: receivables.reduce((s, r) => s + (r.overdueDays > 0 ? r.remaining : 0), 0),
+    overdueInvoices: receivables.filter(r => r.overdueDays > 0).length,
+    unbilled: customerRows.reduce((s, c) => s + c.unbilled, 0),
+    unapplied: customerRows.reduce((s, c) => s + c.unapplied, 0),
+    balance: customerRows.reduce((s, c) => s + c.balance, 0),
+    receivedThisMonth: payments.filter(p => p.paymentDate.startsWith(month)).reduce((s, p) => s + p.amount, 0),
+  };
+}
+
+/** 入金の入力値 (入金登録モーダルから) */
+export interface PaymentInput {
+  customerId: string;
+  paymentDate: string;
+  method: PaymentMethod;
+  amount: number; // 入金額 (実際に受け取った額)
+  fee: number; // 振込手数料 (先方が差し引いた額。請求額の消込に含める)
+  /** 充てる請求書。お支払期限の早いものから順に充てる */
+  documentIds: string[];
+  note: string;
+}
+
+/** 請求書1枚への充当 */
+export interface PaymentAllocation {
+  documentId: string;
+  documentNo: string;
+  dueDate: string;
+  remainingBefore: number;
+  applied: number; // この請求書に充てた額 (amount + fee)
+  amount: number;
+  fee: number;
+  remainingAfter: number;
+}
+
+export interface PaymentPlan {
+  allocations: PaymentAllocation[];
+  /** 請求書に充てきれず未消込として残す入金額 */
+  unappliedAmount: number;
+  /** 未消込に残る振込手数料 (請求書を選ばなかったときなど) */
+  unappliedFee: number;
+  total: number; // amount + fee
+  /** 登録できない理由 (できるなら空文字) */
+  error: string;
+}
+
+/** 入金を登録できない理由 (できるなら空文字)。モーダルのボタンと recordPayment で共有する */
+export function paymentValidationError(input: PaymentInput): string {
+  if (!input.customerId) return '得意先を選んでください';
+  if (!input.paymentDate) return '入金日を入力してください';
+  if (!Number.isInteger(input.amount) || input.amount <= 0) return '入金額は1円以上の整数で入力してください';
+  if (!Number.isInteger(input.fee) || input.fee < 0) return '振込手数料は0円以上の整数で入力してください';
+  return '';
+}
+
+/**
+ * 入金を請求書に充てる計画。選んだ請求書のうち残高のあるものへ、お支払期限の早い順
+ * (receivableRows の並び) に残高いっぱいまで充て、充てきれない分は未消込にする。
+ * 振込手数料は先に充てた請求書から順に割り当てる (請求書側から見ると「入金 + 手数料」で消し込まれる)。
+ * モーダルのプレビューと recordPayment の両方がこの関数を使うので、表示と保存は食い違わない。
+ */
+export function planPayment(receivables: ReceivableRow[], input: PaymentInput): PaymentPlan {
+  const error = paymentValidationError(input);
+  const total = Math.max(0, input.amount) + Math.max(0, input.fee);
+  if (error) return { allocations: [], unappliedAmount: 0, unappliedFee: 0, total, error };
+  const selected = new Set(input.documentIds);
+  let left = total;
+  let feeLeft = input.fee;
+  const allocations: PaymentAllocation[] = [];
+  for (const r of receivables) {
+    if (left <= 0) break;
+    if (!selected.has(r.documentId) || r.customerId !== input.customerId || r.remaining <= 0) continue;
+    const applied = Math.min(r.remaining, left);
+    const fee = Math.min(feeLeft, applied);
+    allocations.push({
+      documentId: r.documentId,
+      documentNo: r.documentNo,
+      dueDate: r.dueDate,
+      remainingBefore: r.remaining,
+      applied,
+      amount: applied - fee,
+      fee,
+      remainingAfter: r.remaining - applied,
+    });
+    left -= applied;
+    feeLeft -= fee;
+  }
+  return { allocations, unappliedAmount: left - feeLeft, unappliedFee: feeLeft, total, error: '' };
+}
+
+/** 計画から保存する入金の明細行を作る (未消込が残るときは documentId 空の行を最後に足す) */
+export function buildPaymentItems(plan: PaymentPlan, input: PaymentInput, receiptId: string, createdAt: string): PaymentItem[] {
+  const base = {
+    receiptId,
+    customerId: input.customerId,
+    paymentDate: input.paymentDate,
+    method: input.method,
+    note: input.note.trim(),
+    createdAt,
+  };
+  const rows: PaymentItem[] = plan.allocations.map((a, idx) => ({
+    ...base, id: `${receiptId}-${idx + 1}`, documentId: a.documentId, documentNo: a.documentNo, amount: a.amount, fee: a.fee,
+  }));
+  if (plan.unappliedAmount > 0 || plan.unappliedFee > 0) {
+    rows.push({ ...base, id: `${receiptId}-${rows.length + 1}`, documentId: '', documentNo: '', amount: plan.unappliedAmount, fee: plan.unappliedFee });
+  }
+  return rows;
+}
+
+/** 1回の入金 (同じ receiptId の行をまとめたもの)。入金履歴の1行 */
+export interface PaymentReceipt {
+  receiptId: string;
+  customerId: string;
+  customerName: string;
+  paymentDate: string;
+  method: PaymentMethod;
+  amount: number;
+  fee: number;
+  /** 充てた請求書と額 (amount + fee) */
+  applied: { documentId: string; documentNo: string; amount: number }[];
+  unapplied: number; // 未消込 (amount + fee)
+  note: string;
+  createdAt: string;
+  items: PaymentItem[];
+}
+
+export interface PaymentFilter {
+  keyword: string; // 得意先名・請求書番号・備考の部分一致
+  customerId: string;
+  from: string; // 入金日 YYYY-MM-DD (この日を含む)
+  to: string;
+}
+
+export const EMPTY_PAYMENT_FILTER: PaymentFilter = { keyword: '', customerId: '', from: '', to: '' };
+
+/** 入金履歴 (入金日の新しい順 → 登録の新しい順)。絞り込みは入金単位 */
+export function paymentReceipts(
+  payments: PaymentItem[],
+  customers: Customer[],
+  filter: PaymentFilter = EMPTY_PAYMENT_FILTER,
+): PaymentReceipt[] {
+  const nameById = new Map(customers.map(c => [c.id, c.name]));
+  const byReceipt = new Map<string, PaymentItem[]>();
+  for (const p of payments) {
+    const list = byReceipt.get(p.receiptId);
+    if (list) list.push(p); else byReceipt.set(p.receiptId, [p]);
+  }
+  const q = filter.keyword.trim().toLowerCase();
+  const receipts: PaymentReceipt[] = [];
+  for (const list of byReceipt.values()) {
+    const items = [...list].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+    const h = items[0];
+    const receipt: PaymentReceipt = {
+      receiptId: h.receiptId,
+      customerId: h.customerId,
+      customerName: nameById.get(h.customerId) ?? '（削除された得意先）',
+      paymentDate: h.paymentDate,
+      method: h.method,
+      amount: items.reduce((s, i) => s + i.amount, 0),
+      fee: items.reduce((s, i) => s + i.fee, 0),
+      applied: items.filter(i => i.documentId).map(i => ({ documentId: i.documentId, documentNo: i.documentNo, amount: i.amount + i.fee })),
+      unapplied: items.filter(i => !i.documentId).reduce((s, i) => s + i.amount + i.fee, 0),
+      note: h.note,
+      createdAt: h.createdAt,
+      items,
+    };
+    if (filter.customerId && receipt.customerId !== filter.customerId) continue;
+    if (filter.from && receipt.paymentDate < filter.from) continue;
+    if (filter.to && receipt.paymentDate > filter.to) continue;
+    if (q && !(
+      receipt.customerName.toLowerCase().includes(q)
+      || receipt.note.toLowerCase().includes(q)
+      || receipt.applied.some(a => a.documentNo.toLowerCase().includes(q))
+    )) continue;
+    receipts.push(receipt);
+  }
+  return receipts.sort((a, b) => b.paymentDate.localeCompare(a.paymentDate) || b.createdAt.localeCompare(a.createdAt));
+}
+
+/** 入金が1件でも充てられている請求書の id (取消できない請求書) */
+export function paidDocumentIds(payments: PaymentItem[]): Set<string> {
+  return new Set(payments.filter(p => p.documentId).map(p => p.documentId));
+}
+
+export function receivableCsv(rows: ReceivableRow[]): string {
+  const header = '請求書番号,得意先,発行日,お支払期限,請求額（税込）,入金済額,残高,入金状況,期限超過日数,最終入金日';
+  const body = rows.map(r => [
+    r.documentNo,
+    r.customerName,
+    r.issueDate,
+    r.dueDate,
+    r.billed,
+    r.paid,
+    r.remaining,
+    r.status,
+    r.overdueDays,
+    r.lastPaymentDate,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportReceivableCsv(rows: ReceivableRow[]) {
+  downloadCsv(csvFileName('receivable'), receivableCsv(rows));
+}
+
+export function customerReceivableCsv(rows: CustomerReceivable[]): string {
+  const header = '得意先,請求残高,うち期限超過,未回収の請求書,未請求売上（税込）,未消込入金,売掛金残高,最終入金日';
+  const body = rows.map(r => [
+    r.customerName,
+    r.invoiceBalance,
+    r.overdue,
+    r.openInvoices,
+    r.unbilled,
+    r.unapplied,
+    r.balance,
+    r.lastPaymentDate,
+  ].map(csvCell).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function exportCustomerReceivableCsv(rows: CustomerReceivable[]) {
+  downloadCsv(csvFileName('customerReceivable'), customerReceivableCsv(rows));
+}
+
+export function paymentCsv(receipts: PaymentReceipt[]): string {
+  const header = '入金日,得意先,入金方法,消込先請求書,入金額,振込手数料,消込額,備考';
+  const body = receipts.flatMap(r => r.items.map(i => [
+    r.paymentDate,
+    r.customerName,
+    r.method,
+    i.documentNo || '未消込',
+    i.amount,
+    i.fee,
+    i.amount + i.fee,
+    r.note,
+  ].map(csvCell).join(',')));
+  return [header, ...body].join('\n');
+}
+
+export function exportPaymentCsv(receipts: PaymentReceipt[]) {
+  downloadCsv(csvFileName('payment'), paymentCsv(receipts));
+}
+
+// ---------------------------------------------------------------------------
 // ロットトレーサビリティ (ロット追跡)
 // リコール時に要るのは「このロットが、いつ入って、どこを経由して、いつ出たか」。
 // 必要な記録は帳票 (ledger) にすべて残っているので専用の永続データは持たず、集計だけで組み立てる。
@@ -4121,6 +4589,7 @@ export function useInventory() {
   const [customers, setCustomers] = useState<Customer[]>(DEFAULT_CUSTOMERS);
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>(SAMPLE_SALES_ORDERS);
   const [salesDocumentItems, setSalesDocumentItems] = useState<SalesDocumentItem[]>([]);
+  const [paymentItems, setPaymentItems] = useState<PaymentItem[]>([]);
 
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
@@ -4147,6 +4616,7 @@ export function useInventory() {
       setCustomers(state.customers ?? []);
       setSalesOrders(state.salesOrders ?? []);
       setSalesDocumentItems(state.salesDocumentItems ?? []);
+      setPaymentItems(state.paymentItems ?? []);
     });
     return () => { cancelled = true; };
   }, []);
@@ -5010,11 +5480,13 @@ export function useInventory() {
   const deleteCustomer = useCallback((id: string) => {
     if (ledger.some(t => t.type === '売上出庫' && t.customerId === id)) return;
     if (salesOrders.some(o => o.customerId === id)) return;
+    // 入金の記録 (未消込の前受を含む) がある得意先も、入金履歴の宛先が消えるので削除しない
+    if (paymentItems.some(p => p.customerId === id)) return;
     setCustomers(prev => {
       const next = prev.filter(c => c.id !== id);
       saveCustomers(next); return next;
     });
-  }, [ledger, salesOrders]);
+  }, [ledger, salesOrders, paymentItems]);
 
   const moveLot = useCallback((productId: string, lotId: string, targetWarehouseId: string, quantity: number) => {
     const product = products.find(p => p.id === productId);
@@ -5113,6 +5585,9 @@ export function useInventory() {
     // 納品書・請求書は帳票の売上を参照していて、帳票を空に戻すと宙に浮くので一緒に空にする
     setSalesDocumentItems([]);
     saveSalesDocumentItems([]);
+    // 入金は請求書を参照しているので、請求書と一緒に空にする
+    setPaymentItems([]);
+    savePaymentItems([]);
   }, []);
 
   /**
@@ -5134,13 +5609,43 @@ export function useInventory() {
     return salesDocuments(created)[0];
   }, [salesDocumentItems]);
 
-  /** 発行した書類を取り消す。載っていた売上はふたたび同じ種類の書類に載せられるようになる */
-  const deleteSalesDocument = useCallback((documentId: string) => {
+  /**
+   * 発行した書類を取り消す。載っていた売上はふたたび同じ種類の書類に載せられるようになる。
+   * 入金を充てた請求書は取り消せない (入金の消込先が消えるため)。先に入金を削除してもらう。
+   * 取り消したら true。
+   */
+  const deleteSalesDocument = useCallback((documentId: string): boolean => {
+    if (paymentItems.some(p => p.documentId === documentId)) return false;
     setSalesDocumentItems(prev => {
       const next = prev.filter(i => i.documentId !== documentId);
       saveSalesDocumentItems(next); return next;
     });
+    return true;
+  }, [paymentItems]);
+
+  /**
+   * 入金を登録する (入金管理タブの入金登録モーダルから)。選んだ請求書にお支払期限の早い順で充て、
+   * 充てきれない分は未消込として残す。在庫も帳票も動かさない。
+   * 計画は保存直前の請求書・入金で組み立て直すので、モーダルを開いたあとに別の入金を登録していても
+   * 請求額を超えて消し込むことはない。登録できなかったときは null。
+   */
+  const recordPayment = useCallback((input: PaymentInput): PaymentPlan | null => {
+    const plan = planPayment(receivableRows(salesDocumentItems, paymentItems), input);
+    if (plan.error) return null;
+    const created = buildPaymentItems(plan, input, crypto.randomUUID(), new Date().toISOString());
+    const next = [...paymentItems, ...created];
+    setPaymentItems(next);
+    savePaymentItems(next);
+    return plan;
+  }, [salesDocumentItems, paymentItems]);
+
+  /** 入金を削除する (1回の入金をまとめて)。充てていた請求書の残高は元に戻る */
+  const deletePayment = useCallback((receiptId: string) => {
+    setPaymentItems(prev => {
+      const next = prev.filter(p => p.receiptId !== receiptId);
+      savePaymentItems(next); return next;
+    });
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument, returnSale, returnToSupplier };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment };
 }

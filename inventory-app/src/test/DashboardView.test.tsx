@@ -83,6 +83,29 @@ const renderDashboard = (overrides: Partial<React.ComponentProps<typeof Dashboar
 };
 
 describe('DashboardView', () => {
+  it('お支払期限を過ぎた未回収の請求書を未回収アラートに出す', () => {
+    const doc = (documentId: string, dueDate: string) => ({
+      id: `${documentId}-1`, documentId, kind: '請求書' as const, documentNo: `I-${documentId}`,
+      issuedAt: '2026-07-01T00:00:00.000Z', issueDate: '2026-07-01', customerId: 'cus-a', customerName: 'みどりストア',
+      customerAddress: '', customerContact: '', periodFrom: '', periodTo: '', dueDate,
+      issuerName: '', issuerAddress: '', issuerPhone: '', issuerContact: '', issuerRegistrationNo: '', issuerBankAccount: '',
+      lineNo: 1, deliveryDate: '', productName: '牛乳', productSku: 'ML-001', quantity: 1, unitPrice: 1000, amount: 1000, taxRate: 10 as const, txnIds: [],
+    });
+    renderDashboard({
+      salesDocumentItems: [doc('late', d(-3)), doc('paid', d(-10)), doc('future', d(5))],
+      payments: [{
+        id: 'r1-1', receiptId: 'r1', customerId: 'cus-a', paymentDate: d(-1), method: '振込',
+        documentId: 'paid', documentNo: 'I-paid', amount: 1100, fee: 0, note: '', createdAt: '2026-08-01T00:00:00.000Z',
+      }],
+    });
+    const rows = bodyRows(sectionTable(/未回収アラート/));
+    expect(rows).toHaveLength(1);
+    expect(within(rows[0]).getByText('I-late')).toBeInTheDocument();
+    expect(within(rows[0]).getByText('3日超過')).toBeInTheDocument();
+    const card = screen.getByText('期限超過の売掛金').parentElement!;
+    expect(within(card).getByText('¥1,100')).toBeInTheDocument();
+  });
+
   it('商品が0件のときは案内文だけを出す', () => {
     renderDashboard({ products: [] });
     expect(screen.getByText(/商品が登録されていません/)).toBeInTheDocument();

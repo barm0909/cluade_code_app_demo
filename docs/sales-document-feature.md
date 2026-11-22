@@ -43,7 +43,9 @@
      (古い候補からの二重発行を防ぐ)。NG なら `null`
    - `buildSalesDocumentItems` で行を作って追記・保存。プレビューも同じ関数 (`documentId` だけ `preview`) なので、
      書類番号・金額はプレビューと一致する
-5. 一覧は `salesDocuments(items, filter)` が `documentId` ごとにまとめる。「取消」は `deleteSalesDocument(documentId)`
+5. 一覧は `salesDocuments(items, filter)` が `documentId` ごとにまとめる。「取消」は `deleteSalesDocument(documentId)`。
+   入金を充てた請求書は取り消せない (`deleteSalesDocument` が `false` を返し、画面は `paidDocumentIds(payments)` で取消ボタンを disabled にする。
+   [receivable-feature.md](receivable-feature.md))
 
 ## 消費税
 
@@ -67,7 +69,7 @@
 
 ## やっていないこと
 
-- 入金管理 (売掛金・消し込み)、前回請求額・繰越を載せる請求書形式
+- 前回請求額・繰越を載せる請求書形式 (入金管理・消込は別機能: [receivable-feature.md](receivable-feature.md))
 - 書類の部分修正 (取消して出し直す)
 - 返品・値引き行 (売上にその概念がないため)
 

@@ -607,3 +607,6 @@ tr:hover td { background: #fafbff; }
 
 /* 在庫分析: ABC の表の下に出す資材の表の見出し */
 .analysis-subtitle { margin: 20px 0 8px; font-size: 0.9rem; color: #888; }
+
+/* 入金登録モーダル: 選んだ請求書の残高を入金額に入れるボタン */
+.payment-fill { margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; font-weight: 400; }

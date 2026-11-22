@@ -126,6 +126,30 @@ describe('SalesDocumentView', () => {
     expect(screen.queryByText('I20260701-001')).not.toBeInTheDocument();
   });
 
+  it('入金を充てた請求書は取り消せない', () => {
+    const initial = buildSalesDocumentItems({
+      kind: '請求書', issueDate: '2026-07-01', customer: CUSTOMERS[0], periodFrom: '2026-06-01', periodTo: '2026-06-30', dueDate: '2026-07-31',
+      issuer: { name: '自社', address: '', phone: '', contact: '', registrationNo: '', bankAccount: '' },
+      lines: [{ key: 'k', deliveryDate: '2026-06-10', productId: 'p1', productName: '牛乳', productSku: 'ML-001', quantity: 1, unitPrice: 100, amount: 100, taxRate: 8, txnIds: ['old'], estimatedPrice: false, issuedNo: '', isReturn: false }],
+    }, [], 'doc1', '2026-07-01T00:00:00.000Z');
+    render(
+      <SalesDocumentView
+        items={initial}
+        sales={SALES}
+        customers={CUSTOMERS}
+        payments={[{
+          id: 'r1-1', receiptId: 'r1', customerId: 'cus-a', paymentDate: '2026-07-20', method: '振込',
+          documentId: 'doc1', documentNo: 'I20260701-001', amount: 50, fee: 0, note: '', createdAt: '2026-07-20T00:00:00.000Z',
+        }]}
+        onIssue={() => null}
+        onDelete={() => false}
+      />,
+    );
+    const button = screen.getByRole('button', { name: '取消' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('title', expect.stringContaining('入金を充てた請求書は取り消せません'));
+  });
+
   it('再表示で発行済みの紙面を開ける', async () => {
     const user = userEvent.setup();
     const initial = buildSalesDocumentItems({
