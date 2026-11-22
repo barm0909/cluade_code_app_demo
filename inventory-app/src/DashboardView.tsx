@@ -19,6 +19,7 @@ import {
   exportReorderCsv,
   planDisposal,
   planReorder,
+  receivableRows,
   reorderSuggestions,
   selectableSuppliers,
   warehouseSummaries,
@@ -30,8 +31,10 @@ import type {
   GroupSummary,
   InboundPlan,
   InboundPlanInput,
+  PaymentItem,
   Product,
   ReorderOverride,
+  SalesDocumentItem,
   StockTransaction,
   Supplier,
   Warehouse,
@@ -47,6 +50,9 @@ interface Props {
   ledger: StockTransaction[];
   suppliers: Supplier[];
   inboundPlans: InboundPlan[];
+  /** 発行した納品書・請求書と入金。未回収アラート (期限を過ぎた請求書) に使う (省略時はなし) */
+  salesDocumentItems?: SalesDocumentItem[];
+  payments?: PaymentItem[];
   onDispose: (lotIds: string[]) => DisposalPlan;
   /** 発注登録。入荷予定を一括で作り、作成できた件数を返す */
   onCreateOrders: (inputs: InboundPlanInput[]) => number;
@@ -104,7 +110,7 @@ function SummaryTable({ title, rows, unit }: { title: string; rows: GroupSummary
   );
 }
 
-export function DashboardView({ products, categories, warehouses, ledger, suppliers, inboundPlans, onDispose, onCreateOrders }: Props) {
+export function DashboardView({ products, categories, warehouses, ledger, suppliers, inboundPlans, salesDocumentItems = [], payments = [], onDispose, onCreateOrders }: Props) {
   const [withinDays, setWithinDays] = useState(EXPIRY_SOON_DAYS);
   // 廃棄するロットの選択。期限アラートに出ている行だけを対象にする
   const [selectedLotIds, setSelectedLotIds] = useState<Set<string>>(new Set());
@@ -124,6 +130,14 @@ export function DashboardView({ products, categories, warehouses, ledger, suppli
   const expiring = useMemo(() => expiringLotRows(products, withinDays), [products, withinDays]);
   const byWarehouse = useMemo(() => warehouseSummaries(products, warehouses), [products, warehouses]);
   const byCategory = useMemo(() => categorySummaries(products, categories), [products, categories]);
+  // 未回収アラート: お支払期限を過ぎて残高のある請求書 (超過日数の長い順)
+  const overdueInvoices = useMemo(
+    () => receivableRows(salesDocumentItems, payments)
+      .filter(r => r.overdueDays > 0)
+      .sort((a, b) => b.overdueDays - a.overdueDays || b.remaining - a.remaining),
+    [salesDocumentItems, payments],
+  );
+  const overdueTotal = overdueInvoices.reduce((s, r) => s + r.remaining, 0);
 
   // 廃棄ロス: サマリカードは常に今月、一覧は選んだ期間で集計する
   const monthlyDisposal = useMemo(
@@ -272,6 +286,11 @@ export function DashboardView({ products, categories, warehouses, ledger, suppli
             {yen(monthlyDisposal.costValue)}
           </div>
           <div className="stat-sub">{monthlyDisposal.count}件 / {monthlyDisposal.quantity.toLocaleString()}個</div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">期限超過の売掛金</div>
+          <div className={overdueTotal > 0 ? 'stat-value expired-text' : 'stat-value'}>{yen(overdueTotal)}</div>
+          <div className="stat-sub">請求書 {overdueInvoices.length}枚</div>
         </div>
       </div>
 
@@ -551,6 +570,44 @@ export function DashboardView({ products, categories, warehouses, ledger, suppli
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>
                       <span className="qty-out">{yen(r.costValue)}</span>
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+
+      <section className="dashboard-section">
+        <div className="dashboard-section-head">
+          <h3 className="dashboard-section-title">未回収アラート（お支払期限を過ぎた請求書）</h3>
+          <span className="dashboard-section-note">未回収額 {yen(overdueTotal)}（{overdueInvoices.length}枚）。入金は「入金管理」タブで登録します</span>
+        </div>
+        <div className="table-wrapper">
+          {overdueInvoices.length === 0 ? (
+            <p className="empty">お支払期限を過ぎた未回収の請求書はありません。</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>請求書番号</th>
+                  <th>得意先</th>
+                  <th>お支払期限</th>
+                  <th style={{ textAlign: 'right' }}>請求額（税込）</th>
+                  <th style={{ textAlign: 'right' }}>未回収額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {overdueInvoices.map(r => (
+                  <tr key={r.documentId} className="row-alert">
+                    <td className="mono">{r.documentNo}</td>
+                    <td><strong>{r.customerName}</strong></td>
+                    <td className="mono">
+                      {r.dueDate}
+                      <span className="inbound-overdue">{r.overdueDays}日超過</span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{yen(r.billed)}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600 }}><span className="qty-out">{yen(r.remaining)}</span></td>
                   </tr>
                 ))}
               </tbody>

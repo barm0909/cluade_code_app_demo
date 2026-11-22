@@ -6,6 +6,7 @@
 DELETE FROM stock_transactions;
 DELETE FROM purchase_order_prints;
 DELETE FROM sales_document_items;
+DELETE FROM payment_items;
 DELETE FROM inbound_plans;
 DELETE FROM sales_orders;
 DELETE FROM lots;

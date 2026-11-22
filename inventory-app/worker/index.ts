@@ -13,6 +13,7 @@
 //   PUT /api/customers    → customers テーブルを全置換
 //   PUT /api/sales-orders → sales_orders テーブルを全置換
 //   PUT /api/sales-documents → sales_document_items テーブルを全置換 (納品書・請求書の発行履歴)
+//   PUT /api/payments     → payment_items テーブルを全置換 (入金と請求書への消込)
 
 export interface Env {
   DB: D1Database;
@@ -225,6 +226,37 @@ interface SalesDocumentItemRow {
   txn_ids: string;
 }
 
+// 入金。1回の入金 (receiptId) を充てた請求書ごとに1行に分けて持つ。documentId '' は未消込
+type PaymentMethod = '振込' | '現金' | '手形' | '相殺' | 'その他';
+
+interface PaymentItem {
+  id: string;
+  receiptId: string;
+  customerId: string;
+  paymentDate: string;
+  method: PaymentMethod;
+  documentId: string;
+  documentNo: string;
+  amount: number;
+  fee: number;
+  note: string;
+  createdAt: string;
+}
+
+interface PaymentItemRow {
+  id: string;
+  receipt_id: string;
+  customer_id: string;
+  payment_date: string;
+  method: PaymentMethod;
+  document_id: string;
+  document_no: string;
+  amount: number;
+  fee: number;
+  note: string;
+  created_at: string;
+}
+
 // txn_ids は JSON 配列の文字列。壊れていても書類自体は表示できるよう空配列に倒す
 function parseTxnIds(raw: string): string[] {
   try {
@@ -362,7 +394,7 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes, salesOrdersRes, salesDocsRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes, salesOrdersRes, salesDocsRes, paymentsRes] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
@@ -374,6 +406,7 @@ async function readState(db: D1Database) {
     db.prepare('SELECT id, name, code, contact, phone, email, address, note, active FROM customers ORDER BY name'),
     db.prepare('SELECT id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at FROM sales_orders ORDER BY expected_date'),
     db.prepare('SELECT id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids FROM sales_document_items ORDER BY issued_at DESC, line_no'),
+    db.prepare('SELECT id, receipt_id, customer_id, payment_date, method, document_id, document_no, amount, fee, note, created_at FROM payment_items ORDER BY payment_date DESC, created_at DESC'),
   ]);
 
   const lotsByProduct = new Map<string, Lot[]>();
@@ -545,7 +578,21 @@ async function readState(db: D1Database) {
     txnIds: parseTxnIds(r.txn_ids),
   }));
 
-  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders, salesDocumentItems };
+  const paymentItems: PaymentItem[] = (paymentsRes.results as unknown as PaymentItemRow[]).map(r => ({
+    id: r.id,
+    receiptId: r.receipt_id,
+    customerId: r.customer_id,
+    paymentDate: r.payment_date,
+    method: r.method,
+    documentId: r.document_id,
+    documentNo: r.document_no,
+    amount: r.amount,
+    fee: r.fee,
+    note: r.note,
+    createdAt: r.created_at,
+  }));
+
+  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders, salesDocumentItems, paymentItems };
 }
 
 // products + lots を全置換 (batch はトランザクションとして実行される)
@@ -692,6 +739,21 @@ async function replaceSalesDocumentItems(db: D1Database, items: SalesDocumentIte
   await db.batch(stmts);
 }
 
+// payment_items を全置換 (入金の登録・削除のたびに全量を保存する、他のスライスと同じ方式)
+async function replacePaymentItems(db: D1Database, items: PaymentItem[]) {
+  const stmts = [db.prepare('DELETE FROM payment_items')];
+  const insert = db.prepare(
+    'INSERT INTO payment_items (id, receipt_id, customer_id, payment_date, method, document_id, document_no, amount, fee, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  );
+  for (const p of items) {
+    stmts.push(insert.bind(
+      p.id, p.receiptId, p.customerId, p.paymentDate, p.method,
+      p.documentId ?? '', p.documentNo ?? '', p.amount, p.fee ?? 0, p.note ?? '', p.createdAt,
+    ));
+  }
+  await db.batch(stmts);
+}
+
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   try {
     if (request.method === 'GET' && url.pathname === '/api/state') {
@@ -728,6 +790,9 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
           return Response.json({ ok: true });
         case '/api/sales-documents':
           await replaceSalesDocumentItems(env.DB, await request.json<SalesDocumentItem[]>());
+          return Response.json({ ok: true });
+        case '/api/payments':
+          await replacePaymentItems(env.DB, await request.json<PaymentItem[]>());
           return Response.json({ ok: true });
       }
     }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Customer, CustomerInput, SalesOrder, SalesRow } from './useInventory';
+import type { Customer, CustomerInput, PaymentItem, SalesOrder, SalesRow } from './useInventory';
 import { csvExportHint, csvExportLabel, customerRows, exportCustomerCsv, localDateKey, salesOrderCountByCustomer } from './useInventory';
 import { CustomerModal } from './CustomerModal';
 import { useConfirm } from './useConfirm';
@@ -10,6 +10,8 @@ interface Props {
   sales: SalesRow[];
   /** 受注。受注のある得意先も削除できない (省略時は受注なし) */
   salesOrders?: SalesOrder[];
+  /** 入金。入金の記録がある得意先も削除できない (省略時は入金なし) */
+  payments?: PaymentItem[];
   onAdd: (data: CustomerInput) => void;
   onUpdate: (id: string, data: CustomerInput) => void;
   onDelete: (id: string) => void;
@@ -20,7 +22,7 @@ interface Props {
  * 一覧の絞り込みと売上実績の集計は純粋関数 customerRows に任せ、この画面は表示と
  * 操作の受け渡しだけを持つ (仕入先マスタと同じ構成)。
  */
-export function CustomerMasterView({ customers, sales, salesOrders = [], onAdd, onUpdate, onDelete }: Props) {
+export function CustomerMasterView({ customers, sales, salesOrders = [], payments = [], onAdd, onUpdate, onDelete }: Props) {
   const [keyword, setKeyword] = useState('');
   const [showInactive, setShowInactive] = useState(true);
   // 編集対象は id で持ち、常に最新の得意先を引き直す
@@ -33,6 +35,7 @@ export function CustomerMasterView({ customers, sales, salesOrders = [], onAdd, 
   );
 
   const orderCounts = useMemo(() => salesOrderCountByCustomer(salesOrders), [salesOrders]);
+  const paidCustomerIds = useMemo(() => new Set(payments.map(p => p.customerId)), [payments]);
 
   const editingCustomer = editingId && editingId !== 'new' ? customers.find(c => c.id === editingId) ?? null : null;
 
@@ -115,10 +118,11 @@ export function CustomerMasterView({ customers, sales, salesOrders = [], onAdd, 
                     >{c.active ? '取引停止' : '取引再開'}</button>
                     <button
                       className="btn-delete"
-                      disabled={usage.saleCount > 0 || orderCount > 0}
+                      disabled={usage.saleCount > 0 || orderCount > 0 || paidCustomerIds.has(c.id)}
                       title={usage.saleCount > 0
                         ? '売上の記録がある得意先は削除できません（取引停止にしてください）'
-                        : orderCount > 0 ? '受注のある得意先は削除できません（取引停止にしてください）' : undefined}
+                        : orderCount > 0 ? '受注のある得意先は削除できません（取引停止にしてください）'
+                        : paidCustomerIds.has(c.id) ? '入金の記録がある得意先は削除できません（取引停止にしてください）' : undefined}
                       onClick={async () => {
                         const ok = await confirm({
                           message: `得意先「${c.name}」を削除しますか？`,

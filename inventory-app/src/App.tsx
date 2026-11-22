@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo } from 'react';
+import { Fragment, Suspense, lazy, useState, useMemo } from 'react';
 import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, productTaxRate, saleAmounts, taxRateLabel, isMaterial, outboundTypesFor, INBOUND_TYPES } from './useInventory';
 import type { Customer, Product, Lot, LotTraceKey, SaleFields, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
@@ -9,12 +9,7 @@ import { DashboardView } from './DashboardView';
 import { InboundPlanView } from './InboundPlanView';
 import { SalesOrderView } from './SalesOrderView';
 import { SalesView } from './SalesView';
-import { SalesDocumentView } from './SalesDocumentView';
 import { LedgerView } from './LedgerView';
-import { LotTraceView } from './LotTraceView';
-import { CostHistoryView } from './CostHistoryView';
-import { StockAnalysisView } from './StockAnalysisView';
-import { PurchaseOrderHistoryView } from './PurchaseOrderHistoryView';
 import { ProductMasterView } from './ProductMasterView';
 import { CategoryMasterView } from './CategoryMasterView';
 import { WarehouseMasterView } from './WarehouseMasterView';
@@ -25,6 +20,16 @@ import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
 import { useConfirm, useNotify } from './useConfirm';
 import './App.css';
+
+// 開いたときにしか要らないタブは、選んだ時点で読み込む (xlsx と同じく、メインのバンドルを
+// Vite の 500 kB の警告より小さく保つため)。純粋関数は useInventory.ts 側にあるので、
+// 分けて読み込むのは画面の部品だけ
+const SalesDocumentView = lazy(() => import('./SalesDocumentView').then(m => ({ default: m.SalesDocumentView })));
+const ReceivableView = lazy(() => import('./ReceivableView').then(m => ({ default: m.ReceivableView })));
+const LotTraceView = lazy(() => import('./LotTraceView').then(m => ({ default: m.LotTraceView })));
+const CostHistoryView = lazy(() => import('./CostHistoryView').then(m => ({ default: m.CostHistoryView })));
+const StockAnalysisView = lazy(() => import('./StockAnalysisView').then(m => ({ default: m.StockAnalysisView })));
+const PurchaseOrderHistoryView = lazy(() => import('./PurchaseOrderHistoryView').then(m => ({ default: m.PurchaseOrderHistoryView })));
 
 function lotRowClass(lot: Lot) {
   if (!lot.expiryDate || lot.quantity <= 0) return '';
@@ -190,7 +195,7 @@ function StockIoModal({ lot, product, warehouses, customers, direction, onSubmit
 }
 
 export default function App() {
-  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument, returnSale, returnToSupplier } = useInventory();
+  const { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment } = useInventory();
   const [editingProduct, setEditingProduct] = useState<Product | null | 'new'>(null);
   const [editingLot, setEditingLot] = useState<{ productId: string; lot: Lot | null } | null>(null);
   const [movingLot, setMovingLot] = useState<{ product: Product; lot: Lot } | null>(null);
@@ -205,7 +210,7 @@ export default function App() {
   const [warehouseFilter, setWarehouseFilter] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortOrder, setSortOrder] = useState<SortOrder>('asc');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'orders' | 'sales' | 'salesDocs' | 'master' | 'stocktake' | 'ledger' | 'trace' | 'cost' | 'poHistory' | 'analysis'>('inventory');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'inbound' | 'orders' | 'sales' | 'salesDocs' | 'receivables' | 'master' | 'stocktake' | 'ledger' | 'trace' | 'cost' | 'poHistory' | 'analysis'>('inventory');
   // ロット追跡タブで追跡中のロット。在庫一覧の「追跡」ボタンからも指定される
   const [traceTarget, setTraceTarget] = useState<LotTraceKey | null>(null);
   const { confirm, confirmDialog } = useConfirm();
@@ -334,6 +339,7 @@ export default function App() {
         <button className={activeTab === 'orders' ? 'tab active' : 'tab'} onClick={() => setActiveTab('orders')}>受注</button>
         <button className={activeTab === 'sales' ? 'tab active' : 'tab'} onClick={() => setActiveTab('sales')}>売上管理</button>
         <button className={activeTab === 'salesDocs' ? 'tab active' : 'tab'} onClick={() => setActiveTab('salesDocs')}>納品書・請求書</button>
+        <button className={activeTab === 'receivables' ? 'tab active' : 'tab'} onClick={() => setActiveTab('receivables')}>入金管理</button>
         <button className={activeTab === 'master' ? 'tab active' : 'tab'} onClick={() => setActiveTab('master')}>商品マスタ</button>
         <button className={activeTab === 'stocktake' ? 'tab active' : 'tab'} onClick={() => setActiveTab('stocktake')}>棚卸</button>
         <button className={activeTab === 'ledger' ? 'tab active' : 'tab'} onClick={() => setActiveTab('ledger')}>入出庫帳票</button>
@@ -343,6 +349,7 @@ export default function App() {
         <button className={activeTab === 'analysis' ? 'tab active' : 'tab'} onClick={() => setActiveTab('analysis')}>在庫分析</button>
       </div>
 
+      <Suspense fallback={<p className="empty">読み込み中…</p>}>
       {activeTab === 'dashboard' ? (
         <DashboardView
           products={products}
@@ -351,6 +358,8 @@ export default function App() {
           ledger={ledger}
           suppliers={suppliers}
           inboundPlans={inboundPlans}
+          salesDocumentItems={salesDocumentItems}
+          payments={paymentItems}
           onDispose={disposeLots}
           onCreateOrders={addInboundPlans}
         />
@@ -392,8 +401,18 @@ export default function App() {
           items={salesDocumentItems}
           sales={sales}
           customers={customers}
+          payments={paymentItems}
           onIssue={issueSalesDocument}
           onDelete={deleteSalesDocument}
+        />
+      ) : activeTab === 'receivables' ? (
+        <ReceivableView
+          items={salesDocumentItems}
+          payments={paymentItems}
+          sales={sales}
+          customers={customers}
+          onRecordPayment={recordPayment}
+          onDeletePayment={deletePayment}
         />
       ) : activeTab === 'ledger' ? (
         <LedgerView ledger={ledger} warehouses={warehouses} />
@@ -425,7 +444,7 @@ export default function App() {
         <CategoryMasterView categories={categories} products={products} onAdd={addCategory} onUpdate={updateCategory} onDelete={deleteCategory} />
         <WarehouseMasterView warehouses={warehouses} products={products} inboundPlans={inboundPlans} salesOrders={salesOrders} onAdd={addWarehouse} onUpdate={updateWarehouse} onDelete={deleteWarehouse} />
         <SupplierMasterView suppliers={suppliers} inboundPlans={inboundPlans} products={products} warehouses={warehouses} onAdd={addSupplier} onUpdate={updateSupplier} onDelete={deleteSupplier} onAddInboundPlan={addInboundPlan} onPrint={printPurchaseOrder} />
-        <CustomerMasterView customers={customers} sales={sales} salesOrders={salesOrders} onAdd={addCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} />
+        <CustomerMasterView customers={customers} sales={sales} salesOrders={salesOrders} payments={paymentItems} onAdd={addCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} />
       </>) : (<>
 
       <div className="controls">
@@ -566,6 +585,7 @@ export default function App() {
         </table>
       </div>
       </>)}
+      </Suspense>
 
       {editingProduct !== null && (
         <ProductModal

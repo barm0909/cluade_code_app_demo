@@ -6,11 +6,13 @@ import {
   csvExportHint,
   csvExportLabel,
   exportSalesDocumentCsv,
+  paidDocumentIds,
   salesDocuments,
 } from './useInventory';
 import type {
   Customer,
   IssueSalesDocumentInput,
+  PaymentItem,
   SalesDocument,
   SalesDocumentFilter,
   SalesDocumentItem,
@@ -25,8 +27,11 @@ interface Props {
   items: SalesDocumentItem[];
   sales: SalesRow[];
   customers: Customer[];
+  /** 入金。入金を充てた請求書は取り消せない */
+  payments?: PaymentItem[];
   onIssue: (input: IssueSalesDocumentInput) => SalesDocument | null;
-  onDelete: (documentId: string) => void;
+  /** 取消。入金があるなどで取り消せなかったときは false */
+  onDelete: (documentId: string) => boolean | void;
 }
 
 /**
@@ -37,7 +42,7 @@ interface Props {
  * 再表示は発行した時点のスナップショットをそのまま描く (マスタを変えても書類は変わらない)。
  * そこでの印刷は同じ書類をもう一度出すだけなので、発行履歴は増えない。
  */
-export function SalesDocumentView({ items, sales, customers, onIssue, onDelete }: Props) {
+export function SalesDocumentView({ items, sales, customers, payments = [], onIssue, onDelete }: Props) {
   const [filter, setFilter] = useState<SalesDocumentFilter>(EMPTY_SALES_DOCUMENT_FILTER);
   const [creating, setCreating] = useState<SalesDocumentKind | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -48,6 +53,7 @@ export function SalesDocumentView({ items, sales, customers, onIssue, onDelete }
 
   const allDocs = useMemo(() => salesDocuments(items), [items]);
   const docs = useMemo(() => salesDocuments(items, filter), [items, filter]);
+  const paidIds = useMemo(() => paidDocumentIds(payments), [payments]);
   const openDoc = openId ? allDocs.find(d => d.documentId === openId) ?? null : null;
   const isFiltered = (Object.keys(EMPTY_SALES_DOCUMENT_FILTER) as (keyof SalesDocumentFilter)[])
     .some(k => filter[k] !== EMPTY_SALES_DOCUMENT_FILTER[k]);
@@ -135,7 +141,12 @@ export function SalesDocumentView({ items, sales, customers, onIssue, onDelete }
                   <td style={{ textAlign: 'right' }}>¥{d.totals.amountWithTax.toLocaleString()}</td>
                   <td>
                     <button className="btn-edit" onClick={() => setOpenId(d.documentId)}>再表示</button>
-                    <button className="btn-delete" onClick={() => handleDelete(d)}>取消</button>
+                    <button
+                      className="btn-delete"
+                      disabled={paidIds.has(d.documentId)}
+                      title={paidIds.has(d.documentId) ? '入金を充てた請求書は取り消せません（入金管理で入金を削除してください）' : undefined}
+                      onClick={() => handleDelete(d)}
+                    >取消</button>
                   </td>
                 </tr>
               ))}
