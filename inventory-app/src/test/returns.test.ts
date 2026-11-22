@@ -265,6 +265,7 @@ describe('useInventory — returnToSupplier', () => {
     });
     expect(result.current.ledger[0]).toMatchObject({ type: '仕入返品', returnOfTxnId: inboundTxn.id });
     expect(result.current.ledger[0].unitPrice).toBeUndefined();
-    await waitFor(() => expect(server.ledger[0]?.type).toBe('仕入返品'));
+    // 保存は差分 (新しい行の追記) なので並び順ではなく中身で確かめる。読み込み時は Worker が日時の新しい順に並べる
+    await waitFor(() => expect(server.ledger.find(t => t.type === '仕入返品')).toMatchObject({ returnOfTxnId: inboundTxn.id }));
   });
 });

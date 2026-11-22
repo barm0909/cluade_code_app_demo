@@ -45,7 +45,7 @@
 | `draftSalesDocuments(inputs, items)` | まとめてプレビュー (書類番号は続き番号) |
 | `prepareSalesDocuments(inputs, items, payments, newId, issuedAt)` | まとめて発行する中身。1枚ずつ、先に作った分も含めて二重請求を付け直して検証し、繰越を計算し直す。発行できない入力は飛ばす |
 
-`issueSalesDocuments(inputs)` (hook) は `prepareSalesDocuments` の結果を1回の state 更新・1回の PUT で保存する。
+`issueSalesDocuments(inputs)` (hook) は `prepareSalesDocuments` の結果を1回の state 更新・1回の保存 で保存する。
 既存の `issueSalesDocument(input)` はその1件版になった (振る舞いは同じ)。
 
 ## 決めごと

@@ -182,6 +182,6 @@
   `planSalesOrderShipment`（すべて純粋関数）と、ミューテーション
   `addSalesOrder` / `updateSalesOrder` / `cancelSalesOrder` / `deleteSalesOrder` / `shipSalesOrder`
 - 出荷は `shipFefo`（区分 売上出庫）に任せるので、帳票の形は売上登録と同じ（[../sales-feature.md](../sales-feature.md)）
-- 保存：`PUT /api/sales-orders`（`sales_orders` テーブルを全置換、`migrations/0013_sales_orders.sql`）
+- 保存：`POST /api/changes` の `sales-orders`（変わった受注だけを送る差分保存、テーブルは `migrations/0013_sales_orders.sql`。[../persistence.md](../persistence.md)）
 - テスト：`src/test/salesOrder.test.ts`、`src/test/SalesOrderView.test.tsx`
 - 詳細：[../sales-order-feature.md](../sales-order-feature.md)

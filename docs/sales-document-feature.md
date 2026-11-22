@@ -13,7 +13,7 @@
 | `src/SalesDocumentPaper.tsx` | 紙面。作成画面のプレビューと再表示の両方がこれを描く |
 | `src/useInventory.ts` | 型・純粋関数・`issueSalesDocument` / `deleteSalesDocument` |
 | `migrations/0014_sales_documents.sql` | `sales_document_items` テーブル |
-| `worker/index.ts` | `GET /api/state` の `salesDocumentItems`、`PUT /api/sales-documents` |
+| `worker/index.ts` | `GET /api/state` の `salesDocumentItems`、`POST /api/changes` の `sales-documents` |
 
 タブは `売上管理` の右隣 (`App.tsx` の `activeTab === 'salesDocs'`)。
 
