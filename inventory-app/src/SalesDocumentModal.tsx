@@ -1,18 +1,25 @@
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  EMPTY_SALES_DOCUMENT_ISSUER,
+  AS_NEEDED_CLOSING,
+  balanceForward,
+  billingPeriod,
+  customerBillingTermsLabel,
+  customerClosingDay,
   draftSalesDocument,
   issuedSalesDocumentNos,
+  latestClosingDate,
   localDateKey,
-  nextMonthEnd,
+  paymentDueDate,
   previousMonthRange,
   salesDocumentLines,
   salesDocumentValidationError,
 } from './useInventory';
+import { loadIssuer, saveIssuer } from './salesDocumentIssuer';
 import type {
   Customer,
   IssueSalesDocumentInput,
+  PaymentItem,
   SalesDocument,
   SalesDocumentIssuer,
   SalesDocumentItem,
@@ -21,33 +28,14 @@ import type {
 } from './useInventory';
 import { SalesDocumentPaper } from './SalesDocumentPaper';
 
-const ISSUER_STORAGE_KEY = 'sales-doc-issuer-info';
-// 発注書の発注元 (PurchaseOrderModal)。発行元が未入力のときの初期値に使う (同じ自社情報のはずなので)
-const PO_SENDER_STORAGE_KEY = 'po-sender-info';
-
-// 発行元は在庫データではなく端末ごとの入力補助なので、発注書の発注元と同じく localStorage に置く。
-// 読み書きに失敗しても書類自体は作れるべきなので無視する。
-function loadIssuer(): SalesDocumentIssuer {
-  try {
-    const raw = localStorage.getItem(ISSUER_STORAGE_KEY);
-    if (raw) return { ...EMPTY_SALES_DOCUMENT_ISSUER, ...JSON.parse(raw) };
-    const po = localStorage.getItem(PO_SENDER_STORAGE_KEY);
-    if (po) {
-      const { name = '', address = '', phone = '', contact = '' } = JSON.parse(po);
-      return { ...EMPTY_SALES_DOCUMENT_ISSUER, name, address, phone, contact };
-    }
-  } catch {
-    // 無視
-  }
-  return EMPTY_SALES_DOCUMENT_ISSUER;
-}
-
-function saveIssuer(issuer: SalesDocumentIssuer) {
-  try {
-    localStorage.setItem(ISSUER_STORAGE_KEY, JSON.stringify(issuer));
-  } catch {
-    // 無視 (プライベートブラウズ等で書き込めない場合)
-  }
+/**
+ * 請求書の対象期間とお支払期限の初期値。締め日のある得意先は today 以前で直近の締めの期間、
+ * 都度請求の得意先 (と得意先未選択) は前月1日〜末日。お支払期限は得意先の支払条件から決める。
+ */
+function invoiceDefaults(customer: Customer | undefined, today: string): { period: { from: string; to: string }; dueDate: string } {
+  const day = customer ? customerClosingDay(customer) : AS_NEEDED_CLOSING;
+  const period = day === AS_NEEDED_CLOSING ? previousMonthRange() : billingPeriod(day, latestClosingDate(day, today));
+  return { period, dueDate: paymentDueDate(customer ?? {}, period.to) };
 }
 
 /** その得意先のまだ指定種類の書類に載っていない売上のうち、いちばん新しい納品日 (なければ今日) */
@@ -66,6 +54,8 @@ interface Props {
   sales: SalesRow[];
   customers: Customer[];
   items: SalesDocumentItem[];
+  /** 入金。請求書の繰越 (前回御請求額・御入金額) の計算に使う (省略時は入金なし) */
+  payments?: PaymentItem[];
   onIssue: (input: IssueSalesDocumentInput) => SalesDocument | null;
   onClose: () => void;
 }
@@ -80,7 +70,7 @@ interface Props {
  * 「発行して印刷」= 発行したものとして扱い、実際に印刷したかどうかは追わない。
  * 印刷 CSS は発注書と共通 (`.po-overlay` を付けて document.body に直接ポータルする)。
  */
-export function SalesDocumentModal({ kind, sales, customers, items, onIssue, onClose }: Props) {
+export function SalesDocumentModal({ kind, sales, customers, items, payments = [], onIssue, onClose }: Props) {
   const isInvoice = kind === '請求書';
   const [today] = useState(() => localDateKey(new Date().toISOString()));
   const issued = useMemo(() => issuedSalesDocumentNos(items, kind), [items, kind]);
@@ -93,8 +83,8 @@ export function SalesDocumentModal({ kind, sales, customers, items, onIssue, onC
 
   const [customerId, setCustomerId] = useState(() => customerOptions[0]?.id ?? '');
   const [deliveryDate, setDeliveryDate] = useState(() => latestUnissuedDay(sales, customerOptions[0]?.id ?? '', issued, today));
-  const [period, setPeriod] = useState(() => previousMonthRange());
-  const [dueDate, setDueDate] = useState(() => nextMonthEnd(previousMonthRange().to));
+  const [period, setPeriod] = useState(() => invoiceDefaults(customers.find(c => c.id === customerOptions[0]?.id), today).period);
+  const [dueDate, setDueDate] = useState(() => invoiceDefaults(customers.find(c => c.id === customerOptions[0]?.id), today).dueDate);
   const [issueDate, setIssueDate] = useState(today);
   const [issuer, setIssuer] = useState<SalesDocumentIssuer>(loadIssuer);
   // 書類から外した候補行の key。空 = 全部載せる (発注書と同じく既定は全選択)
@@ -123,6 +113,8 @@ export function SalesDocumentModal({ kind, sales, customers, items, onIssue, onC
     dueDate,
     issuer,
     lines: selected,
+    // 請求書は前回からの繰越を載せる (発行時に issueSalesDocument が計算し直す)
+    ...(isInvoice && customer ? { balanceForward: balanceForward(customer.id, items, payments, issueDate) } : {}),
   };
   const validation = salesDocumentValidationError(input);
   const doc = draftSalesDocument(input, items);
@@ -139,6 +131,11 @@ export function SalesDocumentModal({ kind, sales, customers, items, onIssue, onC
     setCustomerId(id);
     setExcluded(new Set());
     if (!isInvoice) setDeliveryDate(latestUnissuedDay(sales, id, issued, today));
+    else {
+      const defaults = invoiceDefaults(customers.find(c => c.id === id), today);
+      setPeriod(defaults.period);
+      setDueDate(defaults.dueDate);
+    }
   };
 
   const toggle = (key: string) => setExcluded(prev => {
@@ -174,6 +171,7 @@ export function SalesDocumentModal({ kind, sales, customers, items, onIssue, onC
                   <option key={c.id} value={c.id}>{c.name}{c.active ? '' : '（取引停止）'}</option>
                 ))}
               </select>
+              {isInvoice && customer && <span className="label-hint">{customerBillingTermsLabel(customer)}</span>}
             </label>
             {isInvoice ? (
               <>

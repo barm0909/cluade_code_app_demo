@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { SalesDocumentView } from '../SalesDocumentView';
 import {
   buildSalesDocumentItems,
+  prepareSalesDocuments,
   issuedSalesDocumentNos,
   salesDocumentValidationError,
   salesDocuments,
@@ -164,5 +165,74 @@ describe('SalesDocumentView', () => {
     expect(screen.getByText('〇〇銀行')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '印刷' }));
     expect(window.print).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SalesDocumentView — 締め請求', () => {
+  // 締め日 = 今月末 (今日の売上が対象期間に入る)
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const monthEnd = new Date(NOW.getFullYear(), NOW.getMonth() + 1, 0);
+  const closingDate = `${monthEnd.getFullYear()}-${pad(monthEnd.getMonth() + 1)}-${pad(monthEnd.getDate())}`;
+  const nextMonthEnd = new Date(NOW.getFullYear(), NOW.getMonth() + 2, 0);
+  const dueDate = `${nextMonthEnd.getFullYear()}-${pad(nextMonthEnd.getMonth() + 1)}-${pad(nextMonthEnd.getDate())}`;
+
+  function ClosingHarness() {
+    const [items, setItems] = useState<SalesDocumentItem[]>([]);
+    const onIssueMany = (inputs: IssueSalesDocumentInput[]) => {
+      const { created, docs } = prepareSalesDocuments(inputs, items, [], () => crypto.randomUUID(), new Date().toISOString());
+      setItems([...items, ...created]);
+      return docs;
+    };
+    return (
+      <SalesDocumentView
+        items={items}
+        sales={SALES}
+        customers={[{ ...CUSTOMERS[0], closingDay: 31, paymentMonths: 1, paymentDay: 31 }, { ...CUSTOMERS[1], closingDay: 0 }]}
+        onIssue={() => null}
+        onIssueMany={onIssueMany}
+        onDelete={() => true}
+      />
+    );
+  }
+
+  it('締め日にあたる得意先の請求書を、期間・期限・繰越つきでまとめて発行する', async () => {
+    const user = userEvent.setup();
+    render(<ClosingHarness />);
+    await user.click(screen.getByRole('button', { name: '締め請求' }));
+    const dialog = screen.getByRole('heading', { name: '締め請求' }).closest('.modal') as HTMLElement;
+    fireEvent.change(within(dialog).getByLabelText('締め日'), { target: { value: closingDate } });
+
+    // 末日締めの得意先だけが並ぶ (都度請求のさくらカフェは対象外)
+    const row = within(dialog).getByRole('checkbox', { name: 'みどりストアの請求書を発行する' }).closest('tr') as HTMLElement;
+    expect(row).toHaveTextContent('末日締め・翌月末払い');
+    expect(row).toHaveTextContent(`〜 ${closingDate}`);
+    expect(row).toHaveTextContent(dueDate);
+    expect(within(row).getAllByText('¥583').length).toBeGreaterThan(0);
+    expect(within(dialog).queryByText('さくらカフェ')).not.toBeInTheDocument();
+
+    // 紙面プレビューに繰越欄が出る
+    expect(within(dialog).getByRole('table', { name: '繰越' })).toHaveTextContent('今回御請求額');
+
+    await user.click(within(dialog).getByRole('button', { name: '1件を発行して印刷' }));
+    expect(window.print).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('heading', { name: '締め請求' })).not.toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: /^I\d{8}-001$/ })).toBeInTheDocument();
+
+    // もう一度開くと発行済みになっていて選べない
+    await user.click(screen.getByRole('button', { name: '締め請求' }));
+    const again = screen.getByRole('heading', { name: '締め請求' }).closest('.modal') as HTMLElement;
+    fireEvent.change(within(again).getByLabelText('締め日'), { target: { value: closingDate } });
+    expect(within(again).getByRole('checkbox', { name: 'みどりストアの請求書を発行する' })).toBeDisabled();
+    expect(within(again).getByText(/発行済み（I\d{8}-001）/)).toBeInTheDocument();
+    expect(within(again).getByRole('button', { name: '発行して印刷' })).toBeDisabled();
+  });
+
+  it('締め日にあたる得意先がいなければ案内を出す', async () => {
+    const user = userEvent.setup();
+    render(<ClosingHarness />);
+    await user.click(screen.getByRole('button', { name: '締め請求' }));
+    const dialog = screen.getByRole('heading', { name: '締め請求' }).closest('.modal') as HTMLElement;
+    fireEvent.change(within(dialog).getByLabelText('締め日'), { target: { value: '2026-11-15' } });
+    expect(within(dialog).getByText(/2026-11-15 が締め日にあたる得意先はいません/)).toBeInTheDocument();
   });
 });

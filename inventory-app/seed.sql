@@ -25,10 +25,11 @@ INSERT INTO suppliers (id, name, code, contact, phone, email, address, lead_time
   ('sup-asahi',       '朝日ベーカリー', 'S-002', '朝日 花子', '06-2345-6789', 'contact@asahi-bakery.example.jp', '大阪府大阪市北区2-2-2', 1, '',                 1),
   ('sup-osaka-print', '大阪印刷',       'S-003', '',          '06-3456-7890', '',                                '大阪府堺市3-3-3',     7, 'ラベル・資材',     1);
 
-INSERT INTO customers (id, name, code, contact, phone, email, address, note, active) VALUES
-  ('cus-midori', 'みどりストア',     'C-001', '緑川 一郎', '03-2222-3333', 'order@midori-store.example.jp', '東京都世田谷区4-4-4',     '毎朝配送', 1),
-  ('cus-sakura', 'さくらカフェ',     'C-002', '佐倉 美咲', '06-4444-5555', 'cafe@sakura.example.jp',        '大阪府大阪市中央区5-5-5', '',         1),
-  ('cus-kita',   '北町給食センター', 'C-003', '',          '011-666-7777', '',                              '北海道札幌市北区6-6-6',   '月末締め', 1);
+-- closing_day: 31 = 末日、0 = 都度請求 / payment_months: 締め日の何か月後 / payment_day: 31 = 末日
+INSERT INTO customers (id, name, code, contact, phone, email, address, note, active, closing_day, payment_months, payment_day) VALUES
+  ('cus-midori', 'みどりストア',     'C-001', '緑川 一郎', '03-2222-3333', 'order@midori-store.example.jp', '東京都世田谷区4-4-4',     '毎朝配送', 1, 20, 1, 10),
+  ('cus-sakura', 'さくらカフェ',     'C-002', '佐倉 美咲', '06-4444-5555', 'cafe@sakura.example.jp',        '大阪府大阪市中央区5-5-5', '',         1,  0, 1, 31),
+  ('cus-kita',   '北町給食センター', 'C-003', '',          '011-666-7777', '',                              '北海道札幌市北区6-6-6',   '月末締め', 1, 31, 1, 31);
 
 -- price (販売定価) は税抜。tax_rate は食品なので軽減税率 8%。
 -- 値札ラベルは売らない「資材」(kind) なので、販売定価・税率は使われない (列の既定値のまま)

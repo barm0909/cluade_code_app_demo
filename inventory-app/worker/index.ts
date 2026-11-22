@@ -57,6 +57,9 @@ interface Customer {
   address: string;
   note: string;
   active: boolean;
+  closingDay?: number; // 31 = 末日、0 = 都度請求
+  paymentMonths?: number;
+  paymentDay?: number; // 31 = 末日
 }
 
 interface Lot {
@@ -193,6 +196,7 @@ interface SalesDocumentItem {
   amount: number;
   taxRate: number;
   txnIds: string[];
+  balanceForward?: { previousBilled: number; received: number; carryOver: number }; // 繰越型の請求書だけ
 }
 
 interface SalesDocumentItemRow {
@@ -224,6 +228,10 @@ interface SalesDocumentItemRow {
   amount: number;
   tax_rate: number;
   txn_ids: string;
+  has_balance_forward: number;
+  previous_billed: number;
+  received: number;
+  carry_over: number;
 }
 
 // 入金。1回の入金 (receiptId) を充てた請求書ごとに1行に分けて持つ。documentId '' は未消込
@@ -335,6 +343,9 @@ interface CustomerRow {
   address: string;
   note: string;
   active: number;
+  closing_day: number;
+  payment_months: number;
+  payment_day: number;
 }
 
 interface SupplierRow {
@@ -403,9 +414,9 @@ async function readState(db: D1Database) {
     db.prepare('SELECT id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at FROM inbound_plans ORDER BY expected_date'),
     db.prepare('SELECT id, name, code, contact, phone, email, address, lead_time_days, note, active FROM suppliers ORDER BY name'),
     db.prepare('SELECT id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount FROM purchase_order_prints ORDER BY printed_at DESC'),
-    db.prepare('SELECT id, name, code, contact, phone, email, address, note, active FROM customers ORDER BY name'),
+    db.prepare('SELECT id, name, code, contact, phone, email, address, note, active, closing_day, payment_months, payment_day FROM customers ORDER BY name'),
     db.prepare('SELECT id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at FROM sales_orders ORDER BY expected_date'),
-    db.prepare('SELECT id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids FROM sales_document_items ORDER BY issued_at DESC, line_no'),
+    db.prepare('SELECT id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids, has_balance_forward, previous_billed, received, carry_over FROM sales_document_items ORDER BY issued_at DESC, line_no'),
     db.prepare('SELECT id, receipt_id, customer_id, payment_date, method, document_id, document_no, amount, fee, note, created_at FROM payment_items ORDER BY payment_date DESC, created_at DESC'),
   ]);
 
@@ -530,6 +541,9 @@ async function readState(db: D1Database) {
     address: r.address,
     note: r.note,
     active: r.active !== 0,
+    closingDay: r.closing_day,
+    paymentMonths: r.payment_months,
+    paymentDay: r.payment_day,
   }));
 
   const salesOrders: SalesOrder[] = (salesOrdersRes.results as unknown as SalesOrderRow[]).map(r => ({
@@ -576,6 +590,9 @@ async function readState(db: D1Database) {
     amount: r.amount,
     taxRate: r.tax_rate,
     txnIds: parseTxnIds(r.txn_ids),
+    ...(r.has_balance_forward
+      ? { balanceForward: { previousBilled: r.previous_billed, received: r.received, carryOver: r.carry_over } }
+      : {}),
   }));
 
   const paymentItems: PaymentItem[] = (paymentsRes.results as unknown as PaymentItemRow[]).map(r => ({
@@ -682,10 +699,13 @@ async function replaceSuppliers(db: D1Database, suppliers: Supplier[]) {
 async function replaceCustomers(db: D1Database, customers: Customer[]) {
   const stmts = [db.prepare('DELETE FROM customers')];
   const insert = db.prepare(
-    'INSERT INTO customers (id, name, code, contact, phone, email, address, note, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO customers (id, name, code, contact, phone, email, address, note, active, closing_day, payment_months, payment_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const c of customers) {
-    stmts.push(insert.bind(c.id, c.name, c.code, c.contact, c.phone, c.email, c.address, c.note, c.active ? 1 : 0));
+    stmts.push(insert.bind(
+      c.id, c.name, c.code, c.contact, c.phone, c.email, c.address, c.note, c.active ? 1 : 0,
+      c.closingDay ?? 31, c.paymentMonths ?? 1, c.paymentDay ?? 31,
+    ));
   }
   await db.batch(stmts);
 }
@@ -724,7 +744,7 @@ async function replacePurchaseOrderPrints(db: D1Database, prints: PurchaseOrderP
 async function replaceSalesDocumentItems(db: D1Database, items: SalesDocumentItem[]) {
   const stmts = [db.prepare('DELETE FROM sales_document_items')];
   const insert = db.prepare(
-    'INSERT INTO sales_document_items (id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO sales_document_items (id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids, has_balance_forward, previous_billed, received, carry_over) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
   for (const i of items) {
     stmts.push(insert.bind(
@@ -734,6 +754,8 @@ async function replaceSalesDocumentItems(db: D1Database, items: SalesDocumentIte
       i.issuerName, i.issuerAddress, i.issuerPhone, i.issuerContact, i.issuerRegistrationNo, i.issuerBankAccount ?? '',
       i.lineNo, i.deliveryDate, i.productName, i.productSku, i.quantity, i.unitPrice, i.amount, i.taxRate,
       JSON.stringify(i.txnIds ?? []),
+      i.balanceForward ? 1 : 0,
+      i.balanceForward?.previousBilled ?? 0, i.balanceForward?.received ?? 0, i.balanceForward?.carryOver ?? 0,
     ));
   }
   await db.batch(stmts);
