@@ -106,7 +106,7 @@ interface SalesOrder {
 
 画面は `SalesOrderView.tsx`（受注タブ。入荷予定と売上管理の間）、`SalesOrderModal.tsx`、`ShipSalesOrderModal.tsx`。
 
-保存は `PUT /api/sales-orders`（`worker/index.ts` の `replaceSalesOrders`、`GET /api/state` は `salesOrders` を返す）。
+保存は差分保存の `POST /api/changes` の `sales-orders`（`worker/index.ts` の `SALES_ORDERS`、`GET /api/state` は `salesOrders` を返す。[persistence.md](persistence.md)）。
 受注を持たない旧サーバーのレスポンスでは空の受注で始まります。
 
 > **デプロイ前に** `npm run db:migrate:remote` で `0013_sales_orders.sql` を本番 D1 に適用してください。

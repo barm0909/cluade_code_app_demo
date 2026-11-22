@@ -181,5 +181,5 @@
   `selectableSuppliers` / `expectedDateFromLeadTime`（[../supplier-feature.md](../supplier-feature.md)）
 - 仕入単価（`unitPrice`）は入荷時に帳票へコピーされ、原価履歴タブの元データになる
   （[../cost-history-feature.md](../cost-history-feature.md)）
-- 保存：`PUT /api/inbound-plans`（`inbound_plans` テーブルを全置換）
+- 保存：`POST /api/changes` の `inbound-plans`（変わった予定だけを送る差分保存。[../persistence.md](../persistence.md)）
 - テスト：`src/test/inboundPlan.test.ts`、`src/test/InboundPlanView.test.tsx`

@@ -8,7 +8,7 @@
 入荷時は数量を確認するだけで済みます。分割入荷（20個の予定のうち8個が先に到着）にも対応します。
 
 FEFO出庫と違い**専用の永続データを持つ**ため、マイグレーション（`migrations/0004_inbound_plans.sql`）と
-Worker API（`PUT /api/inbound-plans`）を追加しています。
+Worker の保存（現在は差分保存の `POST /api/changes` の `inbound-plans`。[persistence.md](persistence.md)）に対応しています。
 
 ---
 
@@ -43,7 +43,7 @@ interface InboundPlan {
 読み込み時に `migrateInboundPlans` がマスタへ対応付けます。詳細は
 [supplier-feature.md](supplier-feature.md) を参照してください。
 
-`product_id` には外部キーを張っていません。`PUT /api/products` が products を
+`product_id` には外部キーを張っていません。以前の保存方式（`PUT /api/products`）が products を
 全削除→再挿入する方式のため、`ON DELETE CASCADE` を付けると商品保存のたびに
 予定が消えてしまうからです。商品削除時の予定削除はフロント側（`deleteProduct`）が行います。
 
@@ -107,7 +107,7 @@ interface InboundPlan {
 | `inboundPlanCsv(rows, warehouses)` / `exportInboundPlanCsv` | CSV（`CSV_EXPORTS.inbound`、`入荷予定_YYYY-MM-DD.csv`） |
 | `planReceipt(plan, product, input)` | 入荷でどのロットがどう増えるかを返す。状態は変更しない |
 | `addInboundPlan` / `updateInboundPlan` / `cancelInboundPlan` / `deleteInboundPlan` | 予定の CRUD。キャンセル済みは編集不可、`receivedQuantity` は編集対象外 |
-| `addInboundPlans(inputs)` | 予定の一括登録（ダッシュボードの発注提案から）。1回の state 更新 / 1回の PUT にまとめ、数量0の入力は落とす。[reorder-feature.md](reorder-feature.md) 参照 |
+| `addInboundPlans(inputs)` | 予定の一括登録（ダッシュボードの発注提案から）。1回の state 更新 / 1回の保存にまとめ、数量0の入力は落とす。[reorder-feature.md](reorder-feature.md) 参照 |
 | `receiveInboundPlan(id, input)` | 入荷。ロット反映・予定更新・帳票記録を行い `ReceiptResult` を返す（入荷できなければ `null`） |
 
 その他の連動:

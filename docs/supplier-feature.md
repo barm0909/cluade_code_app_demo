@@ -12,7 +12,7 @@
 **改名しても過去の入荷予定の紐づけが切れず**、表示だけが一斉に変わります。
 
 専用の永続データを持つため、マイグレーション（`migrations/0005_suppliers.sql`）と
-Worker API（`PUT /api/suppliers`）を追加しています。
+Worker の保存（現在は差分保存の `POST /api/changes` の `suppliers`。[persistence.md](persistence.md)）に対応しています。
 
 ---
 

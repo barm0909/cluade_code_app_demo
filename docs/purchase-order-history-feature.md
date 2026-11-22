@@ -48,7 +48,7 @@ interface PurchaseOrderPrintItem {
   （入出庫帳票の商品名・SKUと同じ方針）。あとで商品を改名したり仕入先マスタを編集したりしても、
   発注履歴タブの表示は変わらない。
 - 在庫は動かないので `stock_transactions` には何も書かない。`product_id` / `supplier_id` への
-  外部キーは張らない（`products` / `suppliers` が PUT で全削除→再挿入される方式のため、他の
+  外部キーは張らない（導入時は `products` / `suppliers` を PUT で全削除→再挿入していたため、他の
   テーブルと同じ理由）。
 
 ### 印刷済みロックとの関係
@@ -108,7 +108,7 @@ interface PurchaseOrderPrintItem {
 その他の連動:
 
 - `resetToSample` — 発注履歴に対応するサンプルデータはないため、リセットのたびに空へ戻す
-- Worker: `PUT /api/purchase-order-prints`（`purchase_order_prints` テーブルの全置換）、
+- Worker: `POST /api/changes` の `purchase-order-prints`（差分保存。[persistence.md](persistence.md)）、
   `GET /api/state` のレスポンスに `purchaseOrderPrints` を追加
 
 テストは純粋関数が `src/test/purchaseOrderHistory.test.ts`、`printPurchaseOrder` 自体は

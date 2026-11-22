@@ -672,3 +672,8 @@ tr:hover td { background: #fafbff; }
   border-radius: 8px; cursor: pointer; font-size: 0.85rem; white-space: nowrap;
 }
 .btn-outline:hover { background: #f3f5ff; border-color: #4f6ef7; }
+
+/* 保存の状態 (SaveStatus.tsx) */
+.save-indicator { margin-left: 12px; margin-right: auto; font-size: 0.8rem; color: #c5cbe8; }
+.save-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.save-banner button { flex-shrink: 0; }

@@ -83,7 +83,7 @@ DBマイグレーションも Worker API の追加も不要です。
 （テストで日付を固定するために外から渡せます）。
 
 状態を変えるのは `useInventory` の `addInboundPlans(inputs): number` だけです。
-1回の state 更新 / 1回の `PUT /api/inbound-plans` にまとめ（`addTransactions` と同じ方針）、
+1回の state 更新 / 1回の保存 にまとめ（`addTransactions` と同じ方針）、
 数量0の入力は落として作成できた件数を返します。`App.tsx` が `onCreateOrders` として
 `DashboardView` に渡します。
 

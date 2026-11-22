@@ -1,5 +1,6 @@
 import { vi } from 'vitest';
-import type { Product, Warehouse, Category, StockTransaction, InboundPlan, Supplier, Customer, SalesOrder, SalesDocumentItem, PaymentItem } from '../useInventory';
+import type { Product, Warehouse, Category, StockTransaction, InboundPlan, Supplier, Customer, SalesOrder, SalesDocumentItem, PaymentItem, PurchaseOrderPrintItem } from '../useInventory';
+import type { ChangeSet, SliceName } from '../saveQueue';
 
 // Worker API (/api/*) を模倣する fetch モック。
 // 戻り値の server オブジェクトが「D1 の中身」に相当し、テストから直接読み書きできる。
@@ -15,32 +16,72 @@ export interface FakeServer {
   salesOrders: SalesOrder[];
   salesDocumentItems: SalesDocumentItem[];
   paymentItems: PaymentItem[];
+  purchaseOrderPrints: PurchaseOrderPrintItem[];
 }
 
-export function stubApi(initial?: Partial<FakeServer>): FakeServer {
-  const server: FakeServer = { products: [], warehouses: [], categories: [], ledger: [], inboundPlans: [], suppliers: [], customers: [], salesOrders: [], salesDocumentItems: [], paymentItems: [], ...initial };
+type DataKey = keyof FakeServer;
+
+/** POST /api/changes のスライス名 → FakeServer のキー (Worker のテーブル対応と同じ) */
+const SLICE_KEYS: Record<SliceName, DataKey> = {
+  products: 'products',
+  warehouses: 'warehouses',
+  categories: 'categories',
+  ledger: 'ledger',
+  'inbound-plans': 'inboundPlans',
+  suppliers: 'suppliers',
+  customers: 'customers',
+  'sales-orders': 'salesOrders',
+  'sales-documents': 'salesDocumentItems',
+  payments: 'paymentItems',
+  'purchase-order-prints': 'purchaseOrderPrints',
+};
+
+export interface FakeApi extends FakeServer {
+  /** 受け取った POST /api/changes の中身 (古い順) */
+  requests: ChangeSet[];
+  /** この回数だけ、次の POST /api/changes を 500 で失敗させる */
+  failNext: number;
+}
+
+export function stubApi(initial?: Partial<FakeServer>): FakeApi {
+  const server: FakeApi = {
+    products: [], warehouses: [], categories: [], ledger: [], inboundPlans: [], suppliers: [], customers: [],
+    salesOrders: [], salesDocumentItems: [], paymentItems: [], purchaseOrderPrints: [],
+    ...initial,
+    requests: [],
+    failNext: 0,
+  };
+
+  const json = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body });
 
   vi.stubGlobal('fetch', vi.fn(async (input: unknown, init?: { method?: string; body?: string }) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
 
     if (method === 'GET' && url.endsWith('/api/state')) {
-      return { ok: true, json: async () => JSON.parse(JSON.stringify(server)) };
+      const state = Object.fromEntries((Object.values(SLICE_KEYS)).map(k => [k, server[k]]));
+      return json(200, JSON.parse(JSON.stringify(state)));
     }
-    if (method === 'PUT' && init?.body) {
-      const body = JSON.parse(init.body);
-      if (url.endsWith('/api/products')) { server.products = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/warehouses')) { server.warehouses = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/categories')) { server.categories = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/ledger')) { server.ledger = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/inbound-plans')) { server.inboundPlans = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/suppliers')) { server.suppliers = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/customers')) { server.customers = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/sales-orders')) { server.salesOrders = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/sales-documents')) { server.salesDocumentItems = body; return { ok: true, json: async () => ({ ok: true }) }; }
-      if (url.endsWith('/api/payments')) { server.paymentItems = body; return { ok: true, json: async () => ({ ok: true }) }; }
+    if (method === 'POST' && url.endsWith('/api/changes') && init?.body) {
+      const changes = JSON.parse(init.body) as ChangeSet;
+      server.requests.push(changes);
+      if (server.failNext > 0) {
+        server.failNext--;
+        return json(500, { error: 'boom' });
+      }
+      // Worker と同じく、スライスごとに削除してから id で追加・置き換え
+      for (const [slice, change] of Object.entries(changes) as [SliceName, NonNullable<ChangeSet[SliceName]>][]) {
+        const key = SLICE_KEYS[slice];
+        const rows = (server[key] as { id: string }[]).filter(r => !change.delete.includes(r.id));
+        for (const r of change.upsert) {
+          const i = rows.findIndex(x => x.id === r.id);
+          if (i >= 0) rows[i] = r; else rows.push(r);
+        }
+        (server as unknown as Record<DataKey, { id: string }[]>)[key] = rows;
+      }
+      return json(200, { ok: true });
     }
-    return { ok: false, json: async () => ({ error: 'not found' }) };
+    return json(404, { error: 'not found' });
   }));
 
   return server;

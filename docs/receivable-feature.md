@@ -12,7 +12,7 @@
 | `src/PaymentModal.tsx` | 入金登録。得意先・入金日・入金額・振込手数料・方法・備考と、充てる請求書の選択 + 消込プレビュー |
 | `src/useInventory.ts` | 型・純粋関数・`recordPayment` / `deletePayment`、`deleteSalesDocument` / `deleteCustomer` のガード |
 | `migrations/0016_payments.sql` | `payment_items` テーブル |
-| `worker/index.ts` | `GET /api/state` の `paymentItems`、`PUT /api/payments` |
+| `worker/index.ts` | `GET /api/state` の `paymentItems`、`POST /api/changes` の `payments` |
 | `src/DashboardView.tsx` | 「期限超過の売掛金」カードと「未回収アラート」 (props `salesDocumentItems` / `payments`、省略可) |
 
 タブは `納品書・請求書` の右隣 (`App.tsx` の `activeTab === 'receivables'`)。

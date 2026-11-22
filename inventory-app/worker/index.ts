@@ -1,19 +1,10 @@
 // Cloudflare Worker: /api/* で D1 を読み書きし、それ以外は静的アセット (dist/) にフォールバックする
 // ローカル開発 (wrangler dev) では .wrangler/state のローカルD1、デプロイ後はリモートD1 に同じコードで接続される
 //
-// API 設計はフロント (useInventory.ts) の「スライス単位で全量保存」に合わせている:
-//   GET /api/state        → { products, warehouses, categories, ledger, inboundPlans, suppliers, customers } をまとめて返す
-//   PUT /api/products     → products + lots テーブルを全置換
-//   PUT /api/warehouses   → warehouses テーブルを全置換
-//   PUT /api/categories   → categories テーブルを全置換
-//   PUT /api/ledger       → stock_transactions テーブルを全置換
-//   PUT /api/inbound-plans → inbound_plans テーブルを全置換
-//   PUT /api/suppliers    → suppliers テーブルを全置換
-//   PUT /api/purchase-order-prints → purchase_order_prints テーブルを全置換
-//   PUT /api/customers    → customers テーブルを全置換
-//   PUT /api/sales-orders → sales_orders テーブルを全置換
-//   PUT /api/sales-documents → sales_document_items テーブルを全置換 (納品書・請求書の発行履歴)
-//   PUT /api/payments     → payment_items テーブルを全置換 (入金と請求書への消込)
+// API 設計:
+//   GET  /api/state   → 全データ (products, warehouses, categories, ledger, inboundPlans, suppliers, customers, …) をまとめて返す
+//   POST /api/changes → 変わったレコードだけを { [スライス名]: { upsert: [...], delete: [id...] } } で受け取り、
+//                       1トランザクションで書く (差分保存。スライス名はフロントの persist() と同じ)
 
 export interface Env {
   DB: D1Database;
@@ -612,168 +603,194 @@ async function readState(db: D1Database) {
   return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders, salesDocumentItems, paymentItems };
 }
 
-// products + lots を全置換 (batch はトランザクションとして実行される)
-// lots → products の順で削除して外部キー違反を避ける
-async function replaceProducts(db: D1Database, products: Product[]) {
-  const stmts = [db.prepare('DELETE FROM lots'), db.prepare('DELETE FROM products')];
-  const insertProduct = db.prepare(
-    'INSERT INTO products (id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  const insertLot = db.prepare(
-    'INSERT INTO lots (id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const p of products) {
-    stmts.push(insertProduct.bind(p.id, p.name, p.sku, p.janCode || null, p.categoryId, p.minQuantity, p.price, p.costPrice, p.taxRate ?? 8, p.kind === '資材' ? '資材' : '販売品', p.updatedAt));
-  }
-  for (const p of products) {
-    for (const l of p.lots) {
-      stmts.push(insertLot.bind(l.id, p.id, l.lotNo, l.expiryDate ?? null, l.quantity, l.warehouseId, l.unitPrice ?? null));
-    }
-  }
-  await db.batch(stmts);
+// ---- 保存: POST /api/changes (差分保存) ----
+// フロントは「変わったレコードだけ」をスライスごとに { upsert, delete } で送ってくる。
+// 1回のリクエストは1つの操作 (例: 出庫 = ロットの数量 + 帳票の行) の変更すべてで、db.batch で
+// 1トランザクションとして書く。途中で失敗すれば全部なかったことになるので、在庫と帳票がずれない。
+//
+// 追加・更新は INSERT ... ON CONFLICT(id) DO UPDATE。INSERT OR REPLACE は products.sku や
+// categories.name の UNIQUE に別の行がぶつかったとき、その別の行を黙って消してしまうので使わない
+// (UPSERT ならエラーになり、トランザクションごと失敗してフロントに知らせられる)。
+
+/** テーブル1つ分の書き方。columns と values は同じ順に並べ、先頭は必ず id */
+interface TableDef<T> {
+  table: string;
+  columns: string[];
+  values: (item: T) => unknown[];
 }
 
-// warehouses を全置換。lots が warehouse_id を参照しているため、
-// 削除→再挿入の間だけ外部キー検査をトランザクション終了まで遅延させる
-async function replaceWarehouses(db: D1Database, warehouses: Warehouse[]) {
-  const stmts = [
-    db.prepare('PRAGMA defer_foreign_keys = on'),
-    db.prepare('DELETE FROM warehouses'),
-  ];
-  const insert = db.prepare('INSERT INTO warehouses (id, name, color) VALUES (?, ?, ?)');
-  for (const w of warehouses) stmts.push(insert.bind(w.id, w.name, w.color));
-  await db.batch(stmts);
+function upsertSql<T>(def: TableDef<T>): string {
+  const updates = def.columns.slice(1).map(c => `${c} = excluded.${c}`).join(', ');
+  return `INSERT INTO ${def.table} (${def.columns.join(', ')}) VALUES (${def.columns.map(() => '?').join(', ')}) `
+    + `ON CONFLICT(id) DO UPDATE SET ${updates}`;
 }
 
-// categories を全置換。products が category_id を参照しているため、
-// 削除→再挿入の間だけ外部キー検査をトランザクション終了まで遅延させる
-async function replaceCategories(db: D1Database, categories: Category[]) {
-  const stmts = [
-    db.prepare('PRAGMA defer_foreign_keys = on'),
-    db.prepare('DELETE FROM categories'),
-  ];
-  const insert = db.prepare('INSERT INTO categories (id, name) VALUES (?, ?)');
-  for (const c of categories) stmts.push(insert.bind(c.id, c.name));
-  await db.batch(stmts);
-}
+const PRODUCTS: TableDef<Product> = {
+  table: 'products',
+  columns: ['id', 'name', 'sku', 'jan_code', 'category_id', 'min_quantity', 'price', 'cost_price', 'tax_rate', 'kind', 'updated_at'],
+  values: p => [p.id, p.name, p.sku, p.janCode || null, p.categoryId, p.minQuantity, p.price, p.costPrice, p.taxRate ?? 8, p.kind === '資材' ? '資材' : '販売品', p.updatedAt],
+};
 
-async function replaceLedger(db: D1Database, ledger: StockTransaction[]) {
-  const stmts = [db.prepare('DELETE FROM stock_transactions')];
-  const insert = db.prepare(
-    'INSERT INTO stock_transactions (id, date, type, product_id, product_name, product_sku, lot_no, quantity, note, from_warehouse_id, to_warehouse_id, unit_price, supplier_id, customer_id, cost_unit_price, tax_rate, return_of_txn_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const t of ledger) {
-    stmts.push(insert.bind(t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null, t.unitPrice ?? null, t.supplierId ?? null, t.customerId ?? null, t.costUnitPrice ?? null, t.taxRate ?? null, t.returnOfTxnId ?? null));
-  }
-  await db.batch(stmts);
-}
+const LOTS: TableDef<Lot & { productId: string }> = {
+  table: 'lots',
+  columns: ['id', 'product_id', 'lot_no', 'expiry_date', 'quantity', 'warehouse_id', 'unit_price'],
+  values: l => [l.id, l.productId, l.lotNo, l.expiryDate ?? null, l.quantity, l.warehouseId, l.unitPrice ?? null],
+};
+
+const WAREHOUSES: TableDef<Warehouse> = {
+  table: 'warehouses',
+  columns: ['id', 'name', 'color'],
+  values: w => [w.id, w.name, w.color],
+};
+
+const CATEGORIES: TableDef<Category> = {
+  table: 'categories',
+  columns: ['id', 'name'],
+  values: c => [c.id, c.name],
+};
+
+const LEDGER: TableDef<StockTransaction> = {
+  table: 'stock_transactions',
+  columns: ['id', 'date', 'type', 'product_id', 'product_name', 'product_sku', 'lot_no', 'quantity', 'note', 'from_warehouse_id', 'to_warehouse_id', 'unit_price', 'supplier_id', 'customer_id', 'cost_unit_price', 'tax_rate', 'return_of_txn_id'],
+  values: t => [t.id, t.date, t.type, t.productId, t.productName, t.productSku, t.lotNo, t.quantity, t.note, t.fromWarehouseId ?? null, t.toWarehouseId ?? null, t.unitPrice ?? null, t.supplierId ?? null, t.customerId ?? null, t.costUnitPrice ?? null, t.taxRate ?? null, t.returnOfTxnId ?? null],
+};
 
 // 旧 supplier 列 (自由入力) は列自体を残しつつ空文字で保存する。
 // 保存されるのはフロントが仕入先マスタへ移行し終えた状態なので、名前は suppliers 側にある
-async function replaceInboundPlans(db: D1Database, plans: InboundPlan[]) {
-  const stmts = [db.prepare('DELETE FROM inbound_plans')];
-  const insert = db.prepare(
-    'INSERT INTO inbound_plans (id, product_id, expected_date, quantity, received_quantity, warehouse_id, lot_no, expiry_date, supplier, supplier_id, unit_price, note, canceled_at, printed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const p of plans) {
-    stmts.push(insert.bind(p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.unitPrice ?? 0, p.note, p.canceledAt ?? null, p.printedAt ?? null, p.createdAt, p.updatedAt));
+const INBOUND_PLANS: TableDef<InboundPlan> = {
+  table: 'inbound_plans',
+  columns: ['id', 'product_id', 'expected_date', 'quantity', 'received_quantity', 'warehouse_id', 'lot_no', 'expiry_date', 'supplier', 'supplier_id', 'unit_price', 'note', 'canceled_at', 'printed_at', 'created_at', 'updated_at'],
+  values: p => [p.id, p.productId, p.expectedDate, p.quantity, p.receivedQuantity, p.warehouseId, p.lotNo, p.expiryDate ?? null, '', p.supplierId ?? '', p.unitPrice ?? 0, p.note, p.canceledAt ?? null, p.printedAt ?? null, p.createdAt, p.updatedAt],
+};
+
+const SUPPLIERS: TableDef<Supplier> = {
+  table: 'suppliers',
+  columns: ['id', 'name', 'code', 'contact', 'phone', 'email', 'address', 'lead_time_days', 'note', 'active'],
+  values: s => [s.id, s.name, s.code, s.contact, s.phone, s.email, s.address, s.leadTimeDays, s.note, s.active ? 1 : 0],
+};
+
+const CUSTOMERS: TableDef<Customer> = {
+  table: 'customers',
+  columns: ['id', 'name', 'code', 'contact', 'phone', 'email', 'address', 'note', 'active', 'closing_day', 'payment_months', 'payment_day'],
+  values: c => [c.id, c.name, c.code, c.contact, c.phone, c.email, c.address, c.note, c.active ? 1 : 0, c.closingDay ?? 31, c.paymentMonths ?? 1, c.paymentDay ?? 31],
+};
+
+const SALES_ORDERS: TableDef<SalesOrder> = {
+  table: 'sales_orders',
+  columns: ['id', 'customer_id', 'product_id', 'expected_date', 'quantity', 'shipped_quantity', 'unit_price', 'warehouse_id', 'note', 'canceled_at', 'created_at', 'updated_at'],
+  values: o => [o.id, o.customerId, o.productId, o.expectedDate, o.quantity, o.shippedQuantity, o.unitPrice ?? 0, o.warehouseId ?? '', o.note, o.canceledAt ?? null, o.createdAt, o.updatedAt],
+};
+
+const PURCHASE_ORDER_PRINTS: TableDef<PurchaseOrderPrintItem> = {
+  table: 'purchase_order_prints',
+  columns: ['id', 'print_group_id', 'printed_at', 'supplier_id', 'supplier_name', 'supplier_address', 'supplier_contact', 'supplier_phone', 'order_date', 'sender_name', 'sender_address', 'sender_phone', 'sender_contact', 'inbound_plan_id', 'product_name', 'product_sku', 'expected_date', 'quantity', 'unit_price', 'amount'],
+  values: p => [
+    p.id, p.printGroupId, p.printedAt, p.supplierId, p.supplierName, p.supplierAddress, p.supplierContact, p.supplierPhone,
+    p.orderDate, p.senderName, p.senderAddress, p.senderPhone, p.senderContact,
+    p.inboundPlanId, p.productName, p.productSku, p.expectedDate, p.quantity, p.unitPrice, p.amount,
+  ],
+};
+
+const SALES_DOCUMENTS: TableDef<SalesDocumentItem> = {
+  table: 'sales_document_items',
+  columns: ['id', 'document_id', 'kind', 'document_no', 'issued_at', 'issue_date', 'customer_id', 'customer_name', 'customer_address', 'customer_contact', 'period_from', 'period_to', 'due_date', 'issuer_name', 'issuer_address', 'issuer_phone', 'issuer_contact', 'issuer_registration_no', 'issuer_bank_account', 'line_no', 'delivery_date', 'product_name', 'product_sku', 'quantity', 'unit_price', 'amount', 'tax_rate', 'txn_ids', 'has_balance_forward', 'previous_billed', 'received', 'carry_over'],
+  values: i => [
+    i.id, i.documentId, i.kind, i.documentNo, i.issuedAt, i.issueDate,
+    i.customerId, i.customerName, i.customerAddress, i.customerContact,
+    i.periodFrom, i.periodTo, i.dueDate ?? '',
+    i.issuerName, i.issuerAddress, i.issuerPhone, i.issuerContact, i.issuerRegistrationNo, i.issuerBankAccount ?? '',
+    i.lineNo, i.deliveryDate, i.productName, i.productSku, i.quantity, i.unitPrice, i.amount, i.taxRate,
+    JSON.stringify(i.txnIds ?? []),
+    i.balanceForward ? 1 : 0,
+    i.balanceForward?.previousBilled ?? 0, i.balanceForward?.received ?? 0, i.balanceForward?.carryOver ?? 0,
+  ],
+};
+
+const PAYMENTS: TableDef<PaymentItem> = {
+  table: 'payment_items',
+  columns: ['id', 'receipt_id', 'customer_id', 'payment_date', 'method', 'document_id', 'document_no', 'amount', 'fee', 'note', 'created_at'],
+  values: p => [p.id, p.receiptId, p.customerId, p.paymentDate, p.method, p.documentId ?? '', p.documentNo ?? '', p.amount, p.fee ?? 0, p.note ?? '', p.createdAt],
+};
+
+/** products 以外のスライス名 → テーブル (スライス名はフロントの persist() と同じ) */
+// (レコードの型はテーブルごとに違うので、ここでは any でまとめる)
+const SIMPLE_TABLES: Record<string, TableDef<any>> = {
+  warehouses: WAREHOUSES,
+  categories: CATEGORIES,
+  ledger: LEDGER,
+  'inbound-plans': INBOUND_PLANS,
+  suppliers: SUPPLIERS,
+  customers: CUSTOMERS,
+  'sales-orders': SALES_ORDERS,
+  'purchase-order-prints': PURCHASE_ORDER_PRINTS,
+  'sales-documents': SALES_DOCUMENTS,
+  payments: PAYMENTS,
+};
+
+// 削除は参照する側 → 参照される側、追加・更新は参照される側 → 参照する側の順に並べる
+// (外部キーは lots → products / warehouses、products → categories。どのみち検査はトランザクションの最後まで遅らせる)
+const DELETE_ORDER = ['ledger', 'inbound-plans', 'sales-orders', 'purchase-order-prints', 'sales-documents', 'payments', 'suppliers', 'customers', 'categories', 'warehouses'];
+const UPSERT_PARENTS = ['warehouses', 'categories', 'suppliers', 'customers'];
+const UPSERT_CHILDREN = ['ledger', 'inbound-plans', 'sales-orders', 'purchase-order-prints', 'sales-documents', 'payments'];
+
+interface SliceChange {
+  upsert?: { id: string }[];
+  delete?: string[];
+}
+type ChangeSet = Record<string, SliceChange>;
+
+/** リクエストの形が正しいか (知らないスライス名、id のないレコードは受け付けない) */
+function changeSetError(body: unknown): string {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return 'body must be an object';
+  for (const [slice, change] of Object.entries(body as Record<string, unknown>)) {
+    if (slice !== 'products' && !(slice in SIMPLE_TABLES)) return `unknown slice: ${slice}`;
+    if (!change || typeof change !== 'object') return `invalid change for ${slice}`;
+    const { upsert = [], delete: deletes = [] } = change as SliceChange;
+    if (!Array.isArray(upsert) || !Array.isArray(deletes)) return `invalid change for ${slice}`;
+    if (upsert.some(r => !r || typeof r.id !== 'string' || !r.id)) return `record without id in ${slice}`;
+    if (deletes.some(id => typeof id !== 'string')) return `invalid delete id in ${slice}`;
   }
-  await db.batch(stmts);
+  return '';
 }
 
-// suppliers を全置換。inbound_plans が supplier_id で参照するが外部キーは張っていないので
-// (products / warehouses と同じ理由)、そのまま削除→再挿入できる
-async function replaceSuppliers(db: D1Database, suppliers: Supplier[]) {
-  const stmts = [db.prepare('DELETE FROM suppliers')];
-  const insert = db.prepare(
-    'INSERT INTO suppliers (id, name, code, contact, phone, email, address, lead_time_days, note, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const s of suppliers) {
-    stmts.push(insert.bind(s.id, s.name, s.code, s.contact, s.phone, s.email, s.address, s.leadTimeDays, s.note, s.active ? 1 : 0));
-  }
-  await db.batch(stmts);
-}
+function changeStatements(db: D1Database, changes: ChangeSet): D1PreparedStatement[] {
+  const stmts: D1PreparedStatement[] = [];
+  const deleteLotsOf = db.prepare('DELETE FROM lots WHERE product_id = ?');
 
-// customers を全置換。stock_transactions が customer_id で参照するが外部キーは張っていないので
-// (suppliers と同じ理由)、そのまま削除→再挿入できる
-async function replaceCustomers(db: D1Database, customers: Customer[]) {
-  const stmts = [db.prepare('DELETE FROM customers')];
-  const insert = db.prepare(
-    'INSERT INTO customers (id, name, code, contact, phone, email, address, note, active, closing_day, payment_months, payment_day) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const c of customers) {
-    stmts.push(insert.bind(
-      c.id, c.name, c.code, c.contact, c.phone, c.email, c.address, c.note, c.active ? 1 : 0,
-      c.closingDay ?? 31, c.paymentMonths ?? 1, c.paymentDay ?? 31,
-    ));
+  // 1. 削除
+  for (const id of changes.products?.delete ?? []) {
+    stmts.push(deleteLotsOf.bind(id), db.prepare('DELETE FROM products WHERE id = ?').bind(id));
   }
-  await db.batch(stmts);
-}
+  for (const slice of DELETE_ORDER) {
+    const ids = changes[slice]?.delete ?? [];
+    if (ids.length === 0) continue;
+    const del = db.prepare(`DELETE FROM ${SIMPLE_TABLES[slice].table} WHERE id = ?`);
+    for (const id of ids) stmts.push(del.bind(id));
+  }
 
-// sales_orders を全置換 (replaceInboundPlans と同じく外部キーは張らないので、そのまま削除→再挿入できる)
-async function replaceSalesOrders(db: D1Database, orders: SalesOrder[]) {
-  const stmts = [db.prepare('DELETE FROM sales_orders')];
-  const insert = db.prepare(
-    'INSERT INTO sales_orders (id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const o of orders) {
-    stmts.push(insert.bind(o.id, o.customerId, o.productId, o.expectedDate, o.quantity, o.shippedQuantity, o.unitPrice ?? 0, o.warehouseId ?? '', o.note, o.canceledAt ?? null, o.createdAt, o.updatedAt));
+  // 2. 追加・更新
+  const upsertAll = (slice: string) => {
+    const rows = changes[slice]?.upsert ?? [];
+    if (rows.length === 0) return;
+    const def = SIMPLE_TABLES[slice];
+    const stmt = db.prepare(upsertSql(def));
+    for (const row of rows) stmts.push(stmt.bind(...def.values(row)));
+  };
+  UPSERT_PARENTS.forEach(upsertAll);
+  const products = (changes.products?.upsert ?? []) as Product[];
+  if (products.length > 0) {
+    const upsertProduct = db.prepare(upsertSql(PRODUCTS));
+    const insertLot = db.prepare(upsertSql(LOTS));
+    for (const p of products) {
+      // 商品のロットは商品ごと丸ごと書き直す (減ったロット・空にしたロットの削除も兼ねる)
+      stmts.push(upsertProduct.bind(...PRODUCTS.values(p)), deleteLotsOf.bind(p.id));
+      for (const l of p.lots ?? []) stmts.push(insertLot.bind(...LOTS.values({ ...l, productId: p.id })));
+    }
   }
-  await db.batch(stmts);
-}
+  UPSERT_CHILDREN.forEach(upsertAll);
 
-// purchase_order_prints を全置換。追記専用の履歴だが、他のスライスと同じ
-// 「全量取得→全量保存」の方式に合わせている (products / suppliers と同じ理由で外部キーは張らない)
-async function replacePurchaseOrderPrints(db: D1Database, prints: PurchaseOrderPrintItem[]) {
-  const stmts = [db.prepare('DELETE FROM purchase_order_prints')];
-  const insert = db.prepare(
-    'INSERT INTO purchase_order_prints (id, print_group_id, printed_at, supplier_id, supplier_name, supplier_address, supplier_contact, supplier_phone, order_date, sender_name, sender_address, sender_phone, sender_contact, inbound_plan_id, product_name, product_sku, expected_date, quantity, unit_price, amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const p of prints) {
-    stmts.push(insert.bind(
-      p.id, p.printGroupId, p.printedAt, p.supplierId, p.supplierName, p.supplierAddress, p.supplierContact, p.supplierPhone,
-      p.orderDate, p.senderName, p.senderAddress, p.senderPhone, p.senderContact,
-      p.inboundPlanId, p.productName, p.productSku, p.expectedDate, p.quantity, p.unitPrice, p.amount,
-    ));
-  }
-  await db.batch(stmts);
-}
-
-// sales_document_items を全置換。発注書の印刷履歴と同じく追記中心の履歴だが、
-// 取消 (書類の削除) もあるので他のスライスと同じ「全量取得→全量保存」に合わせる
-async function replaceSalesDocumentItems(db: D1Database, items: SalesDocumentItem[]) {
-  const stmts = [db.prepare('DELETE FROM sales_document_items')];
-  const insert = db.prepare(
-    'INSERT INTO sales_document_items (id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids, has_balance_forward, previous_billed, received, carry_over) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const i of items) {
-    stmts.push(insert.bind(
-      i.id, i.documentId, i.kind, i.documentNo, i.issuedAt, i.issueDate,
-      i.customerId, i.customerName, i.customerAddress, i.customerContact,
-      i.periodFrom, i.periodTo, i.dueDate ?? '',
-      i.issuerName, i.issuerAddress, i.issuerPhone, i.issuerContact, i.issuerRegistrationNo, i.issuerBankAccount ?? '',
-      i.lineNo, i.deliveryDate, i.productName, i.productSku, i.quantity, i.unitPrice, i.amount, i.taxRate,
-      JSON.stringify(i.txnIds ?? []),
-      i.balanceForward ? 1 : 0,
-      i.balanceForward?.previousBilled ?? 0, i.balanceForward?.received ?? 0, i.balanceForward?.carryOver ?? 0,
-    ));
-  }
-  await db.batch(stmts);
-}
-
-// payment_items を全置換 (入金の登録・削除のたびに全量を保存する、他のスライスと同じ方式)
-async function replacePaymentItems(db: D1Database, items: PaymentItem[]) {
-  const stmts = [db.prepare('DELETE FROM payment_items')];
-  const insert = db.prepare(
-    'INSERT INTO payment_items (id, receipt_id, customer_id, payment_date, method, document_id, document_no, amount, fee, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  );
-  for (const p of items) {
-    stmts.push(insert.bind(
-      p.id, p.receiptId, p.customerId, p.paymentDate, p.method,
-      p.documentId ?? '', p.documentNo ?? '', p.amount, p.fee ?? 0, p.note ?? '', p.createdAt,
-    ));
-  }
-  await db.batch(stmts);
+  // 外部キーの検査はトランザクションの最後まで遅らせる (同じ変更の中で親と子を両方書くため)
+  return stmts.length > 0 ? [db.prepare('PRAGMA defer_foreign_keys = on'), ...stmts] : [];
 }
 
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
@@ -781,48 +798,21 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
     if (request.method === 'GET' && url.pathname === '/api/state') {
       return Response.json(await readState(env.DB));
     }
-    if (request.method === 'PUT') {
-      switch (url.pathname) {
-        case '/api/products':
-          await replaceProducts(env.DB, await request.json<Product[]>());
-          return Response.json({ ok: true });
-        case '/api/warehouses':
-          await replaceWarehouses(env.DB, await request.json<Warehouse[]>());
-          return Response.json({ ok: true });
-        case '/api/categories':
-          await replaceCategories(env.DB, await request.json<Category[]>());
-          return Response.json({ ok: true });
-        case '/api/ledger':
-          await replaceLedger(env.DB, await request.json<StockTransaction[]>());
-          return Response.json({ ok: true });
-        case '/api/inbound-plans':
-          await replaceInboundPlans(env.DB, await request.json<InboundPlan[]>());
-          return Response.json({ ok: true });
-        case '/api/suppliers':
-          await replaceSuppliers(env.DB, await request.json<Supplier[]>());
-          return Response.json({ ok: true });
-        case '/api/customers':
-          await replaceCustomers(env.DB, await request.json<Customer[]>());
-          return Response.json({ ok: true });
-        case '/api/sales-orders':
-          await replaceSalesOrders(env.DB, await request.json<SalesOrder[]>());
-          return Response.json({ ok: true });
-        case '/api/purchase-order-prints':
-          await replacePurchaseOrderPrints(env.DB, await request.json<PurchaseOrderPrintItem[]>());
-          return Response.json({ ok: true });
-        case '/api/sales-documents':
-          await replaceSalesDocumentItems(env.DB, await request.json<SalesDocumentItem[]>());
-          return Response.json({ ok: true });
-        case '/api/payments':
-          await replacePaymentItems(env.DB, await request.json<PaymentItem[]>());
-          return Response.json({ ok: true });
-      }
+    if (request.method === 'POST' && url.pathname === '/api/changes') {
+      const body = await request.json();
+      const error = changeSetError(body);
+      if (error) return Response.json({ error }, { status: 400 });
+      const stmts = changeStatements(env.DB, body as ChangeSet);
+      // batch は1トランザクション。1文でも失敗すれば全部取り消される
+      if (stmts.length > 0) await env.DB.batch(stmts);
+      return Response.json({ ok: true });
     }
     return Response.json({ error: 'not found' }, { status: 404 });
   } catch (err) {
     return Response.json({ error: String(err) }, { status: 500 });
   }
 }
+
 
 export default {
   async fetch(request, env): Promise<Response> {

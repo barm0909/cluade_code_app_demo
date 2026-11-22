@@ -140,7 +140,7 @@
 | `minQuantitySuggestions(rows, products, inboundPlans, suppliers, options?)` | 発注点の提案（プレビュー用の純粋関数） |
 | `planMinQuantities(suggestions, productIds)` | 選択された提案 → 更新入力。確認ダイアログと実行が同じ結果を共有する（`planReorder` / `planDisposal` と同じ作り） |
 | `stockAnalysisCsv(rows, categories)` / `exportStockAnalysisCsv` | CSV（`CSV_EXPORTS.analysis`、`在庫分析_YYYY-MM-DD.csv`） |
-| `applyMinQuantities(updates)`（フック） | 発注点の一括更新。1回の state 更新・1回の PUT。帳票には書かない |
+| `applyMinQuantities(updates)`（フック） | 発注点の一括更新。1回の state 更新・1回の保存。帳票には書かない |
 
 `applyMinQuantities` は「実際に値が変わる商品の数」を返します。存在しない商品・現在値と同じ値・
 負の値は無視されます（更新件数にも含めません）。

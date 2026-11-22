@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { SaveQueue, postChanges } from './saveQueue';
+import type { SaveStatus, SliceName } from './saveQueue';
 
 // xlsx (SheetJS) は 400kB 超あり、Excel の入出力ボタンを押したときにしか使わないので、
 // 初期表示のバンドルに含めず、使う時点で別チャンクとして読み込む。
@@ -556,18 +558,16 @@ async function fetchState(): Promise<ServerState | null> {
   }
 }
 
-type Slice = 'products' | 'warehouses' | 'categories' | 'ledger' | 'inbound-plans' | 'suppliers' | 'purchase-order-prints' | 'customers' | 'sales-orders' | 'sales-documents' | 'payments';
+/**
+ * 保存はアプリに1つの SaveQueue が受け持つ (saveQueue.ts / docs/persistence.md)。
+ * 各操作はこれまでどおりスライスの配列全体を persist に渡し、SaveQueue が「サーバーにあるはずの内容」との
+ * 差分だけを POST /api/changes で送る。同じ操作の中で保存したスライス (例: 出庫の商品と帳票) は1回の送信・
+ * 1トランザクションになる。サーバーから読み込めていない間は何も送らない。
+ */
+export const saveQueue = new SaveQueue(postChanges);
 
-function persist(slice: Slice, data: unknown) {
-  try {
-    void fetch(`/api/${slice}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    }).catch(() => {});
-  } catch {
-    // fetch が使えない環境では永続化をスキップ (メモリ内のみ)
-  }
+function persist(slice: SliceName, data: readonly { id: string }[]) {
+  saveQueue.enqueue(slice, data);
 }
 
 const DEFAULT_WAREHOUSES: Warehouse[] = [
@@ -4979,8 +4979,29 @@ export function useInventory() {
   // マウント時に D1 の内容で状態を上書きする (サーバー側が常に正)
   useEffect(() => {
     let cancelled = false;
+    // 読み込みが終わるまでは保存しない (今の画面は仮のサンプルデータなので、それでサーバーを上書きしないため)
+    saveQueue.reset();
     fetchState().then(state => {
-      if (cancelled || !state) return;
+      if (cancelled) return;
+      if (!state) {
+        // サーバーにつながらない: 画面の中だけで動かす (変更は保存されない。画面にその旨を出す)
+        saveQueue.markOffline();
+        return;
+      }
+      // サーバーにある内容を「保存済み」にしてから、読み込み時の移行 (下の saveXxx) の差分を送る
+      saveQueue.load({
+        products: state.products,
+        warehouses: state.warehouses,
+        categories: state.categories ?? [],
+        ledger: state.ledger,
+        'inbound-plans': state.inboundPlans ?? [],
+        suppliers: state.suppliers ?? [],
+        'purchase-order-prints': state.purchaseOrderPrints ?? [],
+        customers: state.customers ?? [],
+        'sales-orders': state.salesOrders ?? [],
+        'sales-documents': state.salesDocumentItems ?? [],
+        payments: state.paymentItems ?? [],
+      });
       const baseCategories = (state.categories?.length ?? 0) > 0 ? state.categories : DEFAULT_CATEGORIES;
       const migrated = migrateProducts(state.products, baseCategories);
       setProducts(migrated.products);
@@ -5005,6 +5026,21 @@ export function useInventory() {
       setPaymentItems(state.paymentItems ?? []);
     });
     return () => { cancelled = true; };
+  }, []);
+
+  // 保存の状態 (保存中・失敗・オフライン)。App が画面の上に出す
+  const saveStatus: SaveStatus = useSyncExternalStore(saveQueue.subscribe, saveQueue.getStatus);
+  const retrySave = useCallback(() => saveQueue.retry(), []);
+
+  // まだサーバーに届いていない変更があるうちに画面を閉じようとしたら、ブラウザの確認を出す
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!saveQueue.hasUnsaved()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, []);
 
   // 棚卸のように複数件をまとめて記録したいとき用。1回の state 更新・1回の保存で済ませる
@@ -6039,5 +6075,5 @@ export function useInventory() {
     });
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, issueSalesDocuments, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, issueSalesDocuments, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment, saveStatus, retrySave };
 }
