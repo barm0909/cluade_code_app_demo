@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import type { Customer, FefoPlan, Product, SaleInput, Warehouse } from './useInventory';
-import { DEFAULT_TAX_RATE, isMaterial, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
+import { DEFAULT_TAX_RATE, findProductByScan, isMaterial, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
+import { ScanInput } from './ScanInput';
+import type { ScanFeedback } from './ScanInput';
 
 interface Props {
   products: Product[];
@@ -45,6 +47,20 @@ export function SalesEntryModal({ products, customers, warehouses, onSubmit, onC
     if (!priceTouched) setUnitPrice(sorted.find(p => p.id === id)?.price ?? 0);
   };
 
+  // バーコード: 別の商品なら選び直して数量 1、同じ商品を続けて読んだら数量 +1
+  const handleScan = (text: string): ScanFeedback => {
+    const { product: scanned, error } = findProductByScan(products, text);
+    if (!scanned) return { message: error, tone: 'error' };
+    if (isMaterial(scanned)) return { message: `${scanned.name} は資材なので売上にできません`, tone: 'error' };
+    if (scanned.id === productId) {
+      setQty(q => q + 1);
+      return { message: `${scanned.name} 数量 ${qty + 1}`, tone: 'ok' };
+    }
+    handleProductChange(scanned.id);
+    setQty(1);
+    return { message: `${scanned.name} を選びました（数量 1）`, tone: 'ok' };
+  };
+
   const plan: FefoPlan = useMemo(
     () => product
       ? planFefoShipment(product, qty, { warehouseId: warehouseId || undefined, includeExpired })
@@ -79,6 +95,11 @@ export function SalesEntryModal({ products, customers, warehouses, onSubmit, onC
         <h2>売上を登録</h2>
         <form onSubmit={handleSubmit}>
           <div className="modal-body">
+            <ScanInput
+              label="売上のバーコード"
+              hint="その商品を選びます。同じ商品を続けて読むと数量が 1 ずつ増えます"
+              onScan={handleScan}
+            />
             <div className="form-grid">
               <label className="form-span-2" htmlFor="sale-product">
                 商品

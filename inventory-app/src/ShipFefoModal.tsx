@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
 import type { Customer, FefoPlan, FefoShipOptions, OutboundTransactionType, Product, Warehouse } from './useInventory';
-import { outboundTypesFor, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse } from './useInventory';
+import { outboundTypesFor, planFefoShipment, productTaxRate, saleAmounts, selectableCustomers, taxRateLabel, totalQuantity, totalQuantityByWarehouse, findProductByScan, janCodeError, normalizeScanCode } from './useInventory';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
+import { ScanInput } from './ScanInput';
+import type { ScanFeedback } from './ScanInput';
 
 interface Props {
   product: Product;
@@ -18,6 +20,17 @@ interface Props {
  * 「確定したら別のロットから引かれた」ということは起こらない。
  */
 export function ShipFefoModal({ product, warehouses, customers, onShip, onClose }: Props) {
+  // この画面は開いた商品の出庫なので、同じ商品を読むたびに数量 +1。別の商品なら知らせるだけ
+  const handleScan = (text: string): ScanFeedback => {
+    const { product: scanned, error } = findProductByScan([product], text);
+    if (!scanned) {
+      const code = normalizeScanCode(text);
+      return { message: code && !janCodeError(code) ? `この画面は ${product.name} の出庫です（読み取ったのは別の商品か未登録のJANです: ${code}）` : error, tone: 'error' };
+    }
+    setQty(q => q + 1);
+    return { message: `${product.name} 数量 ${qty + 1}`, tone: 'ok' };
+  };
+
   const [qty, setQty] = useState(1);
   const [warehouseId, setWarehouseId] = useState('');
   const [includeExpired, setIncludeExpired] = useState(false);
@@ -61,6 +74,11 @@ export function ShipFefoModal({ product, warehouses, customers, onShip, onClose 
           賞味期限の近いロットから自動で引き当てます。（対象在庫: {stock}）
         </p>
         <form onSubmit={handleSubmit}>
+          <ScanInput
+            label="出庫のバーコード"
+            hint={`${product.name}を読み取るたびに出庫数量が 1 増えます`}
+            onScan={handleScan}
+          />
           <label htmlFor="fefo-warehouse">
             倉庫
             <select id="fefo-warehouse" value={warehouseId} onChange={e => setWarehouseId(e.target.value)}>

@@ -45,8 +45,15 @@
 |------|------------------|
 | 商品名またはSKUが空 | 商品名とSKUは必須です |
 | JANコードが8桁でも13桁でもない | JANコードは数字8桁または13桁で入力してください |
+| JANコードの最後の1桁（チェックデジット）が合わない | JANコードの最後の1桁（チェックデジット）が合いません。打ち間違い・読み間違いがないか確認してください |
 
 JANコードは入力しながら自動整形されます（全角数字→半角、ハイフンや空白は削除、13桁で打ち止め）。
+「+ 商品追加」の画面でも同じチェックをします。
+
+### バーコード表
+
+商品マスタの上にある「バーコード表」で、JANコードを登録した商品のバーコードを並べて表示・印刷できます。
+値札・棚札の印刷や、スマホのカメラでの読み取りの確認に使います（[barcode.md](barcode.md)）。
 バーコードリーダーやIMEオンのままの入力でも、そのまま入れて問題ありません。空欄のままでも保存できます。
 
 ### 削除
@@ -274,7 +281,7 @@ JANコードは入力しながら自動整形されます（全角数字→半�
 - 更新処理：`src/useInventory.ts` の `updateProduct` / `deleteProduct` / `add|update|deleteCategory` /
   `add|update|deleteWarehouse` / `add|update|deleteSupplier` / `add|update|deleteCustomer` / `printPurchaseOrder`（発注書の印刷。
   印刷済みロックと発注履歴への記録を1回で行う。詳しくは [purchase-order-history.md](purchase-order-history.md)）
-- JANコードの整形・検証：`normalizeJanCode` / `isValidJanCode`
+- JANコードの整形・検証：`normalizeJanCode` / `janCodeError`（チェックデジットまで）/ `isValidJanCode`。バーコード表は `BarcodeSheetModal` + `BarcodeSvg`（`eanModules`）
 - 仕入先の入力チェック：`supplierValidationError`（画面と更新処理が共有）。仕様の詳細は
   [../supplier-feature.md](../supplier-feature.md)
 - 得意先の入力チェック：`customerValidationError`（同上）。売上実績の集計は `customerRows` /

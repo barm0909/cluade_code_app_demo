@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   EMPTY_STOCKTAKE_FILTER,
+  findProductByScan,
   csvExportHint,
   csvExportLabel,
   exportStocktakeCsv,
@@ -8,7 +9,9 @@ import {
   stocktakeRows,
   stocktakeTotals,
 } from './useInventory';
-import type { Category, Product, StocktakeCounts, StocktakeFilter, Warehouse } from './useInventory';
+import type { Category, Product, StocktakeCounts, StocktakeFilter, StocktakeRow, Warehouse } from './useInventory';
+import { ScanInput } from './ScanInput';
+import type { ScanFeedback } from './ScanInput';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { useConfirm, useNotify } from './useConfirm';
 
@@ -29,6 +32,11 @@ export function StocktakeView({ products, categories, warehouses, onApply }: Pro
   const [filter, setFilter] = useState<StocktakeFilter>(EMPTY_STOCKTAKE_FILTER);
   const [counts, setCounts] = useState<StocktakeCounts>({});
   const [diffOnly, setDiffOnly] = useState(false);
+  // スキャン数え: 商品ごとに「どのロットを数えているか」を覚える (JAN ではロットまで分からないため)
+  const [lotChoice, setLotChoice] = useState<Record<string, string>>({});
+  // 複数ロットのある商品を読んだとき、どのロットに数えるかを選んでもらう間の状態
+  const [choosing, setChoosing] = useState<{ productName: string; lots: StocktakeRow[] } | null>(null);
+  const [scanFeedback, setScanFeedback] = useState<ScanFeedback | null>(null);
   const { confirm, confirmDialog } = useConfirm();
   const { notify, notifyDialog } = useNotify();
 
@@ -65,6 +73,38 @@ export function StocktakeView({ products, categories, warehouses, onApply }: Pro
     });
   };
 
+  // 実数を +1 する (未カウントなら 0 から数え始める)
+  const countUp = (row: StocktakeRow): ScanFeedback => {
+    const next = (counts[row.lotId] ?? 0) + 1;
+    setCounts(prev => ({ ...prev, [row.lotId]: (prev[row.lotId] ?? 0) + 1 }));
+    return { message: `${row.productName} ロット${row.lotNo}：${next}個目`, tone: 'ok' };
+  };
+
+  /**
+   * バーコードを1つ読むたびに、その商品のロットの実数を +1 する。
+   * 対象は今のカテゴリ・倉庫の絞り込みに入るロット (キーワードは関係なし)。ロットが1つならそれ、
+   * 複数あれば最初に選んでもらい、同じ商品の次からは同じロットに数える。
+   */
+  const handleScan = (text: string): ScanFeedback => {
+    const { product, error } = findProductByScan(products, text);
+    if (!product) return { message: error, tone: 'error' };
+    const lots = stocktakeRows(products, { ...filter, keyword: '' }).filter(r => r.productId === product.id);
+    if (lots.length === 0) return { message: `${product.name} のロットがこの絞り込み（カテゴリ・倉庫）にありません`, tone: 'error' };
+    const remembered = lots.find(r => r.lotId === lotChoice[product.id]);
+    if (lots.length === 1 || remembered) {
+      setChoosing(null);
+      return countUp(remembered ?? lots[0]);
+    }
+    setChoosing({ productName: product.name, lots });
+    return { message: `${product.name} はロットが${lots.length}つあります。数えるロットを選んでください（次からは同じロットに数えます）`, tone: 'info' };
+  };
+
+  const chooseLot = (row: StocktakeRow) => {
+    setLotChoice(prev => ({ ...prev, [row.productId]: row.lotId }));
+    setChoosing(null);
+    setScanFeedback(countUp(row));
+  };
+
   // 未入力の行だけ帳簿在庫で埋める (入力済みのカウントは上書きしない)
   const fillWithBook = () => {
     setCounts(prev => {
@@ -98,6 +138,35 @@ export function StocktakeView({ products, categories, warehouses, onApply }: Pro
 
   return (
     <>
+      <section className="scan-count" aria-label="スキャン数え">
+        <div className="scan-count-head">
+          <strong>スキャン数え</strong>
+          {Object.keys(lotChoice).length > 0 && (
+            <button type="button" className="btn-ghost-light" onClick={() => setLotChoice({})}>数えるロットを選び直す</button>
+          )}
+        </div>
+        <ScanInput
+          label="棚卸のバーコード"
+          hint="その商品のロットの実数が 1 増えます（表の実数は手で直しても構いません）"
+          continuous
+          onScan={text => { const fb = handleScan(text); setScanFeedback(null); return fb; }}
+        />
+        {scanFeedback && <div role="status" className="scan-feedback scan-ok">{scanFeedback.message}</div>}
+        {choosing && (
+          <div className="scan-lot-choice" role="group" aria-label="数えるロット">
+            <span>{choosing.productName} のどのロットを数えますか？</span>
+            {choosing.lots.map(r => (
+              <button key={r.lotId} type="button" className="btn-edit" onClick={() => chooseLot(r)}>
+                ロット{r.lotNo}
+                {r.expiryDate ? `（期限 ${r.expiryDate}）` : ''}
+                ／{warehouses.find(w => w.id === r.warehouseId)?.name ?? '倉庫不明'}
+                ／帳簿 {r.bookQuantity}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
       <div className="controls ledger-controls">
         <input
           className="search-input"

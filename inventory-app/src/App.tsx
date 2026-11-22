@@ -1,5 +1,5 @@
 import { Fragment, Suspense, lazy, useState, useMemo } from 'react';
-import { useInventory, daysUntilExpiry, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, productTaxRate, saleAmounts, taxRateLabel, isMaterial, outboundTypesFor, INBOUND_TYPES } from './useInventory';
+import { useInventory, daysUntilExpiry, findProductByScan, totalQuantity, lotUnitCost, csvExportHint, csvExportLabel, salesRows, selectableCustomers, productTaxRate, saleAmounts, taxRateLabel, isMaterial, outboundTypesFor, INBOUND_TYPES } from './useInventory';
 import type { Customer, Product, Lot, LotTraceKey, SaleFields, Warehouse, SortField, SortOrder, TransactionType } from './useInventory';
 import { ProductModal } from './ProductModal';
 import { LotModal } from './LotModal';
@@ -18,6 +18,8 @@ import { CustomerMasterView } from './CustomerMasterView';
 import { StocktakeView } from './StocktakeView';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { NumberInput } from './NumberInput';
+import { ScanInput } from './ScanInput';
+import type { ScanFeedback } from './ScanInput';
 import { useConfirm, useNotify } from './useConfirm';
 import './App.css';
 
@@ -268,6 +270,17 @@ export default function App() {
     return '';
   };
 
+  // バーコードで商品を呼び出す: その商品だけに絞り込んでロットを開く (絞り込みは JAN、なければ SKU で)
+  const handleInventoryScan = (text: string): ScanFeedback => {
+    const { product, error } = findProductByScan(products, text);
+    if (!product) return { message: error, tone: 'error' };
+    setSearch(product.janCode || product.sku);
+    setCategoryFilter('');
+    setWarehouseFilter('');
+    setExpandedIds(prev => new Set(prev).add(product.id));
+    return { message: `${product.name}（${product.sku}） 在庫 ${totalQuantity(product)}`, tone: 'ok' };
+  };
+
   const fefoTarget = fefoProductId ? products.find(p => p.id === fefoProductId) ?? null : null;
 
   const visibleLots = (p: Product) => warehouseFilter
@@ -448,6 +461,13 @@ export default function App() {
         <CustomerMasterView customers={customers} sales={sales} salesOrders={salesOrders} payments={paymentItems} onAdd={addCustomer} onUpdate={updateCustomer} onDelete={deleteCustomer} />
       </>) : (<>
 
+      <div className="scan-bar">
+        <ScanInput
+          label="在庫を呼び出すバーコード"
+          hint="その商品だけを一覧に表示し、ロットを開きます"
+          onScan={handleInventoryScan}
+        />
+      </div>
       <div className="controls">
         <input className="search-input" placeholder="商品名・SKU・JANコードで検索..." value={search} onChange={e => setSearch(e.target.value)} />
         <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}>
