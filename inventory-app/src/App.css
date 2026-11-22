@@ -610,3 +610,21 @@ tr:hover td { background: #fafbff; }
 
 /* 入金登録モーダル: 選んだ請求書の残高を入金額に入れるボタン */
 .payment-fill { margin-left: 8px; padding: 2px 8px; font-size: 0.75rem; font-weight: 400; }
+
+/* 締め請求・繰越型の請求書 */
+.modal-closing { width: 860px; }
+.modal-closing .sd-paper { margin-top: 16px; }
+.sd-balance { width: 100%; margin: 0 0 14px; border-collapse: collapse; font-size: 0.85rem; }
+.sd-balance th, .sd-balance td { border: 1px solid #ccc; padding: 4px 8px; text-align: right; }
+.sd-balance th { background: #f6f7fb; font-weight: 600; text-align: center; }
+.sd-balance-total { font-weight: 700; }
+.sd-earlier {
+  margin-left: 6px; padding: 0 6px; border: 1px solid #b26a00; border-radius: 4px;
+  color: #b26a00; font-size: 0.7rem; white-space: nowrap;
+}
+.form-pair { display: flex; gap: 8px; align-items: flex-end; }
+.form-pair > label { flex: 1; }
+@media print {
+  /* 締め請求でまとめて印刷するとき、請求書ごとに改ページする */
+  .sd-paper + .sd-paper { break-before: page; margin-top: 0; }
+}

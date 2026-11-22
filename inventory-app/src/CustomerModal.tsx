@@ -1,6 +1,16 @@
 import { useState } from 'react';
-import type { Customer, CustomerInput } from './useInventory';
-import { EMPTY_CUSTOMER, customerValidationError } from './useInventory';
+import type { ClosingDay, Customer, CustomerInput, PaymentDay, PaymentMonths } from './useInventory';
+import {
+  CLOSING_DAYS,
+  EMPTY_CUSTOMER,
+  END_OF_MONTH,
+  PAYMENT_DAYS,
+  closingDayLabel,
+  customerClosingDay,
+  customerPaymentDay,
+  customerPaymentMonths,
+  customerValidationError,
+} from './useInventory';
 
 interface Props {
   customer: Customer | null; // null = 新規登録
@@ -12,7 +22,10 @@ interface Props {
 const toForm = (c: Customer): CustomerInput => ({
   name: c.name, code: c.code, contact: c.contact, phone: c.phone, email: c.email,
   address: c.address, note: c.note, active: c.active,
+  closingDay: customerClosingDay(c), paymentMonths: customerPaymentMonths(c), paymentDay: customerPaymentDay(c),
 });
+
+const MONTH_LABELS: Record<PaymentMonths, string> = { 0: '当月', 1: '翌月', 2: '翌々月' };
 
 /**
  * 得意先の登録・編集フォーム。項目が多いので仕入先と同じくモーダル + 2列レイアウトに揃えている。
@@ -71,6 +84,26 @@ export function CustomerModal({ customer, customers, onSave, onClose }: Props) {
                 住所 <span className="label-hint">（任意）</span>
                 <input id="cus-address" value={form.address} onChange={e => set('address', e.target.value)} />
               </label>
+              <label htmlFor="cus-closing">
+                締め日
+                <select id="cus-closing" value={customerClosingDay(form)} onChange={e => set('closingDay', Number(e.target.value) as ClosingDay)}>
+                  {CLOSING_DAYS.map(d => <option key={d} value={d}>{closingDayLabel(d)}</option>)}
+                </select>
+              </label>
+              <div className="form-pair">
+                <label htmlFor="cus-pay-month">
+                  お支払期限
+                  <select id="cus-pay-month" value={customerPaymentMonths(form)} onChange={e => set('paymentMonths', Number(e.target.value) as PaymentMonths)}>
+                    {([0, 1, 2] as PaymentMonths[]).map(m => <option key={m} value={m}>{MONTH_LABELS[m]}</option>)}
+                  </select>
+                </label>
+                <label htmlFor="cus-pay-day">
+                  <span className="label-hint">日</span>
+                  <select id="cus-pay-day" aria-label="お支払期限の日" value={customerPaymentDay(form)} onChange={e => set('paymentDay', Number(e.target.value) as PaymentDay)}>
+                    {PAYMENT_DAYS.map(d => <option key={d} value={d}>{d === END_OF_MONTH ? '末日' : `${d}日`}</option>)}
+                  </select>
+                </label>
+              </div>
               <label htmlFor="cus-active">
                 取引状態
                 <select id="cus-active" value={form.active ? 'active' : 'inactive'} onChange={e => set('active', e.target.value === 'active')}>
@@ -85,6 +118,8 @@ export function CustomerModal({ customer, customers, onSave, onClose }: Props) {
             </div>
             <p className="fefo-note">
               取引停止にすると、売上登録の得意先の選択肢から外れます（過去の売上の記録は残ります）。
+              締め日を「都度請求」にすると締め請求の対象から外れ、請求書は1枚ずつ作ります。
+              お支払期限は締め日（都度請求は請求の対象期間の末日）から数えます。
             </p>
             {error && <span className="field-error" role="alert">{error}</span>}
           </div>

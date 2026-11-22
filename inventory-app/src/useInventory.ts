@@ -49,10 +49,31 @@ export interface Customer {
   address: string;
   note: string;
   active: boolean; // 取引中か (false = 取引停止)
+  /** 締め日 (5/10/15/20/25日、31 = 末日、0 = 都度請求)。未設定は末日 (customerClosingDay) */
+  closingDay?: ClosingDay;
+  /** お支払期限: 締め日の何か月後か (0 = 当月、1 = 翌月、2 = 翌々月)。未設定は翌月 */
+  paymentMonths?: PaymentMonths;
+  /** お支払期限: その月の何日か (31 = 末日)。未設定は末日 */
+  paymentDay?: PaymentDay;
 }
 
 /** 得意先の入力値 (id は採番するので含まない) */
 export type CustomerInput = Omit<Customer, 'id'>;
+
+// ---- 締め日・支払条件 (docs/billing-closing-feature.md) ----
+/** 締め日。31 は「末日」(2月なら28/29日)、0 は締めずに都度請求する得意先 */
+export type ClosingDay = 0 | 5 | 10 | 15 | 20 | 25 | 31;
+export type PaymentMonths = 0 | 1 | 2;
+export type PaymentDay = 5 | 10 | 15 | 20 | 25 | 31;
+export const END_OF_MONTH = 31;
+export const AS_NEEDED_CLOSING: ClosingDay = 0;
+export const CLOSING_DAYS: ClosingDay[] = [5, 10, 15, 20, 25, 31, 0];
+export const PAYMENT_MONTHS: PaymentMonths[] = [0, 1, 2];
+export const PAYMENT_DAYS: PaymentDay[] = [5, 10, 15, 20, 25, 31];
+/** 締め日・支払条件を持たない得意先 (この機能より前の登録) は「末日締め・翌月末払い」とみなす */
+export const DEFAULT_CLOSING_DAY: ClosingDay = 31;
+export const DEFAULT_PAYMENT_MONTHS: PaymentMonths = 1;
+export const DEFAULT_PAYMENT_DAY: PaymentDay = 31;
 
 export interface Lot {
   id: string;
@@ -504,16 +525,16 @@ const DEFAULT_CUSTOMERS: Customer[] = [
   {
     id: 'cus-midori', name: 'みどりストア', code: 'C-001', contact: '緑川 一郎',
     phone: '03-2222-3333', email: 'order@midori-store.example.jp', address: '東京都世田谷区4-4-4',
-    note: '毎朝配送', active: true,
+    note: '毎朝配送', active: true, closingDay: 20, paymentMonths: 1, paymentDay: 10,
   },
   {
     id: 'cus-sakura', name: 'さくらカフェ', code: 'C-002', contact: '佐倉 美咲',
     phone: '06-4444-5555', email: 'cafe@sakura.example.jp', address: '大阪府大阪市中央区5-5-5',
-    note: '', active: true,
+    note: '', active: true, closingDay: 0, paymentMonths: 1, paymentDay: 31,
   },
   {
     id: 'cus-kita', name: '北町給食センター', code: 'C-003', contact: '', phone: '011-666-7777',
-    email: '', address: '北海道札幌市北区6-6-6', note: '月末締め', active: true,
+    email: '', address: '北海道札幌市北区6-6-6', note: '月末締め', active: true, closingDay: 31, paymentMonths: 1, paymentDay: 31,
   },
 ];
 
@@ -2358,9 +2379,10 @@ export function exportCostHistoryCsv(rows: CostHistoryRow[]) {
 /** 新規登録フォームの初期値。取引中 (active) で始める */
 export const EMPTY_CUSTOMER: CustomerInput = {
   name: '', code: '', contact: '', phone: '', email: '', address: '', note: '', active: true,
+  closingDay: DEFAULT_CLOSING_DAY, paymentMonths: DEFAULT_PAYMENT_MONTHS, paymentDay: DEFAULT_PAYMENT_DAY,
 };
 
-/** 前後の空白を落とす (得意先は数値項目を持たないので整形はこれだけ) */
+/** 前後の空白を落とし、締め日・支払条件の不正な値・未設定を既定値にそろえる */
 export function normalizeCustomerInput(input: CustomerInput): CustomerInput {
   return {
     name: input.name.trim(),
@@ -2371,6 +2393,9 @@ export function normalizeCustomerInput(input: CustomerInput): CustomerInput {
     address: input.address.trim(),
     note: input.note.trim(),
     active: input.active,
+    closingDay: customerClosingDay(input),
+    paymentMonths: customerPaymentMonths(input),
+    paymentDay: customerPaymentDay(input),
   };
 }
 
@@ -3126,6 +3151,11 @@ export interface SalesDocumentItem {
   amount: number; // quantity * unitPrice (税抜)
   taxRate: TaxRate;
   txnIds: string[]; // この行にまとめた帳票 (売上出庫) の id
+  /**
+   * 繰越型の請求書だけ: 前回御請求額・御入金額・繰越額 (発行した時点のスナップショット。各行に同じ値)。
+   * この機能より前の請求書と納品書は持たない (紙面に繰越欄を出さない)
+   */
+  balanceForward?: BalanceForward;
 }
 
 /** 書類に載せる候補の1行。同じ日・同じ商品・同じ単価・同じ税率の売上を1行にまとめたもの */
@@ -3284,6 +3314,11 @@ export interface IssueSalesDocumentInput {
   dueDate: string; // 納品書では使わない
   issuer: SalesDocumentIssuer;
   lines: SalesDocumentLine[];
+  /**
+   * 請求書に繰越欄を載せるとき。値は発行時に balanceForward() で計算し直すので、
+   * 呼び出し側の値 (プレビュー用) が古くても保存されるのは発行した時点の繰越になる
+   */
+  balanceForward?: BalanceForward;
 }
 
 /** 発行できない理由 (できるなら空文字)。モーダルのボタンと issueSalesDocument で共有する */
@@ -3315,6 +3350,8 @@ export interface SalesDocument {
   issuer: SalesDocumentIssuer;
   items: SalesDocumentItem[];
   totals: SalesDocumentTotals;
+  /** 繰越型の請求書だけ */
+  balanceForward?: BalanceForward;
 }
 
 /**
@@ -3358,6 +3395,7 @@ export function buildSalesDocumentItems(
     amount: l.amount,
     taxRate: l.taxRate,
     txnIds: [...l.txnIds],
+    ...(input.kind === '請求書' && input.balanceForward ? { balanceForward: { ...input.balanceForward } } : {}),
   }));
 }
 
@@ -3388,6 +3426,7 @@ function toSalesDocument(items: SalesDocumentItem[]): SalesDocument {
     },
     items: sorted,
     totals: salesDocumentTotals(sorted),
+    ...(h.balanceForward ? { balanceForward: h.balanceForward } : {}),
   };
 }
 
@@ -3411,7 +3450,55 @@ export function draftSalesDocument(input: IssueSalesDocumentInput, existing: Sal
     issuer: input.issuer,
     items: [],
     totals: salesDocumentTotals([]),
+    ...(input.kind === '請求書' && input.balanceForward ? { balanceForward: input.balanceForward } : {}),
   };
+}
+
+/** 複数の書類をまとめてプレビューする (締め請求)。書類番号は発行と同じく続き番号になる */
+export function draftSalesDocuments(inputs: IssueSalesDocumentInput[], existing: SalesDocumentItem[]): SalesDocument[] {
+  let all = existing;
+  return inputs.map((input, idx) => {
+    const rows = buildSalesDocumentItems(input, all, `preview-${idx}`, '');
+    const doc = rows.length > 0 ? toSalesDocument(rows) : draftSalesDocument(input, all);
+    all = [...all, ...rows];
+    return doc;
+  });
+}
+
+/**
+ * 書類をまとめて発行するときの中身 (issueSalesDocument / 締め請求の issueSalesDocuments が使う)。
+ * 1枚ずつ、それまでに発行した分 (同じ呼び出しで先に作った書類も含む) で
+ * - 載せる売上がすでに同じ種類の書類に載っていないかを付け直して検証し (二重請求の防止)
+ * - 繰越型の請求書は繰越を計算し直す
+ * 発行できない入力は飛ばす。書類番号は続き番号になる。
+ */
+export function prepareSalesDocuments(
+  inputs: IssueSalesDocumentInput[],
+  existing: SalesDocumentItem[],
+  payments: PaymentItem[],
+  newId: () => string,
+  issuedAt: string,
+): { created: SalesDocumentItem[]; docs: SalesDocument[] } {
+  let all = existing;
+  const created: SalesDocumentItem[] = [];
+  const docs: SalesDocument[] = [];
+  for (const input of inputs) {
+    const issued = issuedSalesDocumentNos(all, input.kind);
+    const lines = input.lines.map(l => ({ ...l, issuedNo: l.txnIds.map(id => issued.get(id)).find(Boolean) ?? '' }));
+    const checked: IssueSalesDocumentInput = {
+      ...input,
+      lines,
+      ...(input.kind === '請求書' && input.balanceForward
+        ? { balanceForward: balanceForward(input.customer.id, all, payments, input.issueDate) }
+        : {}),
+    };
+    if (salesDocumentValidationError(checked)) continue;
+    const rows = buildSalesDocumentItems(checked, all, newId(), issuedAt);
+    all = [...all, ...rows];
+    created.push(...rows);
+    docs.push(toSalesDocument(rows));
+  }
+  return { created, docs };
 }
 
 export interface SalesDocumentFilter {
@@ -3935,6 +4022,224 @@ export function paymentCsv(receipts: PaymentReceipt[]): string {
 
 export function exportPaymentCsv(receipts: PaymentReceipt[]) {
   downloadCsv(csvFileName('payment'), paymentCsv(receipts));
+}
+
+// ---------------------------------------------------------------------------
+// 締め処理 (docs/billing-closing-feature.md)
+// 得意先ごとの締め日・支払条件 (Customer.closingDay / paymentMonths / paymentDay) から、
+// 締め日を1つ選ぶと、その日が締め日にあたる得意先の請求書 (対象期間・お支払期限・明細・繰越) を
+// まとめて組み立てる。発行そのものは既存の請求書と同じ salesDocumentItems に追記するだけで、
+// 締めの記録を別に持たない (前回の締め = その得意先の前月の締め日、と日付から決める)。
+// 在庫は動かないので帳票には何も書かない。
+// ---------------------------------------------------------------------------
+
+export function isClosingDay(value: unknown): value is ClosingDay {
+  return CLOSING_DAYS.includes(value as ClosingDay);
+}
+
+export function customerClosingDay(c: Pick<Customer, 'closingDay'>): ClosingDay {
+  return isClosingDay(c.closingDay) ? c.closingDay : DEFAULT_CLOSING_DAY;
+}
+
+export function customerPaymentMonths(c: Pick<Customer, 'paymentMonths'>): PaymentMonths {
+  return PAYMENT_MONTHS.includes(c.paymentMonths as PaymentMonths) ? c.paymentMonths as PaymentMonths : DEFAULT_PAYMENT_MONTHS;
+}
+
+export function customerPaymentDay(c: Pick<Customer, 'paymentDay'>): PaymentDay {
+  return PAYMENT_DAYS.includes(c.paymentDay as PaymentDay) ? c.paymentDay as PaymentDay : DEFAULT_PAYMENT_DAY;
+}
+
+/** 例: 「20日締め」「末日締め」「都度請求」 */
+export function closingDayLabel(day: ClosingDay): string {
+  if (day === AS_NEEDED_CLOSING) return '都度請求';
+  return day === END_OF_MONTH ? '末日締め' : `${day}日締め`;
+}
+
+/** 例: 「翌月末払い」「翌々月10日払い」 */
+export function paymentTermsLabel(months: PaymentMonths, day: PaymentDay): string {
+  return `${['当月', '翌月', '翌々月'][months]}${day === END_OF_MONTH ? '末' : `${day}日`}払い`;
+}
+
+/** 例: 「20日締め・翌月10日払い」 */
+export function customerBillingTermsLabel(c: Pick<Customer, 'closingDay' | 'paymentMonths' | 'paymentDay'>): string {
+  return `${closingDayLabel(customerClosingDay(c))}・${paymentTermsLabel(customerPaymentMonths(c), customerPaymentDay(c))}`;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
+/** year 年 month0 月 (0始まり。範囲外は前後の年に繰り越す) の day 日。31 や月の日数を超える日は月末にする */
+function dayInMonth(year: number, month0: number, day: number): string {
+  const first = new Date(year, month0, 1);
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  return `${first.getFullYear()}-${pad2(first.getMonth() + 1)}-${pad2(Math.min(day, last))}`;
+}
+
+function splitDate(date: string): { y: number; m0: number; d: number } {
+  const [y, m, d] = date.split('-').map(Number);
+  return { y, m0: m - 1, d };
+}
+
+/** 日付 (YYYY-MM-DD) の翌日 */
+function nextDay(date: string): string {
+  const { y, m0, d } = splitDate(date);
+  const dt = new Date(y, m0, d + 1);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+
+/** その日付が、指定の締め日にあたるか (都度請求は常に false) */
+export function isClosingDate(date: string, day: ClosingDay): boolean {
+  if (!date || day === AS_NEEDED_CLOSING) return false;
+  const { y, m0 } = splitDate(date);
+  return dayInMonth(y, m0, day) === date;
+}
+
+/** today 以前でいちばん近い締め日 (都度請求は空文字) */
+export function latestClosingDate(day: ClosingDay, today: string): string {
+  if (day === AS_NEEDED_CLOSING) return '';
+  const { y, m0 } = splitDate(today);
+  const thisMonth = dayInMonth(y, m0, day);
+  return thisMonth <= today ? thisMonth : dayInMonth(y, m0 - 1, day);
+}
+
+/**
+ * 締め日 closingDate の請求の対象期間 = 前月の締め日の翌日 〜 closingDate。
+ * 例: 20日締め・11/20 → 10/21〜11/20、末日締め・3/31 → 3/1〜3/31
+ */
+export function billingPeriod(day: ClosingDay, closingDate: string): { from: string; to: string } {
+  const { y, m0 } = splitDate(closingDate);
+  return { from: nextDay(dayInMonth(y, m0 - 1, day === AS_NEEDED_CLOSING ? END_OF_MONTH : day)), to: closingDate };
+}
+
+/** 支払条件から決まるお支払期限。baseDate (締め日。都度請求は対象期間の末日) の paymentMonths か月後の paymentDay 日 */
+export function paymentDueDate(c: Pick<Customer, 'paymentMonths' | 'paymentDay'>, baseDate: string): string {
+  const { y, m0 } = splitDate(baseDate);
+  return dayInMonth(y, m0 + customerPaymentMonths(c), customerPaymentDay(c));
+}
+
+/** 得意先の締め日のうち、today 以前でいちばん近いもの (締め請求を開いたときの初期値)。締める得意先がなければ空文字 */
+export function latestClosingDateAmong(customers: Customer[], today: string): string {
+  let latest = '';
+  for (const c of customers) {
+    if (!c.active) continue;
+    const date = latestClosingDate(customerClosingDay(c), today);
+    if (date > latest) latest = date;
+  }
+  return latest;
+}
+
+/** 繰越型の請求書に載せる前回からの繰越 */
+export interface BalanceForward {
+  previousBilled: number; // 前回御請求額
+  received: number; // 御入金額 (振込手数料を含む消込額)
+  carryOver: number; // 繰越額 = 前回御請求額 - 御入金額 (前受があればマイナス)
+}
+
+/**
+ * これから発行する請求書の繰越。
+ * - 繰越額 = それまでに発行した請求書の残高の合計 − どの請求書にも充てていない入金 (入金管理と同じ数え方)
+ * - 御入金額 = 前回の請求書の発行日の翌日 〜 issueDate の入金 (振込手数料を含む。前回がなければ issueDate までの全部)
+ * - 前回御請求額 = 繰越額 + 御入金額 (逆算。前回の請求書の発行日より前の日付で入金をあとから登録した
+ *   などのときは、前回の請求書に印字した額と一致しないことがある)
+ */
+export function balanceForward(
+  customerId: string,
+  items: SalesDocumentItem[],
+  payments: PaymentItem[],
+  issueDate: string,
+): BalanceForward {
+  const own = receivableRows(items.filter(i => i.customerId === customerId), payments);
+  const invoiceBalance = own.reduce((s, r) => s + r.remaining, 0);
+  const customerPayments = payments.filter(p => p.customerId === customerId);
+  const unapplied = customerPayments.filter(p => !p.documentId).reduce((s, p) => s + p.amount + p.fee, 0);
+  const lastIssueDate = own.reduce((max, r) => r.issueDate > max ? r.issueDate : max, '');
+  const received = customerPayments
+    .filter(p => p.paymentDate > lastIssueDate && p.paymentDate <= issueDate)
+    .reduce((s, p) => s + p.amount + p.fee, 0);
+  const carryOver = invoiceBalance - unapplied;
+  return { previousBilled: carryOver + received, received, carryOver };
+}
+
+/** 請求書の「今回御請求額」(繰越型は 繰越額 + 今回御買上額、それ以外は今回の税込合計) */
+export function invoiceGrandTotal(doc: Pick<SalesDocument, 'totals' | 'balanceForward'>): number {
+  return (doc.balanceForward?.carryOver ?? 0) + doc.totals.amountWithTax;
+}
+
+/** 締め請求の1行 = 締め日にあたる得意先1件 */
+export interface ClosingCandidate {
+  customer: Customer;
+  periodFrom: string;
+  periodTo: string;
+  dueDate: string;
+  /** 載せる売上 (締め日までのまだ請求書に載っていない売上。対象期間より前の請求漏れも含む) */
+  lines: SalesDocumentLine[];
+  /** lines のうち対象期間より前の売上 (前回以前の請求漏れ) の行数 */
+  earlierLines: number;
+  totals: SalesDocumentTotals;
+  balance: BalanceForward;
+  /** 今回御請求額 = 繰越額 + 今回御買上額 */
+  grandTotal: number;
+  /** この締め日 (対象期間の末日) の請求書をすでに発行していれば、その書類番号 */
+  issuedNo: string;
+}
+
+/**
+ * 締め日 closingDate にあたる得意先 (都度請求を除く) ごとの請求内容。
+ * 載せる売上は締め日までの未請求の売上すべて (対象期間より前の請求漏れも含め、earlierLines で数える)。
+ * 返品も差し引く (請求書と同じ)。取引停止の得意先は、載せる売上か繰越があるときだけ出す。
+ * 並びは得意先名順。
+ */
+export function closingCandidates(
+  closingDate: string,
+  customers: Customer[],
+  sales: SalesRow[],
+  items: SalesDocumentItem[],
+  payments: PaymentItem[],
+  issueDate: string,
+): ClosingCandidate[] {
+  const issued = issuedSalesDocumentNos(items, '請求書');
+  const invoices = salesDocuments(items.filter(i => i.kind === '請求書'));
+  const result: ClosingCandidate[] = [];
+  for (const customer of customers) {
+    const day = customerClosingDay(customer);
+    if (!isClosingDate(closingDate, day)) continue;
+    const { from, to } = billingPeriod(day, closingDate);
+    const lines = salesDocumentLines(sales, customer.id, '', to, issued).filter(l => !l.issuedNo);
+    const balance = balanceForward(customer.id, items, payments, issueDate);
+    if (!customer.active && lines.length === 0 && balance.carryOver === 0) continue;
+    const totals = salesDocumentTotals(lines);
+    result.push({
+      customer,
+      periodFrom: from,
+      periodTo: to,
+      dueDate: paymentDueDate(customer, closingDate),
+      lines,
+      earlierLines: lines.filter(l => l.deliveryDate < from).length,
+      totals,
+      balance,
+      grandTotal: balance.carryOver + totals.amountWithTax,
+      issuedNo: invoices.find(d => d.customerId === customer.id && d.periodTo === closingDate)?.documentNo ?? '',
+    });
+  }
+  return result.sort((a, b) => a.customer.name.localeCompare(b.customer.name));
+}
+
+/** 締め請求の1行から発行する請求書の入力を作る */
+export function closingInvoiceInput(
+  candidate: ClosingCandidate,
+  issueDate: string,
+  issuer: SalesDocumentIssuer,
+): IssueSalesDocumentInput {
+  return {
+    kind: '請求書',
+    issueDate,
+    customer: candidate.customer,
+    periodFrom: candidate.periodFrom,
+    periodTo: candidate.periodTo,
+    dueDate: candidate.dueDate,
+    issuer,
+    lines: candidate.lines,
+    balanceForward: candidate.balance,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -4613,7 +4918,8 @@ export function useInventory() {
       setLedger(txns);
       if (changed) saveLedger(txns);
       setPurchaseOrderPrints(state.purchaseOrderPrints ?? []);
-      setCustomers(state.customers ?? []);
+      // 締め日・支払条件の導入前の得意先は「末日締め・翌月末払い」として扱う (保存し直しは編集したときに行う)
+      setCustomers((state.customers ?? []).map(c => ({ ...c, closingDay: customerClosingDay(c), paymentMonths: customerPaymentMonths(c), paymentDay: customerPaymentDay(c) })));
       setSalesOrders(state.salesOrders ?? []);
       setSalesDocumentItems(state.salesDocumentItems ?? []);
       setPaymentItems(state.paymentItems ?? []);
@@ -5591,23 +5897,29 @@ export function useInventory() {
   }, []);
 
   /**
-   * 納品書・請求書を発行する (SalesDocumentModal の「発行して印刷」から)。
+   * 納品書・請求書を発行する (SalesDocumentModal の「発行して印刷」、締め請求の ClosingModal から)。
+   * issueSalesDocuments は複数枚を1回の状態更新・1回の保存でまとめて発行し、発行できた書類を返す。
    * 発行内容のスナップショットを salesDocumentItems に追加するだけで、在庫も帳票も動かさない。
    * 一度載せた売上は同じ種類の書類にもう載せられない (salesDocumentValidationError)。
    * 発行できなかったときは null、発行したときは書類を返す。
    */
-  const issueSalesDocument = useCallback((input: IssueSalesDocumentInput): SalesDocument | null => {
-    const issued = issuedSalesDocumentNos(salesDocumentItems, input.kind);
-    // 呼び出し側の候補が古くても二重発行しないよう、保存直前の発行状況で付け直してから検証する
-    const lines = input.lines.map(l => ({ ...l, issuedNo: l.txnIds.map(id => issued.get(id)).find(Boolean) ?? '' }));
-    const checked = { ...input, lines };
-    if (salesDocumentValidationError(checked)) return null;
-    const created = buildSalesDocumentItems(checked, salesDocumentItems, crypto.randomUUID(), new Date().toISOString());
+  const issueSalesDocuments = useCallback((inputs: IssueSalesDocumentInput[]): SalesDocument[] => {
+    // 呼び出し側の候補が古くても二重発行しないよう、保存直前の発行状況で付け直してから検証する。
+    // 繰越型の請求書の繰越も保存直前の請求書・入金で計算し直す
+    const { created, docs } = prepareSalesDocuments(
+      inputs, salesDocumentItems, paymentItems, () => crypto.randomUUID(), new Date().toISOString(),
+    );
+    if (created.length === 0) return [];
     const next = [...salesDocumentItems, ...created];
     setSalesDocumentItems(next);
     saveSalesDocumentItems(next);
-    return salesDocuments(created)[0];
-  }, [salesDocumentItems]);
+    return docs;
+  }, [salesDocumentItems, paymentItems]);
+
+  const issueSalesDocument = useCallback(
+    (input: IssueSalesDocumentInput): SalesDocument | null => issueSalesDocuments([input])[0] ?? null,
+    [issueSalesDocuments],
+  );
 
   /**
    * 発行した書類を取り消す。載っていた売上はふたたび同じ種類の書類に載せられるようになる。
@@ -5647,5 +5959,5 @@ export function useInventory() {
     });
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, issueSalesDocuments, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment };
 }

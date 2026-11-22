@@ -72,6 +72,18 @@ describe('CustomerMasterView', () => {
     expect(within(sakura).getByRole('button', { name: '削除' })).toBeEnabled();
   });
 
+  it('締め日・支払条件を表示し、編集で変えられる (未設定は末日締め・翌月末払い)', async () => {
+    const user = userEvent.setup();
+    render(<CustomerMasterView {...defaultProps} />);
+    expect(rows()[0]).toHaveTextContent('末日締め・翌月末払い');
+    await user.click(within(rows()[0]).getByRole('button', { name: '編集' }));
+    await user.selectOptions(screen.getByLabelText('締め日'), '20');
+    await user.selectOptions(screen.getByLabelText('お支払期限'), '2');
+    await user.selectOptions(screen.getByLabelText('お支払期限の日'), '10');
+    await user.click(screen.getByRole('button', { name: '保存' }));
+    expect(defaultProps.onUpdate).toHaveBeenCalledWith('cus-b', expect.objectContaining({ closingDay: 20, paymentMonths: 2, paymentDay: 10 }));
+  });
+
   it('取引停止・取引再開は active だけを書き換える', async () => {
     const user = userEvent.setup();
     render(<CustomerMasterView {...defaultProps} />);

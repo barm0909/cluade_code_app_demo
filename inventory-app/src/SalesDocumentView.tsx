@@ -6,6 +6,7 @@ import {
   csvExportHint,
   csvExportLabel,
   exportSalesDocumentCsv,
+  invoiceGrandTotal,
   paidDocumentIds,
   salesDocuments,
 } from './useInventory';
@@ -20,6 +21,7 @@ import type {
   SalesRow,
 } from './useInventory';
 import { SalesDocumentModal } from './SalesDocumentModal';
+import { ClosingModal } from './ClosingModal';
 import { SalesDocumentPaper } from './SalesDocumentPaper';
 import { useConfirm } from './useConfirm';
 
@@ -30,6 +32,8 @@ interface Props {
   /** 入金。入金を充てた請求書は取り消せない */
   payments?: PaymentItem[];
   onIssue: (input: IssueSalesDocumentInput) => SalesDocument | null;
+  /** 締め請求 (複数の請求書をまとめて発行)。発行できた書類を返す。省略時は締め請求ボタンを出さない */
+  onIssueMany?: (inputs: IssueSalesDocumentInput[]) => SalesDocument[];
   /** 取消。入金があるなどで取り消せなかったときは false */
   onDelete: (documentId: string) => boolean | void;
 }
@@ -42,9 +46,10 @@ interface Props {
  * 再表示は発行した時点のスナップショットをそのまま描く (マスタを変えても書類は変わらない)。
  * そこでの印刷は同じ書類をもう一度出すだけなので、発行履歴は増えない。
  */
-export function SalesDocumentView({ items, sales, customers, payments = [], onIssue, onDelete }: Props) {
+export function SalesDocumentView({ items, sales, customers, payments = [], onIssue, onIssueMany, onDelete }: Props) {
   const [filter, setFilter] = useState<SalesDocumentFilter>(EMPTY_SALES_DOCUMENT_FILTER);
   const [creating, setCreating] = useState<SalesDocumentKind | null>(null);
+  const [closing, setClosing] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const { confirm, confirmDialog } = useConfirm();
 
@@ -74,6 +79,7 @@ export function SalesDocumentView({ items, sales, customers, payments = [], onIs
       <div className="controls ledger-controls">
         <button className="btn-primary" onClick={() => setCreating('納品書')}>+ 納品書を作成</button>
         <button className="btn-primary" onClick={() => setCreating('請求書')}>+ 請求書を作成</button>
+        {onIssueMany && <button className="btn-primary" onClick={() => setClosing(true)}>締め請求</button>}
         <input
           className="search-input"
           placeholder="書類番号・得意先名・商品名で検索..."
@@ -138,7 +144,12 @@ export function SalesDocumentView({ items, sales, customers, payments = [], onIs
                   <td><strong>{d.customerName}</strong></td>
                   <td className="mono">{d.periodFrom === d.periodTo ? d.periodFrom : `${d.periodFrom} 〜 ${d.periodTo}`}</td>
                   <td style={{ textAlign: 'right' }}>{d.items.length}</td>
-                  <td style={{ textAlign: 'right' }}>¥{d.totals.amountWithTax.toLocaleString()}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    ¥{d.totals.amountWithTax.toLocaleString()}
+                    {d.balanceForward && d.balanceForward.carryOver !== 0 && (
+                      <div className="stat-sub" title="繰越額を含めた今回御請求額">御請求 ¥{invoiceGrandTotal(d).toLocaleString()}</div>
+                    )}
+                  </td>
                   <td>
                     <button className="btn-edit" onClick={() => setOpenId(d.documentId)}>再表示</button>
                     <button
@@ -161,8 +172,20 @@ export function SalesDocumentView({ items, sales, customers, payments = [], onIs
           sales={sales}
           customers={customers}
           items={items}
+          payments={payments}
           onIssue={onIssue}
           onClose={() => setCreating(null)}
+        />
+      )}
+
+      {closing && onIssueMany && (
+        <ClosingModal
+          sales={sales}
+          customers={customers}
+          items={items}
+          payments={payments}
+          onIssue={onIssueMany}
+          onClose={() => setClosing(false)}
         />
       )}
 

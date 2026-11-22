@@ -1,4 +1,4 @@
-import { REDUCED_TAX_RATE } from './useInventory';
+import { REDUCED_TAX_RATE, invoiceGrandTotal } from './useInventory';
 import type { SalesDocument } from './useInventory';
 
 interface Props {
@@ -19,6 +19,9 @@ export function SalesDocumentPaper({ doc }: Props) {
   const isInvoice = doc.kind === '請求書';
   const { totals, issuer } = doc;
   const hasReduced = doc.items.some(i => i.taxRate === REDUCED_TAX_RATE);
+  const balance = isInvoice ? doc.balanceForward : undefined;
+  // 締め請求では対象期間より前の請求漏れも載せるので、その行に印を付ける
+  const hasEarlier = isInvoice && doc.items.some(i => i.deliveryDate < doc.periodFrom);
 
   return (
     <div className="po-print-area sd-paper">
@@ -48,7 +51,7 @@ export function SalesDocumentPaper({ doc }: Props) {
       <div className="sd-summary">
         <div className="sd-summary-main">
           <span>{isInvoice ? 'ご請求金額（税込）' : '合計金額（税込）'}</span>
-          <strong>{yen(totals.amountWithTax)}</strong>
+          <strong>{yen(balance ? invoiceGrandTotal(doc) : totals.amountWithTax)}</strong>
         </div>
         <div className="sd-summary-sub">
           {isInvoice ? (
@@ -61,6 +64,29 @@ export function SalesDocumentPaper({ doc }: Props) {
           )}
         </div>
       </div>
+
+      {balance && (
+        <table className="sd-balance" aria-label="繰越">
+          <thead>
+            <tr>
+              <th>前回御請求額</th>
+              <th>御入金額</th>
+              <th>繰越額</th>
+              <th>今回御買上額（税込）</th>
+              <th>今回御請求額</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{yen(balance.previousBilled)}</td>
+              <td>{yen(balance.received)}</td>
+              <td>{yen(balance.carryOver)}</td>
+              <td>{yen(totals.amountWithTax)}</td>
+              <td className="sd-balance-total">{yen(invoiceGrandTotal(doc))}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
 
       <table className="po-table">
         <thead>
@@ -79,7 +105,10 @@ export function SalesDocumentPaper({ doc }: Props) {
           ) : doc.items.map(i => (
             <tr key={i.id}>
               {isInvoice && <td className="mono">{i.deliveryDate}</td>}
-              <td>{i.productName}{i.quantity < 0 && '（返品）'}{i.taxRate === REDUCED_TAX_RATE && ' ※'}</td>
+              <td>
+                {i.productName}{i.quantity < 0 && '（返品）'}{i.taxRate === REDUCED_TAX_RATE && ' ※'}
+                {isInvoice && i.deliveryDate < doc.periodFrom && <span className="sd-earlier">前回以前</span>}
+              </td>
               <td className="mono">{i.productSku}</td>
               <td style={{ textAlign: 'right' }}>{i.quantity.toLocaleString()}</td>
               <td style={{ textAlign: 'right' }}>{yen(i.unitPrice)}</td>
@@ -104,6 +133,8 @@ export function SalesDocumentPaper({ doc }: Props) {
       </table>
 
       {hasReduced && <p className="sd-note">※は軽減税率（8%）対象品目です。</p>}
+      {hasEarlier && <p className="sd-note">「前回以前」は対象期間より前の売上で、前回までの請求書に載っていなかったものです。</p>}
+      {balance && <p className="sd-note">上の合計（税込）は今回御買上額です。今回御請求額は繰越額を含みます。</p>}
       {isInvoice && issuer.bankAccount && (
         <div className="sd-bank">
           <div className="sd-bank-head">お振込先</div>

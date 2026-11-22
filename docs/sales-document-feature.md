@@ -69,7 +69,7 @@
 
 ## やっていないこと
 
-- 前回請求額・繰越を載せる請求書形式 (入金管理・消込は別機能: [receivable-feature.md](receivable-feature.md))
+- 締め請求・繰越型の請求書は別機能: [billing-closing-feature.md](billing-closing-feature.md)。入金管理・消込: [receivable-feature.md](receivable-feature.md)
 - 書類の部分修正 (取消して出し直す)
 - 返品・値引き行 (売上にその概念がないため)
 

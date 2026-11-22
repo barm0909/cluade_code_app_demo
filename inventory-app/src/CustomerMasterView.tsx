@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Customer, CustomerInput, PaymentItem, SalesOrder, SalesRow } from './useInventory';
-import { csvExportHint, csvExportLabel, customerRows, exportCustomerCsv, localDateKey, salesOrderCountByCustomer } from './useInventory';
+import { csvExportHint, csvExportLabel, customerBillingTermsLabel, customerRows, exportCustomerCsv, localDateKey, salesOrderCountByCustomer } from './useInventory';
 import { CustomerModal } from './CustomerModal';
 import { useConfirm } from './useConfirm';
 
@@ -73,6 +73,7 @@ export function CustomerMasterView({ customers, sales, salesOrders = [], payment
               <th>コード</th>
               <th>担当者</th>
               <th>連絡先</th>
+              <th>締め・支払</th>
               <th style={{ textAlign: 'right' }}>売上件数</th>
               <th style={{ textAlign: 'right' }}>売上金額</th>
               <th>最終売上</th>
@@ -96,6 +97,7 @@ export function CustomerMasterView({ customers, sales, salesOrders = [], payment
                     ? <span className="supplier-contact">{c.phone}{c.phone && c.email && <br />}{c.email}</span>
                     : '—'}
                 </td>
+                <td>{customerBillingTermsLabel(c)}</td>
                 <td style={{ textAlign: 'right' }}>
                   {usage.saleCount === 0 ? '—' : `${usage.saleCount}件`}
                   {usage.quantity > 0 && <span className="stat-sub">（{usage.quantity.toLocaleString()}個）</span>}
