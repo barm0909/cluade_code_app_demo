@@ -439,9 +439,89 @@ export function normalizeJanCode(value: string): string {
     .slice(0, 13);
 }
 
-// 未入力 (未設定) は許可。入力があるときだけ 8桁/13桁 を要求する
+// ---- JANコード・バーコード (docs/barcode-feature.md) ----
+
+/**
+ * JAN (EAN-13 / EAN-8) のチェックデジット。最後の1桁を除いた数字列 body から計算する
+ * (右から奇数桁 ×3 + 偶数桁 ×1 の合計を 10 の倍数に切り上げた差)。
+ */
+export function janCheckDigit(body: string): number {
+  let sum = 0;
+  for (let i = 0; i < body.length; i++) {
+    const digit = Number(body[body.length - 1 - i]);
+    sum += i % 2 === 0 ? digit * 3 : digit;
+  }
+  return (10 - (sum % 10)) % 10;
+}
+
+/** JANコードの入力チェック。未入力 (未設定) は可。問題がなければ空文字 */
+export function janCodeError(value: string): string {
+  if (value === '') return '';
+  if (!/^(\d{8}|\d{13})$/.test(value)) return 'JANコードは数字8桁または13桁で入力してください';
+  if (janCheckDigit(value.slice(0, -1)) !== Number(value.slice(-1))) {
+    return 'JANコードの最後の1桁（チェックデジット）が合いません。打ち間違い・読み間違いがないか確認してください';
+  }
+  return '';
+}
+
+// 未入力 (未設定) は許可。入力があるときだけ 8桁/13桁 + 正しいチェックデジットを要求する
 export function isValidJanCode(value: string): boolean {
-  return value === '' || /^(\d{8}|\d{13})$/.test(value);
+  return janCodeError(value) === '';
+}
+
+/** スキャナー・カメラ・手入力で受け取った文字列から数字だけを取り出す (全角数字は半角へ) */
+export function normalizeScanCode(text: string): string {
+  return text
+    .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/\D/g, '');
+}
+
+/** 読み取り結果。product が null のときは error に理由が入る */
+export interface ScanResult {
+  code: string;
+  product: Product | null;
+  error: string;
+}
+
+/**
+ * 読み取ったバーコード (または手入力) から商品を探す。JANコードの完全一致を先に見て、
+ * 数字以外を含む入力は SKU の完全一致 (大文字小文字は区別しない) でも探す
+ * (JAN のない自社ラベル品を SKU で呼び出せるように)。
+ */
+export function findProductByScan(products: Product[], text: string): ScanResult {
+  const raw = text.trim();
+  const code = normalizeScanCode(raw);
+  const byJan = code ? products.find(p => p.janCode === code) : undefined;
+  if (byJan) return { code, product: byJan, error: '' };
+  const bySku = raw ? products.find(p => p.sku.toLowerCase() === raw.toLowerCase()) : undefined;
+  if (bySku) return { code: raw, product: bySku, error: '' };
+  if (!code) return { code: raw, product: null, error: raw ? `「${raw}」に一致する商品がありません` : '' };
+  if (janCodeError(code)) return { code, product: null, error: `JANコードとして読み取れませんでした（${code}）。もう一度読み取ってください` };
+  return { code, product: null, error: `未登録のJANコードです（${code}）。商品マスタでその商品にJANコードを登録してください` };
+}
+
+// EAN-13 / EAN-8 のバーの並び (1 = 黒, 0 = 白)。左側は L/G、右側は R の符号で、EAN-13 は先頭の数字で L/G の並びが決まる
+const EAN_L = ['0001101', '0011001', '0010011', '0111101', '0100011', '0110001', '0101111', '0111011', '0110111', '0001011'];
+const EAN_R = EAN_L.map(c => c.replace(/./g, b => (b === '0' ? '1' : '0')));
+const EAN_G = EAN_R.map(c => [...c].reverse().join(''));
+const EAN13_PARITY = ['LLLLLL', 'LLGLGG', 'LLGGLG', 'LLGGGL', 'LGLLGG', 'LGGLLG', 'LGGGLL', 'LGLGLG', 'LGLGGL', 'LGGLGL'];
+
+/**
+ * JANコードをバーコードのモジュール列 ('1' = 黒) にする。EAN-13 は 95、EAN-8 は 67 モジュール。
+ * JANコードとして正しくない (桁数・チェックデジット) ときは null。
+ */
+export function eanModules(code: string): string | null {
+  if (code === '' || janCodeError(code)) return null;
+  const digits = [...code].map(Number);
+  if (code.length === 13) {
+    const parity = EAN13_PARITY[digits[0]];
+    const left = digits.slice(1, 7).map((d, i) => (parity[i] === 'L' ? EAN_L[d] : EAN_G[d])).join('');
+    const right = digits.slice(7).map(d => EAN_R[d]).join('');
+    return `101${left}01010${right}101`;
+  }
+  const left = digits.slice(0, 4).map(d => EAN_L[d]).join('');
+  const right = digits.slice(4).map(d => EAN_R[d]).join('');
+  return `101${left}01010${right}101`;
 }
 
 export function generateLotNo(expiryDate?: string): string {

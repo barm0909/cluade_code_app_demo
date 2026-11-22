@@ -1,8 +1,9 @@
 import { Fragment, useState } from 'react';
-import { PRODUCT_KINDS, TAX_RATES, isMaterial, isValidJanCode, normalizeJanCode, productKind, productTaxRate, taxRateLabel, withTax } from './useInventory';
+import { PRODUCT_KINDS, TAX_RATES, isMaterial, janCodeError, normalizeJanCode, productKind, productTaxRate, taxRateLabel, withTax } from './useInventory';
 import type { Category, Product } from './useInventory';
 import { useConfirm } from './useConfirm';
 import { NumberInput } from './NumberInput';
+import { BarcodeSheetModal } from './BarcodeSheetModal';
 
 interface Props {
   products: Product[];
@@ -24,6 +25,7 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<MasterForm | null>(null);
   const [error, setError] = useState('');
+  const [sheetOpen, setSheetOpen] = useState(false);
   const { confirm, confirmDialog } = useConfirm();
 
   const startEdit = (p: Product) => { setEditingId(p.id); setForm(toForm(p)); setError(''); };
@@ -38,7 +40,8 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
     if (!editingId || !form) return;
     if (!form.name.trim() || !form.sku.trim()) { setError('商品名とSKUは必須です'); return; }
     const janCode = normalizeJanCode(form.janCode ?? '');
-    if (!isValidJanCode(janCode)) { setError('JANコードは数字8桁または13桁で入力してください'); return; }
+    const janError = janCodeError(janCode);
+    if (janError) { setError(janError); return; }
     onUpdate(editingId, { ...form, janCode: janCode || undefined });
     cancelEdit();
   };
@@ -46,7 +49,9 @@ export function ProductMasterView({ products, categories, onUpdate, onDelete, on
   return (<>
     <div className="master-toolbar">
       <button className="btn-primary" onClick={onAddClick}>+ 商品追加</button>
+      <button className="btn-outline" onClick={() => setSheetOpen(true)}>バーコード表</button>
     </div>
+    {sheetOpen && <BarcodeSheetModal products={products} onClose={() => setSheetOpen(false)} />}
     <div className="table-wrapper">
       <table>
         <thead>

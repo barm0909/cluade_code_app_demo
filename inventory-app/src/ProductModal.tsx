@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DEFAULT_TAX_RATE, PRODUCT_KINDS, TAX_RATES, defaultTaxRateForCategory, normalizeJanCode, productKind, productTaxRate, taxRateLabel, withTax } from './useInventory';
+import { DEFAULT_TAX_RATE, PRODUCT_KINDS, TAX_RATES, defaultTaxRateForCategory, janCodeError, normalizeJanCode, productKind, productTaxRate, taxRateLabel, withTax } from './useInventory';
 import type { Category, Product, ProductKind, TaxRate } from './useInventory';
 import { NumberInput } from './NumberInput';
 
@@ -21,6 +21,7 @@ export function ProductModal({ product, categories, products = [], onSave, onClo
     : EMPTY);
   // 税率を手で選んだあとは、カテゴリを変えても初期値で上書きしない
   const [taxRateTouched, setTaxRateTouched] = useState(false);
+  const [janError, setJanError] = useState('');
 
   const set = (k: keyof typeof EMPTY, v: string | number) => setForm(f => ({ ...f, [k]: v }));
   // 資材は売らないので販売定価・税率の欄を出さない (値は保持したまま隠すだけ)
@@ -37,10 +38,17 @@ export function ProductModal({ product, categories, products = [], onSave, onClo
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h2>{product ? '商品を編集' : '商品を追加'}</h2>
-        <form onSubmit={e => { e.preventDefault(); onSave({ ...form, janCode: form.janCode.trim() || undefined }); onClose(); }}>
+        <form onSubmit={e => {
+          e.preventDefault();
+          const error = janCodeError(form.janCode.trim());
+          if (error) { setJanError(error); return; }
+          onSave({ ...form, janCode: form.janCode.trim() || undefined });
+          onClose();
+        }}>
           <label>商品名 <input required value={form.name} onChange={e => set('name', e.target.value)} /></label>
           <label>SKU <input required value={form.sku} onChange={e => set('sku', e.target.value)} /></label>
-          <label>JANコード <input inputMode="numeric" maxLength={13} pattern="\d{8}|\d{13}" title="8桁または13桁の数字で入力してください" placeholder="未設定可" value={form.janCode} onChange={e => set('janCode', normalizeJanCode(e.target.value))} /></label>
+          <label>JANコード <input inputMode="numeric" maxLength={13} pattern="\d{8}|\d{13}" title="8桁または13桁の数字で入力してください" placeholder="未設定可" value={form.janCode} onChange={e => { set('janCode', normalizeJanCode(e.target.value)); setJanError(''); }} /></label>
+          {janError && <span className="field-error" role="alert">{janError}</span>}
           <label>カテゴリ
             <select required value={form.categoryId} onChange={e => setCategory(e.target.value)}>
               <option value="" disabled>選択してください</option>

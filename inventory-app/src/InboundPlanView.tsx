@@ -5,7 +5,9 @@ import {
   csvExportHint,
   csvExportLabel,
   exportInboundPlanCsv,
+  findProductByScan,
   inboundPlanRows,
+  inboundPlanStatus,
   inboundPlanTotals,
   supplierName,
 } from './useInventory';
@@ -24,6 +26,8 @@ import { InboundPlanModal } from './InboundPlanModal';
 import { ReceiveInboundModal } from './ReceiveInboundModal';
 import { ExpiryBadge, WarehouseDot } from './badges';
 import { useConfirm, useNotify } from './useConfirm';
+import { ScanInput } from './ScanInput';
+import type { ScanFeedback } from './ScanInput';
 
 interface Props {
   inboundPlans: InboundPlan[];
@@ -72,6 +76,21 @@ export function InboundPlanView({ inboundPlans, products, warehouses, suppliers,
   const receivingPlan = receivingId ? inboundPlans.find(p => p.id === receivingId) ?? null : null;
   const receivingProduct = receivingPlan ? products.find(p => p.id === receivingPlan.productId) ?? null : null;
 
+  // バーコード: 読み取った商品の未入荷 (一部入荷を含む) の予定が1件ならそのまま入荷画面を開き、複数なら一覧を絞り込む
+  const handleScan = (text: string): ScanFeedback => {
+    const { product, error } = findProductByScan(products, text);
+    if (!product) return { message: error, tone: 'error' };
+    const pending = inboundPlans.filter(p => p.productId === product.id
+      && (inboundPlanStatus(p) === '未入荷' || inboundPlanStatus(p) === '一部入荷'));
+    if (pending.length === 0) return { message: `${product.name} の未入荷の予定はありません`, tone: 'error' };
+    if (pending.length === 1) {
+      setReceivingId(pending[0].id);
+      return { message: `${product.name} の入荷予定を開きました`, tone: 'ok' };
+    }
+    setFilter({ ...EMPTY_INBOUND_PLAN_FILTER, keyword: product.sku });
+    return { message: `${product.name} の未入荷の予定が${pending.length}件あります。入荷する予定の「入荷」を押してください`, tone: 'ok' };
+  };
+
   const handleReceive = (plan: InboundPlan, input: ReceiveInput) => {
     const result = onReceive(plan.id, input);
     if (!result) return;
@@ -86,6 +105,13 @@ export function InboundPlanView({ inboundPlans, products, warehouses, suppliers,
 
   return (
     <>
+      <div className="scan-bar">
+        <ScanInput
+          label="入荷のバーコード"
+          hint="届いた商品の入荷予定を開きます（予定が複数あるときは一覧をその商品に絞り込みます）"
+          onScan={handleScan}
+        />
+      </div>
       <div className="controls ledger-controls">
         <input
           className="search-input"
