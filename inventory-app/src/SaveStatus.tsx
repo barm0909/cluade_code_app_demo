@@ -11,7 +11,19 @@ export function SaveIndicator({ state }: { state: SaveState }) {
  * 保存できなかったとき・サーバーにつながらないときに、全タブの上に出す帯。
  * 失敗した変更は画面に残っていて、「再試行」でまとめて送り直せる (saveQueue.retry)。
  */
-export function SaveBanner({ status, onRetry }: { status: SaveStatus; onRetry: () => void }) {
+export function SaveBanner({ status, onRetry, onReload }: { status: SaveStatus; onRetry: () => void; onReload?: () => void }) {
+  if (status.state === 'conflict') {
+    // 別の端末が先に同じデータを変えていた。送り直しても通らないので、最新の内容を読み込み直してもらう
+    return (
+      <div className="alert-banner danger save-banner" role="alert">
+        <span>
+          <strong>保存できませんでした：</strong>{status.message}。
+          直前の操作（とそのあとの操作）は保存されていません。最新の内容を読み込んでから、もう一度操作してください。
+        </span>
+        <button type="button" className="btn-danger" onClick={onReload ?? (() => window.location.reload())}>最新の内容を読み込む</button>
+      </div>
+    );
+  }
   if (status.state === 'error') {
     return (
       <div className="alert-banner danger save-banner" role="alert">

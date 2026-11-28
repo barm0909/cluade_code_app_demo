@@ -13,6 +13,9 @@
 //   失敗した変更は捨てずに持ち続け、retry() でまとめて送り直す
 // - サーバーから読み込めていない間 (起動直後・オフライン) は何も送らない。読み込む前の画面は
 //   仮のサンプルデータなので、それを元にした変更でサーバーを上書きしないため
+// - 同時編集の衝突検知: サーバーの各レコードは版番号 (rev) を持つ。既存のレコードを更新・削除するときは
+//   「この端末が最後に見た rev」を base として一緒に送り、別の端末が先に変えていたら Worker が
+//   トランザクションごと断る (409)。その変更は自動再送せず conflict にして、最新の内容の読み込みを促す
 // ---------------------------------------------------------------------------
 
 export type SliceName =
@@ -22,9 +25,36 @@ export type SliceName =
 export interface SliceChange {
   upsert: { id: string }[];
   delete: string[];
+  /** 送信時に付ける: 更新・削除する既存レコードの id → この端末が最後に見た rev。新しいレコードは含めない */
+  base?: Record<string, number>;
 }
 
 export type ChangeSet = Partial<Record<SliceName, SliceChange>>;
+
+/** スライス → レコード id → rev。GET /api/state と POST /api/changes の応答で返ってくる */
+export type Revisions = Partial<Record<SliceName, Record<string, number>>>;
+
+/** 衝突したときの表示用のスライス名 */
+export const SLICE_LABELS: Record<SliceName, string> = {
+  products: '商品・ロット',
+  warehouses: '倉庫',
+  categories: 'カテゴリ',
+  ledger: '入出庫帳票',
+  'inbound-plans': '入荷予定',
+  suppliers: '仕入先',
+  'purchase-order-prints': '発注履歴',
+  customers: '得意先',
+  'sales-orders': '受注',
+  'sales-documents': '納品書・請求書',
+  payments: '入金',
+};
+
+/** 409 の conflicts ({ スライス: id[] }) を「商品・ロット 2件、受注 1件」のような文にする */
+export function conflictSummary(conflicts: Partial<Record<string, string[]>>): string {
+  return Object.entries(conflicts)
+    .flatMap(([slice, ids]) => (ids && ids.length > 0 ? [`${SLICE_LABELS[slice as SliceName] ?? slice} ${ids.length}件`] : []))
+    .join('、');
+}
 
 /** レコード id → 保存済みの内容。ref が同じなら中身も同じとみなして JSON 化を省く (状態は immutable に更新するので) */
 export type Baseline = Map<string, { ref: unknown; json: string }>;
@@ -78,9 +108,11 @@ export function mergeChangeSets(a: ChangeSet, b: ChangeSet): ChangeSet {
  * - idle: 保存済み
  * - saving: 送信中 (retrying は自動再送の待ち)
  * - error: 自動再送しても保存できなかった。retry() で送り直せる
+ * - conflict: 別の端末が先に同じデータを変えていたので保存を断られた。送り直しても通らないので、
+ *   最新の内容を読み込み直す (discardAndReload) しかない
  * - offline: サーバーから読み込めなかった。変更は保存されない
  */
-export type SaveState = 'loading' | 'idle' | 'saving' | 'retrying' | 'error' | 'offline';
+export type SaveState = 'loading' | 'idle' | 'saving' | 'retrying' | 'error' | 'conflict' | 'offline';
 
 export interface SaveStatus {
   state: SaveState;
@@ -88,16 +120,23 @@ export interface SaveStatus {
   message: string;
 }
 
-/** 送信に失敗したときに投げる。retryable=false (400 など) は自動再送しない */
+/** 送信に失敗したときに投げる。retryable=false (400 など) は自動再送しない。conflict は 409 (同時編集) */
 export class SaveError extends Error {
   readonly retryable: boolean;
-  constructor(message: string, retryable: boolean) {
+  readonly conflict: boolean;
+  constructor(message: string, retryable: boolean, conflict = false) {
     super(message);
     this.retryable = retryable;
+    this.conflict = conflict;
   }
 }
 
-export type SendChanges = (changes: ChangeSet) => Promise<void>;
+/** 送信が成功したときの応答。revs は書いたレコードの新しい rev (旧サーバーは返さない) */
+export interface SendResult {
+  revs?: Revisions;
+}
+
+export type SendChanges = (changes: ChangeSet) => Promise<SendResult | void>;
 
 /** 本番の送信: POST /api/changes */
 export const postChanges: SendChanges = async changes => {
@@ -111,9 +150,14 @@ export const postChanges: SendChanges = async changes => {
   } catch {
     throw new SaveError('サーバーと通信できませんでした', true);
   }
-  if (res.ok) return;
-  let detail = '';
-  try { detail = (await res.json() as { error?: string }).error ?? ''; } catch { /* 本文なし */ }
+  let body: { error?: string; conflicts?: Record<string, string[]>; revs?: Revisions } = {};
+  try { body = await res.json(); } catch { /* 本文なし */ }
+  if (res.ok) return { revs: body.revs };
+  if (res.status === 409) {
+    const summary = conflictSummary(body.conflicts ?? {});
+    throw new SaveError(`別の端末で先に変更されたデータがあります${summary ? `（${summary}）` : ''}`, false, true);
+  }
+  const detail = body.error ?? '';
   throw new SaveError(
     res.status >= 500 ? `サーバーでエラーが起きました（${res.status}）` : `保存の内容が受け付けられませんでした（${res.status}${detail ? `: ${detail}` : ''}）`,
     res.status >= 500,
@@ -124,6 +168,8 @@ export const DEFAULT_RETRY_DELAYS_MS = [1000, 3000, 10000];
 
 export class SaveQueue {
   private baselines = new Map<SliceName, Baseline>();
+  /** サーバーで確定したレコードの rev。送信時の base になる (rev を返さない旧サーバーなら空のまま = 衝突検知なし) */
+  private revs = new Map<SliceName, Map<string, number>>();
   private connected = false;
   private pending: ChangeSet = {};
   private inflight: ChangeSet | null = null;
@@ -144,6 +190,7 @@ export class SaveQueue {
   reset(): void {
     this.clearTimers();
     this.baselines.clear();
+    this.revs.clear();
     this.connected = false;
     this.pending = {};
     this.inflight = null;
@@ -151,11 +198,14 @@ export class SaveQueue {
     this.setStatus({ state: 'loading', message: '' });
   }
 
-  /** サーバーから読み込んだ内容を「保存済み」とする。ここから先の変更だけを送る */
-  load(state: Partial<Record<SliceName, readonly { id: string }[]>>): void {
+  /** サーバーから読み込んだ内容を「保存済み」とする。ここから先の変更だけを送る。revs は各レコードの版番号 */
+  load(state: Partial<Record<SliceName, readonly { id: string }[]>>, revs: Revisions = {}): void {
     this.reset();
     for (const [slice, records] of Object.entries(state) as [SliceName, readonly { id: string }[]][]) {
       this.baselines.set(slice, toBaseline(records ?? []));
+    }
+    for (const [slice, map] of Object.entries(revs) as [SliceName, Record<string, number>][]) {
+      this.revs.set(slice, new Map(Object.entries(map ?? {})));
     }
     this.connected = true;
     this.setStatus({ state: 'idle', message: '' });
@@ -184,6 +234,15 @@ export class SaveQueue {
     void this.flush();
   }
 
+  /**
+   * 衝突 (conflict) のあと: 届かなかった変更を捨てて、画面を読み込み直す (サーバーの最新の内容になる)。
+   * 先に reset() するので、画面を閉じる前の確認は出ない
+   */
+  discardAndReload(reload: () => void = () => window.location.reload()): void {
+    this.reset();
+    reload();
+  }
+
   /** まだサーバーに届いていない変更があるか (画面を閉じる前の確認用) */
   hasUnsaved(): boolean {
     return this.inflight !== null || !isEmptyChangeSet(this.pending);
@@ -198,7 +257,7 @@ export class SaveQueue {
 
   private scheduleFlush(): void {
     // 同じ操作の中の保存 (setState の更新関数の中で呼ばれるものも含む) をまとめてから送る
-    if (this.flushTimer || this.inflight || this.retryTimer || this.status.state === 'error') return;
+    if (this.flushTimer || this.inflight || this.retryTimer || this.status.state === 'error' || this.status.state === 'conflict') return;
     this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, 0);
   }
 
@@ -214,8 +273,9 @@ export class SaveQueue {
     this.inflight = changes;
     this.setStatus({ state: this.attempts > 0 ? 'retrying' : 'saving', message: '' });
     try {
-      await this.send(changes);
+      const result = await this.send(this.withBase(changes));
       if (this.inflight !== changes) return; // reset() された
+      this.applyRevs(changes, result?.revs ?? {});
       this.inflight = null;
       this.attempts = 0;
       if (isEmptyChangeSet(this.pending)) this.setStatus({ state: 'idle', message: '' });
@@ -224,7 +284,10 @@ export class SaveQueue {
       if (this.inflight !== changes) return;
       const retryable = !(e instanceof SaveError) || e.retryable;
       const message = e instanceof Error ? e.message : String(e);
-      if (retryable && this.attempts < this.retryDelays.length) {
+      if (e instanceof SaveError && e.conflict) {
+        // 送り直しても通らない。後から積まれた変更も古い内容が元なので送らない (scheduleFlush が止める)
+        this.setStatus({ state: 'conflict', message });
+      } else if (retryable && this.attempts < this.retryDelays.length) {
         const delay = this.retryDelays[this.attempts];
         this.attempts++;
         this.setStatus({ state: 'retrying', message });
@@ -232,6 +295,35 @@ export class SaveQueue {
       } else {
         this.setStatus({ state: 'error', message });
       }
+    }
+  }
+
+  /** 既存レコード (rev が分かっているもの) の更新・削除に、最後に見た rev を base として付ける */
+  private withBase(changes: ChangeSet): ChangeSet {
+    const result: ChangeSet = {};
+    for (const [slice, change] of Object.entries(changes) as [SliceName, SliceChange][]) {
+      const known = this.revs.get(slice);
+      const base: Record<string, number> = {};
+      if (known) {
+        for (const id of [...change.upsert.map(r => r.id), ...change.delete]) {
+          const rev = known.get(id);
+          if (rev !== undefined) base[id] = rev;
+        }
+      }
+      result[slice] = Object.keys(base).length > 0 ? { ...change, base } : change;
+    }
+    return result;
+  }
+
+  /** 保存できた変更の rev を覚える (削除したものは忘れる)。次の送信の base になる */
+  private applyRevs(changes: ChangeSet, revs: Revisions): void {
+    for (const [slice, change] of Object.entries(changes) as [SliceName, SliceChange][]) {
+      const returned = revs[slice];
+      if (!returned && !this.revs.has(slice)) continue; // rev を扱わない旧サーバー
+      const known = this.revs.get(slice) ?? new Map<string, number>();
+      for (const id of change.delete) known.delete(id);
+      for (const [id, rev] of Object.entries(returned ?? {})) known.set(id, rev);
+      this.revs.set(slice, known);
     }
   }
 
