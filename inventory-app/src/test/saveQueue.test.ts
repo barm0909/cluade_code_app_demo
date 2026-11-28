@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { SaveError, SaveQueue, diffRecords, mergeChangeSets, toBaseline } from '../saveQueue';
-import type { ChangeSet } from '../saveQueue';
+import { SaveError, SaveQueue, conflictSummary, diffRecords, mergeChangeSets, postChanges, toBaseline } from '../saveQueue';
+import type { ChangeSet, SendResult } from '../saveQueue';
 import { useInventory } from '../useInventory';
 import { stubApi } from './mockApi';
 
@@ -42,7 +42,7 @@ describe('mergeChangeSets', () => {
 
 describe('SaveQueue', () => {
   let sent: ChangeSet[];
-  let send: ReturnType<typeof vi.fn<(changes: ChangeSet) => Promise<void>>>;
+  let send: ReturnType<typeof vi.fn<(changes: ChangeSet) => Promise<SendResult | void>>>;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -159,6 +159,69 @@ describe('SaveQueue', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  describe('同時編集の衝突検知', () => {
+    const withRevs = () => {
+      const q = new SaveQueue(send, [100, 200]);
+      q.load({ products: [a1], ledger: [b1] }, { products: { a: 3 }, ledger: { b: 0 } });
+      return q;
+    };
+
+    it('既存レコードの更新・削除には最後に見た rev を base として付け、新しいレコードには付けない', async () => {
+      const q = withRevs();
+      q.enqueue('products', [rec('a', 'A2')]);
+      q.enqueue('ledger', [rec('t2', 'T2')]); // b を消して t2 を足す
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent[0]).toEqual({
+        products: { upsert: [{ id: 'a', name: 'A2' }], delete: [], base: { a: 3 } },
+        ledger: { upsert: [{ id: 't2', name: 'T2' }], delete: ['b'], base: { b: 0 } },
+      });
+    });
+
+    it('応答の rev を覚えて次の送信の base にし、消したレコードは忘れる', async () => {
+      send.mockImplementationOnce(async changes => { sent.push(changes); return { revs: { products: { a: 4 }, ledger: { t2: 0 } } }; });
+      const q = withRevs();
+      q.enqueue('products', [rec('a', 'A2')]);
+      q.enqueue('ledger', [rec('t2', 'T2')]);
+      await vi.advanceTimersByTimeAsync(0);
+      q.enqueue('products', [rec('a', 'A3')]);
+      q.enqueue('ledger', [rec('t2', 'T2b'), rec('b', 'B again')]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent[1]).toEqual({
+        products: { upsert: [{ id: 'a', name: 'A3' }], delete: [], base: { a: 4 } },
+        // b は前の送信で消したので、作り直しは新しいレコードとして送る (base なし)
+        ledger: { upsert: [{ id: 't2', name: 'T2b' }, { id: 'b', name: 'B again' }], delete: [], base: { t2: 0 } },
+      });
+    });
+
+    it('rev を返さない旧サーバーなら base を付けない (従来どおり)', async () => {
+      const q = loaded();
+      q.enqueue('products', [rec('a', 'A2')]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent[0].products).not.toHaveProperty('base');
+    });
+
+    it('衝突 (409) は自動で再送せず conflict にし、その後の変更も送らない。discardAndReload で捨てて読み込み直す', async () => {
+      send.mockRejectedValueOnce(new SaveError('別の端末で先に変更されたデータがあります（商品・ロット 1件）', false, true));
+      const q = withRevs();
+      q.enqueue('products', [rec('a', 'A2')]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(q.getStatus()).toEqual({ state: 'conflict', message: '別の端末で先に変更されたデータがあります（商品・ロット 1件）' });
+      q.enqueue('ledger', [b1, rec('t9', 'T9')]);
+      await vi.runAllTimersAsync();
+      expect(send).toHaveBeenCalledTimes(1);
+      q.retry(); // conflict では再試行しない
+      await vi.runAllTimersAsync();
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(q.hasUnsaved()).toBe(true);
+
+      const reload = vi.fn();
+      q.discardAndReload(reload);
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(q.hasUnsaved()).toBe(false); // 画面を閉じる前の確認を出さない
+      expect(q.getStatus().state).toBe('loading');
+    });
+  });
+
   it('状態が変わったら購読者に知らせる', async () => {
     const q = loaded();
     const listener = vi.fn();
@@ -167,6 +230,30 @@ describe('SaveQueue', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(listener).toHaveBeenCalledTimes(2); // saving → idle
     unsubscribe();
+  });
+});
+
+describe('postChanges / conflictSummary', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('409 は自動再送しない衝突のエラーにし、何がぶつかったかを件数で知らせる', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 409,
+      json: async () => ({ error: 'conflict', conflicts: { products: ['1', '2'], 'sales-orders': ['so-1'] } }),
+    })));
+    const error = await postChanges({}).catch(e => e as SaveError);
+    expect(error).toBeInstanceOf(SaveError);
+    expect(error).toMatchObject({ conflict: true, retryable: false, message: '別の端末で先に変更されたデータがあります（商品・ロット 2件、受注 1件）' });
+  });
+
+  it('成功したら応答の rev を返す', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, revs: { products: { a: 1 } } }) })));
+    await expect(postChanges({})).resolves.toEqual({ revs: { products: { a: 1 } } });
+  });
+
+  it('conflictSummary は空のスライスを飛ばす', () => {
+    expect(conflictSummary({ ledger: [], customers: ['c1'] })).toBe('得意先 1件');
+    expect(conflictSummary({})).toBe('');
   });
 });
 
@@ -205,6 +292,53 @@ describe('useInventory — 差分保存', () => {
     await new Promise(r => setTimeout(r, 10));
     expect(fetchMock).toHaveBeenCalledTimes(1); // GET /api/state だけ
     expect(result.current.ledger).toHaveLength(1); // 画面の中では動く
+  });
+
+  it('別の端末が先に同じ商品を変えていたら、出庫を保存せず conflict にする (在庫も帳票も書かない)', async () => {
+    const server = stubApi();
+    const { result } = renderHook(() => useInventory());
+    await waitFor(() => expect(result.current.saveStatus.state).toBe('idle'));
+    act(() => { result.current.resetToSample(); });
+    await waitFor(() => expect(server.products.length).toBeGreaterThan(0));
+    await waitFor(() => expect(result.current.saveStatus.state).toBe('idle'));
+
+    // この端末で一度出庫して保存できることを確かめる (応答の rev を覚えて次の base にしている)
+    act(() => { result.current.shipFefo('1', 1); });
+    await waitFor(() => expect(server.ledger).toHaveLength(1));
+    act(() => { result.current.shipFefo('1', 1); });
+    await waitFor(() => expect(server.ledger).toHaveLength(2));
+    expect(result.current.saveStatus.state).toBe('idle');
+
+    // 別の端末が商品1の在庫を変えた
+    const elsewhere = { ...server.products.find(p => p.id === '1')!, name: '別の端末で変更' };
+    server.editElsewhere('products', elsewhere);
+
+    act(() => { result.current.shipFefo('1', 1); });
+    await waitFor(() => expect(result.current.saveStatus.state).toBe('conflict'));
+    expect(result.current.saveStatus.message).toBe('別の端末で先に変更されたデータがあります（商品・ロット 1件）');
+    expect(server.products.find(p => p.id === '1')).toBe(elsewhere); // 上書きしていない
+    expect(server.ledger).toHaveLength(2); // 同じ操作の帳票も書いていない
+
+    // 衝突のあとの操作も送らない (古い内容が元なので)
+    const before = server.requests.length;
+    act(() => { result.current.addCategory('冷凍食品'); });
+    await new Promise(r => setTimeout(r, 10));
+    expect(server.requests.length).toBe(before);
+  });
+
+  it('別の端末が変えたのが別の商品なら、そのまま保存できる', async () => {
+    const server = stubApi();
+    const { result } = renderHook(() => useInventory());
+    await waitFor(() => expect(result.current.saveStatus.state).toBe('idle'));
+    act(() => { result.current.resetToSample(); });
+    await waitFor(() => expect(server.products.length).toBeGreaterThan(0));
+    await waitFor(() => expect(result.current.saveStatus.state).toBe('idle'));
+    const other = { ...server.products.find(p => p.id === '2')!, name: '別の端末で変更' };
+    server.editElsewhere('products', other);
+    act(() => { result.current.shipFefo('1', 1); });
+    await waitFor(() => expect(server.ledger).toHaveLength(1));
+    expect(result.current.saveStatus.state).toBe('idle');
+    expect(server.products.find(p => p.id === '2')!.name).toBe('別の端末で変更');
   });
 
   it('サーバーが一時的に失敗しても、自動で再送して保存する', async () => {

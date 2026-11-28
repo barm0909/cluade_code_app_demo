@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { SaveQueue, postChanges } from './saveQueue';
-import type { SaveStatus, SliceName } from './saveQueue';
+import type { Revisions, SaveStatus, SliceName } from './saveQueue';
 
 // xlsx (SheetJS) は 400kB 超あり、Excel の入出力ボタンを押したときにしか使わないので、
 // 初期表示のバンドルに含めず、使う時点で別チャンクとして読み込む。
@@ -546,6 +546,7 @@ interface ServerState {
   salesOrders?: SalesOrder[]; // 受注も同様 (未導入のサーバーからは返ってこない)
   salesDocumentItems?: SalesDocumentItem[]; // 納品書・請求書の発行履歴も同様
   paymentItems?: PaymentItem[]; // 入金も同様 (未導入のサーバーからは返ってこない)
+  revs?: Revisions; // 各レコードの版番号 (同時編集の衝突検知用。未導入のサーバーからは返ってこない = 検知しない)
 }
 
 async function fetchState(): Promise<ServerState | null> {
@@ -5001,7 +5002,7 @@ export function useInventory() {
         'sales-orders': state.salesOrders ?? [],
         'sales-documents': state.salesDocumentItems ?? [],
         payments: state.paymentItems ?? [],
-      });
+      }, state.revs ?? {});
       const baseCategories = (state.categories?.length ?? 0) > 0 ? state.categories : DEFAULT_CATEGORIES;
       const migrated = migrateProducts(state.products, baseCategories);
       setProducts(migrated.products);
@@ -5031,6 +5032,8 @@ export function useInventory() {
   // 保存の状態 (保存中・失敗・オフライン)。App が画面の上に出す
   const saveStatus: SaveStatus = useSyncExternalStore(saveQueue.subscribe, saveQueue.getStatus);
   const retrySave = useCallback(() => saveQueue.retry(), []);
+  // 同時編集で保存を断られたあと: 届かなかった変更を捨てて最新の内容を読み込み直す
+  const reloadLatest = useCallback(() => saveQueue.discardAndReload(), []);
 
   // まだサーバーに届いていない変更があるうちに画面を閉じようとしたら、ブラウザの確認を出す
   useEffect(() => {
@@ -6075,5 +6078,5 @@ export function useInventory() {
     });
   }, []);
 
-  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, issueSalesDocuments, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment, saveStatus, retrySave };
+  return { products, addProduct, updateProduct, deleteProduct, addLot, updateLot, deleteLot, adjustLotQuantity, shipFefo, disposeLots, exportCsv, exportExcel, importExcel, resetToSample, ledger, warehouses, addWarehouse, updateWarehouse, deleteWarehouse, moveLot, categories, addCategory, updateCategory, deleteCategory, applyStocktake, applyMinQuantities, inboundPlans, addInboundPlan, addInboundPlans, updateInboundPlan, cancelInboundPlan, deleteInboundPlan, receiveInboundPlan, suppliers, addSupplier, updateSupplier, deleteSupplier, purchaseOrderPrints, printPurchaseOrder, customers, addCustomer, updateCustomer, deleteCustomer, recordSale, salesOrders, addSalesOrder, updateSalesOrder, cancelSalesOrder, deleteSalesOrder, shipSalesOrder, salesDocumentItems, issueSalesDocument, issueSalesDocuments, deleteSalesDocument, returnSale, returnToSupplier, paymentItems, recordPayment, deletePayment, saveStatus, retrySave, reloadLatest };
 }

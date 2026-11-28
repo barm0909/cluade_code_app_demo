@@ -396,7 +396,7 @@ interface TransactionRow {
 }
 
 async function readState(db: D1Database) {
-  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes, salesOrdersRes, salesDocsRes, paymentsRes] = await db.batch([
+  const [productsRes, lotsRes, warehousesRes, categoriesRes, txnsRes, plansRes, suppliersRes, poPrintsRes, customersRes, salesOrdersRes, salesDocsRes, paymentsRes, ...revResults] = await db.batch([
     db.prepare('SELECT id, name, sku, jan_code, category_id, min_quantity, price, cost_price, tax_rate, kind, updated_at FROM products'),
     db.prepare('SELECT id, product_id, lot_no, expiry_date, quantity, warehouse_id, unit_price FROM lots'),
     db.prepare('SELECT id, name, color FROM warehouses'),
@@ -409,7 +409,11 @@ async function readState(db: D1Database) {
     db.prepare('SELECT id, customer_id, product_id, expected_date, quantity, shipped_quantity, unit_price, warehouse_id, note, canceled_at, created_at, updated_at FROM sales_orders ORDER BY expected_date'),
     db.prepare('SELECT id, document_id, kind, document_no, issued_at, issue_date, customer_id, customer_name, customer_address, customer_contact, period_from, period_to, due_date, issuer_name, issuer_address, issuer_phone, issuer_contact, issuer_registration_no, issuer_bank_account, line_no, delivery_date, product_name, product_sku, quantity, unit_price, amount, tax_rate, txn_ids, has_balance_forward, previous_billed, received, carry_over FROM sales_document_items ORDER BY issued_at DESC, line_no'),
     db.prepare('SELECT id, receipt_id, customer_id, payment_date, method, document_id, document_no, amount, fee, note, created_at FROM payment_items ORDER BY payment_date DESC, created_at DESC'),
+    // 各レコードの rev (同時編集の衝突検知用)。内容と同じバッチ (= 同じ時点) で読まないと、rev だけ新しくなりうる
+    ...REV_SLICES.map(slice => db.prepare(`SELECT id, rev FROM ${sliceTable(slice)}`)),
   ]);
+  const revs = Object.fromEntries(REV_SLICES.map((slice, i) =>
+    [slice, Object.fromEntries((revResults[i].results as unknown as { id: string; rev: number }[]).map(row => [row.id, row.rev]))]));
 
   const lotsByProduct = new Map<string, Lot[]>();
   for (const r of lotsRes.results as unknown as LotRow[]) {
@@ -600,7 +604,7 @@ async function readState(db: D1Database) {
     createdAt: r.created_at,
   }));
 
-  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders, salesDocumentItems, paymentItems };
+  return { products, warehouses, categories, ledger, inboundPlans, suppliers, purchaseOrderPrints, customers, salesOrders, salesDocumentItems, paymentItems, revs };
 }
 
 // ---- 保存: POST /api/changes (差分保存) ----
@@ -619,10 +623,15 @@ interface TableDef<T> {
   values: (item: T) => unknown[];
 }
 
-function upsertSql<T>(def: TableDef<T>): string {
-  const updates = def.columns.slice(1).map(c => `${c} = excluded.${c}`).join(', ');
+/**
+ * 追加・更新の SQL。versioned (rev を持つテーブル) なら、更新のたびに rev を +1 し (新しい行は既定の 0)、
+ * 書いた後の rev を RETURNING で返す (フロントが次の送信の base にする)
+ */
+function upsertSql<T>(def: TableDef<T>, versioned = true): string {
+  const updates = def.columns.slice(1).map(c => `${c} = excluded.${c}`);
+  if (versioned) updates.push(`rev = ${def.table}.rev + 1`);
   return `INSERT INTO ${def.table} (${def.columns.join(', ')}) VALUES (${def.columns.map(() => '?').join(', ')}) `
-    + `ON CONFLICT(id) DO UPDATE SET ${updates}`;
+    + `ON CONFLICT(id) DO UPDATE SET ${updates.join(', ')}${versioned ? ' RETURNING id, rev' : ''}`;
 }
 
 const PRODUCTS: TableDef<Product> = {
@@ -733,9 +742,18 @@ const DELETE_ORDER = ['ledger', 'inbound-plans', 'sales-orders', 'purchase-order
 const UPSERT_PARENTS = ['warehouses', 'categories', 'suppliers', 'customers'];
 const UPSERT_CHILDREN = ['ledger', 'inbound-plans', 'sales-orders', 'purchase-order-prints', 'sales-documents', 'payments'];
 
+/** rev を持つスライス (= 全スライス。ロットは商品の rev が兼ねる) */
+const REV_SLICES = ['products', ...Object.keys(SIMPLE_TABLES)];
+
+function sliceTable(slice: string): string {
+  return slice === 'products' ? PRODUCTS.table : SIMPLE_TABLES[slice].table;
+}
+
 interface SliceChange {
   upsert?: { id: string }[];
   delete?: string[];
+  /** 更新・削除する既存レコードの id → フロントが最後に見た rev (同時編集の衝突検知)。旧フロントは送らない */
+  base?: Record<string, number>;
 }
 type ChangeSet = Record<string, SliceChange>;
 
@@ -745,27 +763,87 @@ function changeSetError(body: unknown): string {
   for (const [slice, change] of Object.entries(body as Record<string, unknown>)) {
     if (slice !== 'products' && !(slice in SIMPLE_TABLES)) return `unknown slice: ${slice}`;
     if (!change || typeof change !== 'object') return `invalid change for ${slice}`;
-    const { upsert = [], delete: deletes = [] } = change as SliceChange;
+    const { upsert = [], delete: deletes = [], base = {} } = change as SliceChange;
     if (!Array.isArray(upsert) || !Array.isArray(deletes)) return `invalid change for ${slice}`;
     if (upsert.some(r => !r || typeof r.id !== 'string' || !r.id)) return `record without id in ${slice}`;
     if (deletes.some(id => typeof id !== 'string')) return `invalid delete id in ${slice}`;
+    if (!base || typeof base !== 'object' || Array.isArray(base) || Object.values(base).some(v => !Number.isInteger(v))) {
+      return `invalid base in ${slice}`;
+    }
   }
   return '';
 }
 
-function changeStatements(db: D1Database, changes: ChangeSet): D1PreparedStatement[] {
+// ---- 同時編集の衝突検知 ----
+// フロントは既存レコードの更新・削除に「最後に見た rev」(base) を付けてくる。今の rev と違う
+// (= 別の端末が先に変えた) レコードがあれば、変更全体を書かずに 409 を返す。
+// - 更新: 行が消えている、または rev が違えば衝突
+// - 削除: 行があって rev が違えば衝突 (もう消えているなら、消したいという目的は果たされているので通す)
+// 判定はバッチの先頭で行う。衝突があると save_conflict_guard の CHECK に引っかかり、バッチ全体
+// (= 1トランザクション) が取り消されるので、判定と書き込みの間に別の書き込みが割り込むことはない。
+
+/** base を json_each で読める形にする: [{ id, r: rev, d: 削除なら1 }] */
+function baseJson(change: SliceChange): string {
+  const deletes = new Set(change.delete ?? []);
+  return JSON.stringify(Object.entries(change.base ?? {}).map(([id, rev]) => ({ id, r: rev, d: deletes.has(id) ? 1 : 0 })));
+}
+
+/** 衝突しているレコードの id を返す SELECT (?1 = baseJson) */
+function conflictSelect(table: string): string {
+  return `SELECT json_extract(j.value, '$.id') AS id FROM json_each(?1) AS j `
+    + `LEFT JOIN ${table} AS t ON t.id = json_extract(j.value, '$.id') `
+    + `WHERE CASE WHEN t.id IS NULL THEN json_extract(j.value, '$.d') = 0 ELSE t.rev <> json_extract(j.value, '$.r') END`;
+}
+
+const CONFLICT_MARK = 'save_conflict';
+
+function guardStatements(db: D1Database, changes: ChangeSet): D1PreparedStatement[] {
+  return Object.entries(changes)
+    .filter(([, change]) => Object.keys(change.base ?? {}).length > 0)
+    .map(([slice, change]) => db.prepare(
+      `INSERT INTO save_conflict_guard (ok) SELECT 0 FROM (${conflictSelect(sliceTable(slice))}) LIMIT 1`,
+    ).bind(baseJson(change)));
+}
+
+/** 409 の本文用: スライス → 衝突したレコードの id (トランザクションの外で読むので、目安) */
+async function findConflicts(db: D1Database, changes: ChangeSet): Promise<Record<string, string[]>> {
+  const conflicts: Record<string, string[]> = {};
+  for (const [slice, change] of Object.entries(changes)) {
+    if (Object.keys(change.base ?? {}).length === 0) continue;
+    const { results } = await db.prepare(conflictSelect(sliceTable(slice))).bind(baseJson(change)).all<{ id: string }>();
+    if (results.length > 0) conflicts[slice] = results.map(r => r.id);
+  }
+  return conflicts;
+}
+
+interface ChangePlan {
+  stmts: D1PreparedStatement[];
+  /** stmts の何番目が、どのスライスの RETURNING id, rev を返すか */
+  returning: { index: number; slice: string }[];
+}
+
+function changeStatements(db: D1Database, changes: ChangeSet): ChangePlan {
   const stmts: D1PreparedStatement[] = [];
+  const returning: { index: number; slice: string }[] = [];
+  const push = (stmt: D1PreparedStatement, slice?: string) => {
+    if (slice) returning.push({ index: stmts.length, slice });
+    stmts.push(stmt);
+  };
   const deleteLotsOf = db.prepare('DELETE FROM lots WHERE product_id = ?');
+
+  // 0. 衝突の判定 (衝突があればここでバッチ全体が止まる)
+  guardStatements(db, changes).forEach(s => push(s));
 
   // 1. 削除
   for (const id of changes.products?.delete ?? []) {
-    stmts.push(deleteLotsOf.bind(id), db.prepare('DELETE FROM products WHERE id = ?').bind(id));
+    push(deleteLotsOf.bind(id));
+    push(db.prepare('DELETE FROM products WHERE id = ?').bind(id));
   }
   for (const slice of DELETE_ORDER) {
     const ids = changes[slice]?.delete ?? [];
     if (ids.length === 0) continue;
     const del = db.prepare(`DELETE FROM ${SIMPLE_TABLES[slice].table} WHERE id = ?`);
-    for (const id of ids) stmts.push(del.bind(id));
+    for (const id of ids) push(del.bind(id));
   }
 
   // 2. 追加・更新
@@ -774,23 +852,28 @@ function changeStatements(db: D1Database, changes: ChangeSet): D1PreparedStateme
     if (rows.length === 0) return;
     const def = SIMPLE_TABLES[slice];
     const stmt = db.prepare(upsertSql(def));
-    for (const row of rows) stmts.push(stmt.bind(...def.values(row)));
+    for (const row of rows) push(stmt.bind(...def.values(row)), slice);
   };
   UPSERT_PARENTS.forEach(upsertAll);
   const products = (changes.products?.upsert ?? []) as Product[];
   if (products.length > 0) {
     const upsertProduct = db.prepare(upsertSql(PRODUCTS));
-    const insertLot = db.prepare(upsertSql(LOTS));
+    const insertLot = db.prepare(upsertSql(LOTS, false));
     for (const p of products) {
       // 商品のロットは商品ごと丸ごと書き直す (減ったロット・空にしたロットの削除も兼ねる)
-      stmts.push(upsertProduct.bind(...PRODUCTS.values(p)), deleteLotsOf.bind(p.id));
-      for (const l of p.lots ?? []) stmts.push(insertLot.bind(...LOTS.values({ ...l, productId: p.id })));
+      push(upsertProduct.bind(...PRODUCTS.values(p)), 'products');
+      push(deleteLotsOf.bind(p.id));
+      for (const l of p.lots ?? []) push(insertLot.bind(...LOTS.values({ ...l, productId: p.id })));
     }
   }
   UPSERT_CHILDREN.forEach(upsertAll);
 
   // 外部キーの検査はトランザクションの最後まで遅らせる (同じ変更の中で親と子を両方書くため)
-  return stmts.length > 0 ? [db.prepare('PRAGMA defer_foreign_keys = on'), ...stmts] : [];
+  if (stmts.length === 0) return { stmts: [], returning: [] };
+  return {
+    stmts: [db.prepare('PRAGMA defer_foreign_keys = on'), ...stmts],
+    returning: returning.map(r => ({ ...r, index: r.index + 1 })),
+  };
 }
 
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
@@ -802,10 +885,25 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
       const body = await request.json();
       const error = changeSetError(body);
       if (error) return Response.json({ error }, { status: 400 });
-      const stmts = changeStatements(env.DB, body as ChangeSet);
-      // batch は1トランザクション。1文でも失敗すれば全部取り消される
-      if (stmts.length > 0) await env.DB.batch(stmts);
-      return Response.json({ ok: true });
+      const changes = body as ChangeSet;
+      const { stmts, returning } = changeStatements(env.DB, changes);
+      const revs: Record<string, Record<string, number>> = {};
+      if (stmts.length > 0) {
+        let results: D1Result[];
+        try {
+          // batch は1トランザクション。1文でも失敗すれば (衝突の判定も含めて) 全部取り消される
+          results = await env.DB.batch(stmts);
+        } catch (err) {
+          if (!String(err).includes(CONFLICT_MARK)) throw err;
+          return Response.json({ error: 'conflict', conflicts: await findConflicts(env.DB, changes) }, { status: 409 });
+        }
+        for (const { index, slice } of returning) {
+          for (const row of results[index].results as { id: string; rev: number }[]) {
+            (revs[slice] ??= {})[row.id] = row.rev;
+          }
+        }
+      }
+      return Response.json({ ok: true, revs });
     }
     return Response.json({ error: 'not found' }, { status: 404 });
   } catch (err) {
